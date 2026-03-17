@@ -70,6 +70,13 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    docker-compose up -d
    ```
 
+3. **To update the bot after pulling new code**, simply run:
+
+   ```bash
+   docker-compose up -d --build
+   ```
+   *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
+
 ## Usage: Bridging Groups
 
 The bot needs to be added to both the Telegram group and the Delta Chat group.
