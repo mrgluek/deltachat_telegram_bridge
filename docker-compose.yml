@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  bridge:
+    build: .
+    container_name: tg_dc_bridge
+    restart: unless-stopped
+    volumes:
+      - ./bridge.db:/app/bridge.db
+      # Directory created by deltabot-cli to store account data
+      - ~/.config/tgbridge:/root/.config/tgbridge
+    environment:
+      # Optional: set token via env variable, or use initialized db
+      # TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
+      - PYTHONUNBUFFERED=1
