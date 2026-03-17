@@ -140,3 +140,9 @@ Since the bot depends on `deltabot-cli-py`, you have access to a variety of othe
   ```
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
+
+## Changelog
+
+- **2026-03-17**: Added support for bridging Telegram polls. Formats polls and sends final vote results to Delta Chat upon poll closing.
+- **2026-03-17**: Implemented full two-way media bridging support for images, videos, voice notes, gifs, stickers, and documents.
+- **2026-03-17**: Refactored database to use SQLite (`bridge.db`), added Docker Compose support, and implemented rate limiting.

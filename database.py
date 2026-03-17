@@ -37,6 +37,13 @@ def init_db():
                 SELECT rowid FROM message_map ORDER BY rowid DESC LIMIT 10000
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS polls (
+                poll_id TEXT PRIMARY KEY,
+                tg_chat_id INTEGER,
+                dc_chat_id INTEGER
+            )
+        ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_msg ON message_map (tg_msg_id, tg_chat_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_dc_msg ON message_map (dc_msg_id, dc_chat_id)')
         conn.commit()
@@ -145,6 +152,35 @@ def get_dc_msg_id(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> int | Non
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else None
+
+def save_poll_context(poll_id: str, tg_chat_id: int, dc_chat_id: int):
+    """Save context for a telegram poll so we know where to send updates."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT OR REPLACE INTO polls (poll_id, tg_chat_id, dc_chat_id) VALUES (?, ?, ?)",
+                (poll_id, tg_chat_id, dc_chat_id)
+            )
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+def get_poll_context(poll_id: str) -> tuple[int, int] | None:
+    """Retrieve chat IDs associated with a poll."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tg_chat_id, dc_chat_id FROM polls WHERE poll_id = ?",
+            (poll_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row if row else None
 
 def cleanup_old_messages(limit=10000):
     """Run this periodically to prevent DB bloat."""

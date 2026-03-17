@@ -418,6 +418,10 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for option in poll.options:
             poll_text += f"▫️ {option.text}\n"
         text = (text + "\n\n" + poll_text).strip()
+        
+        # Save context so we can update DC when the poll closes
+        for dc_chat_id in dc_chats:
+            database.save_poll_context(poll.id, tg_chat_id, dc_chat_id)
 
     # Detect media
     tg_file = None
@@ -497,6 +501,47 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle poll updates (e.g. when a poll is closed)."""
+    global dc_bot_instance, dc_accid
+    
+    poll = update.poll
+    if not poll or not poll.is_closed:
+        return
+
+    ctx = database.get_poll_context(poll.id)
+    if not ctx:
+        return
+        
+    tg_chat_id, dc_chat_id = ctx
+    
+    # Check if bridged and not rate limited
+    if not dc_bot_instance or not dc_accid:
+        return
+    if _is_rate_limited(tg_chat_id):
+        return
+
+    # Format final results
+    total_voter_count = poll.total_voter_count
+    
+    text = f"🏁 <b>Опрос завершён:</b> {html.escape(poll.question)}\n\n"
+    
+    # Sort options by voter count descending
+    sorted_options = sorted(poll.options, key=lambda x: x.voter_count, reverse=True)
+    
+    for option in sorted_options:
+        percentage = (option.voter_count / total_voter_count * 100) if total_voter_count > 0 else 0
+        text += f"▫️ {html.escape(option.text)} — {option.voter_count} голосов ({percentage:.1f}%)\n"
+        
+    text += f"\n<i>Всего проголосовало: {total_voter_count}</i>"
+    
+    try:
+        msg_data = MsgData(text=text)
+        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        logger.info(f"Relayed TG poll results to DC chat {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to relay poll results to DC chat {dc_chat_id}: {e}")
+
 # ---------------------------------------------------------
 # MAIN ASYNC RUNNER
 # ---------------------------------------------------------
@@ -549,6 +594,9 @@ async def main():
         filters.Sticker.ALL | filters.ANIMATION | filters.POLL,
         handle_tg_message
     ))
+    # Handler for poll state changes
+    from telegram.ext import PollHandler
+    tg_app.add_handler(PollHandler(handle_tg_poll))
 
     await tg_app.initialize()
     await tg_app.start()
