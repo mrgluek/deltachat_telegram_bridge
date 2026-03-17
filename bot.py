@@ -89,7 +89,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                 # using asyncio.wait_for for Python 3.9+ compatibility
                 tg_msg = await asyncio.wait_for(coro, timeout=30.0)
             except (TimeoutError, asyncio.TimeoutError):
-                fallback_text = formatted_msg + f"\n\n<i>[Не удалось загрузить медиа: {html.escape(filename)} - превышено время ожидания]</i>"
+                fallback_text = formatted_msg + f"\n\n<i>[Failed to download media: {html.escape(filename)} - timeout exceeded]</i>"
                 tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id)
             except Exception as e:
                 logger.error(f"Error uploading media to TG: {e}")
@@ -476,7 +476,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (TimeoutError, asyncio.TimeoutError):
             logger.error(f"Timeout formatting file {file_name}")
             local_file_path = None
-            formatted_msg = formatted_msg + f"\n\n<i>[Не удалось загрузить медиа: {html.escape(file_name)} - превышено время ожидания]</i>"
+            formatted_msg = formatted_msg + f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded]</i>"
         except Exception as e:
             logger.error(f"Failed to download TG file: {e}")
             local_file_path = None
@@ -524,16 +524,16 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Format final results
     total_voter_count = poll.total_voter_count
     
-    text = f"🏁 <b>Опрос завершён:</b> {html.escape(poll.question)}\n\n"
+    text = f"🏁 <b>Poll closed:</b> {html.escape(poll.question)}\n\n"
     
     # Sort options by voter count descending
     sorted_options = sorted(poll.options, key=lambda x: x.voter_count, reverse=True)
     
     for option in sorted_options:
         percentage = (option.voter_count / total_voter_count * 100) if total_voter_count > 0 else 0
-        text += f"▫️ {html.escape(option.text)} — {option.voter_count} голосов ({percentage:.1f}%)\n"
+        text += f"▫️ {html.escape(option.text)} — {option.voter_count} votes ({percentage:.1f}%)\n"
         
-    text += f"\n<i>Всего проголосовало: {total_voter_count}</i>"
+    text += f"\n<i>Total votes: {total_voter_count}</i>"
     
     try:
         msg_data = MsgData(text=text)
