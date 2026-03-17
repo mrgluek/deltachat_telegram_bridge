@@ -75,6 +75,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    ```bash
    docker-compose up -d --build
    ```
+
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
 
 ## Usage: Bridging Groups
@@ -82,7 +83,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 The bot needs to be added to both the Telegram group and the Delta Chat group.
 
 > **Note:** The `/bridge` and `/unbridge` commands in Delta Chat are restricted to the **group creator** (the first member in the contact list) due to Delta Chat's group management design. In Telegram, `/id` is restricted to group admins.
-
+>
 > **Important:** You must disable **Group Privacy** for your Telegram bot via @BotFather → Bot Settings → Group Privacy → Turn off. Otherwise the bot cannot read normal group messages. After changing this, re-add the bot to the group.
 
 1. **Get the Telegram Group ID**:

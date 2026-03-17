@@ -411,6 +411,14 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text or update.message.caption or ""
 
+    # Detect and format polls
+    if update.message.poll:
+        poll = update.message.poll
+        poll_text = f"📊 {poll.question}\n"
+        for option in poll.options:
+            poll_text += f"▫️ {option.text}\n"
+        text = (text + "\n\n" + poll_text).strip()
+
     # Detect media
     tg_file = None
     file_name = None
@@ -538,7 +546,7 @@ async def main():
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
         filters.Document.ALL | filters.VOICE | filters.AUDIO |
-        filters.Sticker.ALL | filters.ANIMATION,
+        filters.Sticker.ALL | filters.ANIMATION | filters.POLL,
         handle_tg_message
     ))
 
