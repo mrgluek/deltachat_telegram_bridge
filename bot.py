@@ -53,8 +53,6 @@ class AdminLogHandler(logging.Handler):
         if record.levelno < logging.ERROR:
             return
             
-        sys.stderr.write(f"TRACE: AdminLogHandler.emit triggered for: {record.getMessage()[:50]}...\n")
-
         if getattr(self._is_emitting, 'flag', False):
             return
             
@@ -92,8 +90,12 @@ class AdminLogHandler(logging.Handler):
         finally:
             self._is_emitting.flag = False
 
-# Attach it to root logger
-logging.getLogger().addHandler(AdminLogHandler())
+# Attach it to root and major component loggers
+admin_handler = AdminLogHandler()
+logging.getLogger().addHandler(admin_handler)
+logging.getLogger("deltachat2").addHandler(admin_handler)
+logging.getLogger("deltachat2").propagate = True
+logging.getLogger("telegram").addHandler(admin_handler)
 
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
