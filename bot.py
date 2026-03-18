@@ -34,10 +34,10 @@ class PollingErrorFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             exc_str = str(record.exc_info[1])
-            if "Server disconnected without sending a response" in exc_str:
+            if "Server disconnected without sending a response" in exc_str or "ReadTimeout" in exc_str:
                 return False
         msg = record.getMessage()
-        if "Server disconnected without sending a response" in msg:
+        if "Server disconnected without sending a response" in msg or "ReadTimeout" in msg:
             return False
         return True
 
@@ -641,6 +641,18 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN ASYNC RUNNER
 # ---------------------------------------------------------
 
+async def tg_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and handle specific network exceptions."""
+    exc = context.error
+    exc_str = str(exc)
+    exc_type = type(exc).__name__
+    
+    if "ReadTimeout" in exc_str or "ReadTimeout" in exc_type or "Server disconnected" in exc_str or "NetworkError" in exc_type:
+        logger.warning(f"Telegram network error: {exc_type}: {exc_str}")
+        return
+
+    logger.error("Telegram Application Error:", exc_info=exc)
+
 def start_dc_bot():
     """Runs the DC Bot CLI (it is blocking)"""
     try:
@@ -680,6 +692,7 @@ async def main():
 
     # 1. Setup Telegram Application
     tg_app = Application.builder().token(token).build()
+    tg_app.add_error_handler(tg_error_handler)
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
