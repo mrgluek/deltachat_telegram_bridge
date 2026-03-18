@@ -53,6 +53,8 @@ class AdminLogHandler(logging.Handler):
         if record.levelno < logging.ERROR:
             return
             
+        sys.stderr.write(f"TRACE: AdminLogHandler.emit triggered for: {record.getMessage()[:50]}...\n")
+
         if getattr(self._is_emitting, 'flag', False):
             return
             
