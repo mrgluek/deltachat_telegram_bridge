@@ -78,11 +78,15 @@ class AdminLogHandler(logging.Handler):
             if admin_dc_email and dc_bot_instance and dc_accid:
                 try:
                     dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
+                    # Use a simpler RPC call first to test
                     contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
                     chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
                     dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
-                except Exception:
-                    pass
+                    sys.stdout.write("SUCCESS: Sent log to DC admin\n")
+                except Exception as e:
+                    sys.stdout.write(f"ERROR: Failed to send DC log: {e}\n")
+            else:
+                sys.stdout.write(f"DEBUG: DC log skip - email: {bool(admin_dc_email)}, instance: {bool(dc_bot_instance)}, accid: {bool(dc_accid)}\n")
         finally:
             self._is_emitting.flag = False
 
@@ -259,6 +263,23 @@ def help_command(bot, accid, event):
 def error_test_command(bot, accid, event):
     """Trigger a test error."""
     raise ValueError("This is a test error from Delta Chat /error command")
+
+@dc_cli.on(events.NewMessage(command="/debug"))
+def debug_command(bot, accid, event):
+    """Check bot status."""
+    msg = event.msg
+    admin_dc = database.get_config("admin_dc_email")
+    admin_tg = database.get_config("admin_tg_id")
+    status = (
+        f"DEBUG STATUS:\n"
+        f"accid: {accid}\n"
+        f"dc_accid (global): {dc_accid}\n"
+        f"dc_bot_instance (global): {bool(dc_bot_instance)}\n"
+        f"admin_dc: {admin_dc}\n"
+        f"admin_tg: {admin_tg}\n"
+        f"bot_contact_id: {bot_contact_id}"
+    )
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=status))
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
