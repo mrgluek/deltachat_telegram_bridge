@@ -29,6 +29,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+class PollingErrorFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info:
+            exc_str = str(record.exc_info[1])
+            if "Server disconnected without sending a response" in exc_str:
+                return False
+        msg = record.getMessage()
+        if "Server disconnected without sending a response" in msg:
+            return False
+        return True
+
+logging.getLogger("telegram.ext.Updater").addFilter(PollingErrorFilter())
+
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
 DC_MAX_MSG_LEN = 10000   # Practical DC limit
