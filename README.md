@@ -26,7 +26,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
    pip install -r requirements.txt
    ```
 
-## Setup and Running
+## Setup and Running (Local / venv)
 
 1. **Initialize the Delta Chat account**
    Configure your bot's Delta Chat account using `init dc`:
@@ -107,36 +107,41 @@ The bot needs to be added to both the Telegram group and the Delta Chat group.
 
 ## Other Commands
 
-Since the bot depends on `deltabot-cli-py`, you have access to a variety of other management commands. These commands do **not** require the `--telegram-token` argument:
+Since the bot depends on `deltabot-cli-py`, you have access to a variety of other management commands. These commands do **not** require the `--telegram-token` argument.
+
+If you are using **Docker**, run these commands using `docker-compose exec bridge python bot.py ...` (if the bot is running) or `docker-compose run --rm bridge python bot.py ...` (if stopped).
+If you are running **locally**, use `venv/bin/python bot.py ...`.
+
+Here are the commands (shown for Docker, assuming the container is running):
 
 - **Get Invite Link (QR Code data)**: Print the bot's invitation link so you can add it to Delta Chat groups.
   
   ```bash
-  venv/bin/python bot.py link
+  docker-compose exec bridge python bot.py link
   ```
 
 - **List accounts**: View the IDs and addresses of configured Delta Chat accounts.
   
   ```bash
-  venv/bin/python bot.py list
+  docker-compose exec bridge python bot.py list
   ```
 
 - **Config**: View or set configuration options for the bot account.
   
   ```bash
-  venv/bin/python bot.py config
+  docker-compose exec bridge python bot.py config
   ```
 
 - **Remove account**: Remove a specific Delta Chat account if you accidentally created multiple. Replace `ID` with the account number (e.g. `2`).
   
   ```bash
-  venv/bin/python bot.py --account ID remove
+  docker-compose exec bridge python bot.py --account ID remove
   ```
 
 - **Admin**: Generates a setup QR code to join an Admin control group where you can manage the bot remotely.
   
   ```bash
-  venv/bin/python bot.py admin
+  docker-compose exec bridge python bot.py admin
   ```
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
