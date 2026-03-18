@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 import time
+import threading
 from collections import defaultdict
 from typing import Optional
 
@@ -41,6 +42,51 @@ class PollingErrorFilter(logging.Filter):
         return True
 
 logging.getLogger("telegram.ext.Updater").addFilter(PollingErrorFilter())
+
+class AdminLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self._is_emitting = threading.local()
+
+    def emit(self, record):
+        if record.levelno < logging.ERROR:
+            return
+            
+        if getattr(self._is_emitting, 'flag', False):
+            return
+            
+        self._is_emitting.flag = True
+        try:
+            log_entry = self.format(record)
+            
+            # Send to TG
+            admin_tg_id = database.get_config("admin_tg_id")
+            if admin_tg_id and tg_app and main_loop:
+                try:
+                    tg_id = int(admin_tg_id)
+                    msg_text = f"⚠️ <b>Bot Error Log</b>\n\n<pre>{html.escape(_truncate(log_entry, 3800))}</pre>"
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.send_message(chat_id=tg_id, text=msg_text, parse_mode='HTML'),
+                        main_loop
+                    )
+                except Exception:
+                    pass
+
+            # Send to DC
+            admin_dc_email = database.get_config("admin_dc_email")
+            if admin_dc_email and dc_bot_instance and dc_accid:
+                try:
+                    dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
+                    contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
+                    chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
+                    dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
+                except Exception:
+                    pass
+        finally:
+            self._is_emitting.flag = False
+
+# Attach it to root logger
+logging.getLogger().addHandler(AdminLogHandler())
 
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
@@ -178,17 +224,25 @@ def bridge_command(bot, accid, event):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Bridging is supported in group chats only."))
         return
 
-    # Admin check: only allow from contacts that are chat admins
-    try:
-        contacts = bot.rpc.get_chat_contacts(accid, chat_id)
-        # In Delta Chat, the first contact in the list is the group creator/admin
-        # Also check if the sender is the bot owner (contact ID 1 = self)
-        if msg.from_id not in contacts[:1] and msg.from_id != 1:
-            # Try a broader check - get contact info
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /bridge."))
+    # Admin check: if a global admin is set, only they can manage bridges
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    
+    if admin_dc_email:
+        if sender_email.lower() != admin_dc_email.lower():
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /bridge."))
             return
-    except Exception:
-        pass  # If we can't check, allow it (backward compat)
+    else:
+        # Fallback to group creator check
+        try:
+            contacts = bot.rpc.get_chat_contacts(accid, chat_id)
+            # In Delta Chat, the first contact in the list is the group creator/admin
+            # Also check if the sender is the bot owner (contact ID 1 = self)
+            if msg.from_id not in contacts[:1] and msg.from_id != 1:
+                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via `init admin_dc`)"))
+                return
+        except Exception:
+            pass  # If we can't check, allow it (backward compat)
 
     try:
         payload = event.payload.strip()
@@ -211,13 +265,21 @@ def unbridge_command(bot, accid, event):
     chat_id = msg.chat_id
 
     # Admin check
-    try:
-        contacts = bot.rpc.get_chat_contacts(accid, chat_id)
-        if msg.from_id not in contacts[:1] and msg.from_id != 1:
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge."))
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    
+    if admin_dc_email:
+        if sender_email.lower() != admin_dc_email.lower():
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /unbridge."))
             return
-    except Exception:
-        pass
+    else:
+        try:
+            contacts = bot.rpc.get_chat_contacts(accid, chat_id)
+            if msg.from_id not in contacts[:1] and msg.from_id != 1:
+                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via `init admin_dc`)"))
+                return
+        except Exception:
+            pass
 
     if database.remove_bridge(chat_id):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
@@ -643,10 +705,26 @@ if __name__ == "__main__":
             sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "dc":
             sys.argv.pop(init_idx + 1)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "admin_tg":
+            if len(sys.argv) > init_idx + 2:
+                database.set_config("admin_tg_id", sys.argv[init_idx + 2])
+                print("Admin Telegram ID saved in bridge.db.")
+            else:
+                print("Usage: python bot.py init admin_tg <telegram_user_id>")
+            sys.exit(0)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "admin_dc":
+            if len(sys.argv) > init_idx + 2:
+                database.set_config("admin_dc_email", sys.argv[init_idx + 2])
+                print("Admin Delta Chat email saved in bridge.db.")
+            else:
+                print("Usage: python bot.py init admin_dc <deltachat_account_email>")
+            sys.exit(0)
         else:
             print("Usage:")
             print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account")
             print("  python bot.py init tg [token]             - Initialize Telegram bot token")
+            print("  python bot.py init admin_tg <tg_id>       - Set Admin Telegram ID for error logs")
+            print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email for error logs")
             sys.exit(1)
 
     try:

@@ -82,7 +82,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 
 The bot needs to be added to both the Telegram group and the Delta Chat group.
 
-> **Note:** The `/bridge` and `/unbridge` commands in Delta Chat are restricted to the **group creator** (the first member in the contact list) due to Delta Chat's group management design. In Telegram, `/id` is restricted to group admins.
+> **Note:** The `/bridge` and `/unbridge` commands in Delta Chat are restricted to the **group creator** (the first member in the contact list) by default. However, if you configure a global Delta Chat admin using `init admin_dc`, **only** that administrator will be able to use these commands. In Telegram, `/id` is restricted to group admins.
 >
 > **Important:** You must disable **Group Privacy** for your Telegram bot via @BotFather → Bot Settings → Group Privacy → Turn off. Otherwise the bot cannot read normal group messages. After changing this, re-add the bot to the group.
 
@@ -142,6 +142,18 @@ Here are the commands (shown for Docker, assuming the container is running):
   
   ```bash
   docker-compose exec bridge python bot.py admin
+  ```
+
+- **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive all bot error logs via direct message.
+  
+  ```bash
+  docker-compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID
+  ```
+
+- **Set Global Admin (Delta Chat)**: Configures a Delta Chat email to receive all bot error logs via direct message. This also locks the `/bridge` and `/unbridge` commands so that *only* this user can use them.
+  
+  ```bash
+  docker-compose exec bridge python bot.py init admin_dc admin@example.com
   ```
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
