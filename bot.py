@@ -78,15 +78,11 @@ class AdminLogHandler(logging.Handler):
             if admin_dc_email and dc_bot_instance and dc_accid:
                 try:
                     dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
-                    # Use a simpler RPC call first to test
                     contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
                     chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
                     dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
-                    sys.stdout.write("SUCCESS: Sent log to DC admin\n")
-                except Exception as e:
-                    sys.stdout.write(f"ERROR: Failed to send DC log: {e}\n")
-            else:
-                sys.stdout.write(f"DEBUG: DC log skip - email: {bool(admin_dc_email)}, instance: {bool(dc_bot_instance)}, accid: {bool(dc_accid)}\n")
+                except Exception:
+                    pass
         finally:
             self._is_emitting.flag = False
 
