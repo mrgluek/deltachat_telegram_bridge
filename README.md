@@ -84,7 +84,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 
 The bot needs to be added to both the Telegram group and the Delta Chat group.
 
-> **Note:** By default, management commands (`/bridge`, `/unbridge`, `/id`) are restricted to **group admins** (or the group creator in Delta Chat). However, if you configure a global admin using `init admin_dc` or `init admin_tg`, **only** the configured bot owner will be able to manage the bot on that platform, and the command descriptions in `/help` will dynamically change to **(bot owner only)**.
+> **Note:** By default, management commands (`/bridge`, `/unbridge`, `/id`) are restricted to **group admins** (or the group creator in Delta Chat). However, if you configure a global admin using `init admin_dc` or `init admin_tg`, **only** the configured bot owner will be able to manage the bot on that platform. The bot's help message will indicate its current state as **Mode: Private (bot owner only)** or **Mode: Public (group admins only)**.
 >
 > **Important:** You must disable **Group Privacy** for your Telegram bot via @BotFather → Bot Settings → Group Privacy → Turn off. Otherwise the bot cannot read normal group messages. After changing this, re-add the bot to the group.
 
@@ -110,14 +110,14 @@ The bot needs to be added to both the Telegram group and the Delta Chat group.
 ## Logging and Admin Control
 
 - **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive all bot error logs via direct message. (You can find your Telegram ID by sending `/start` to the bot in a private message).
-  **Important Note:** Setting `admin_tg` locks the Telegram management commands so that *only* this user can manage the bot (the help text will dynamically change from "group admins only" to "bot owner only").
+  **Important Note:** Setting `admin_tg` locks the Telegram management commands so that *only* this user can manage the bot (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash
   docker-compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID
   ```
 
 - **Set Global Admin (Delta Chat)**: Configures a Delta Chat email to receive all bot error logs via direct message.
-  **Important Note:** Setting `admin_dc` locks the `/bridge` and `/unbridge` commands so that *only* this user can use them (the help text will dynamically change from "group admins only" to "bot owner only").
+  **Important Note:** Setting `admin_dc` locks the `/bridge` and `/unbridge` commands so that *only* this user can use them (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash
   docker-compose exec bridge python bot.py init admin_dc admin@example.com
@@ -166,7 +166,7 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 ## Changelog
 
-- **2026-03-18**: Enhanced bot greeting and `/help` command with dynamic role descriptions (**bot owner only** / **group admins only**) based on configuration.
+- **2026-03-18**: Enhanced bot greeting and `/help` command with dynamic **Mode: Private (bot owner only)** / **Mode: Public (group admins only)** formatting based on configuration.
 - **2026-03-17**: Added support for bridging Telegram polls. Formats polls and sends final vote results to Delta Chat upon poll closing.
 - **2026-03-17**: Implemented full two-way media bridging support for images, videos, voice notes, gifs, stickers, and documents.
 - **2026-03-17**: Refactored database to use SQLite (`bridge.db`), added Docker Compose support, and implemented rate limiting.

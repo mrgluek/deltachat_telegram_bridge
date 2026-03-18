@@ -187,12 +187,12 @@ def on_init(bot, args):
 
 def get_dc_help_text(sender_email: str) -> str:
     admin_dc = database.get_config("admin_dc_email")
-    role = "bot owner only" if admin_dc else "group admins only"
+    mode = "Private (bot owner only)" if admin_dc else "Public (group admins only)"
     return (
         f"👋 Hi {sender_email}!\n\n"
-        f"I'm the TG Bridge bot.\n\n"
+        f"I'm the TG Bridge bot. Mode: {mode}\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
-        f"Commands ({role}):\n"
+        f"Commands:\n"
         f"/bridge <tg_group_id> — Link this DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from this group\n"
         f"/help — Show this help message\n\n"
@@ -201,12 +201,12 @@ def get_dc_help_text(sender_email: str) -> str:
 
 def get_tg_help_text(name: str, user_id: int) -> str:
     admin_tg = database.get_config("admin_tg_id")
-    role = "bot owner only" if admin_tg else "group admins only"
+    mode = "Private (bot owner only)" if admin_tg else "Public (group admins only)"
     return (
         f"👋 Hi {name} (<code>{user_id}</code>)!\n\n"
-        f"I'm the DC Bridge bot.\n\n"
+        f"I'm the DC Bridge bot. Mode: {mode}\n\n"
         f"I relay messages between Telegram and Delta Chat groups.\n\n"
-        f"Commands ({role}):\n"
+        f"Commands:\n"
         f"/id — Show this group's chat ID (needed for bridging)\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Telegram group and use /id to get the group ID. Then use /bridge in the Delta Chat group to connect them.\n\n"
