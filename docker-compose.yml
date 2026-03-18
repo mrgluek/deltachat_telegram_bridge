@@ -8,7 +8,7 @@ services:
     volumes:
       - ./bridge.db:/app/bridge.db
       # Directory created by deltabot-cli to store account data
-      - ~/.config/tgbridge:/root/.config/tgbridge
+      - ~/.config/tgbridge:/home/bot/.config/tgbridge
     environment:
       # Optional: set token via env variable, or use initialized db
       # TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
