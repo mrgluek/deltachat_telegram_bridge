@@ -13,5 +13,6 @@ export GID=$(id -g)
 
 git pull
 docker compose up -d --build
+docker image prune -f
 
-echo "✅ Updated and restarted."
+echo "✅ Updated, restarted, and cleaned up old images."

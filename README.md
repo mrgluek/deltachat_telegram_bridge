@@ -80,6 +80,26 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
 
+3. **Maintenance and Cleanup**:
+
+   To stop the bot and remove containers:
+
+   ```bash
+   docker compose down
+   ```
+
+   To remove old, unused images (reclaim disk space):
+
+   ```bash
+   docker image prune -f
+   ```
+
+   To view logs in real-time:
+
+   ```bash
+   docker compose logs -f
+   ```
+
 ## Usage: Bridging Groups
 
 The bot needs to be added to both the Telegram group and the Delta Chat group.
