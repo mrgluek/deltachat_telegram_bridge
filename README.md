@@ -144,7 +144,7 @@ Here are the commands (shown for Docker, assuming the container is running):
   docker-compose exec bridge python bot.py admin
   ```
 
-- **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive all bot error logs via direct message.
+- **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive all bot error logs via direct message. (You can find your Telegram ID by sending `/start` to the bot in a private message).
   
   ```bash
   docker-compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID

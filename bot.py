@@ -210,7 +210,13 @@ To get started, add me to a Telegram group and use /id to get the group ID. Then
 def help_command(bot, accid, event):
     """Reply with help text."""
     msg = event.msg
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=HELP_TEXT_DC))
+    
+    # Get sender info
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+    
+    help_msg = f"👋 Hi {sender_email}!\n\nI'm the TG Bridge bot.\n\nI relay messages between Delta Chat and Telegram groups.\n\nCommands (group admins only):\n/bridge <tg_group_id> — Link this DC group to a Telegram group\n/unbridge — Remove the bridge from this group\n/help — Show this help message\n\nTo get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them."
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
@@ -427,8 +433,11 @@ def on_start(bot, _args):
 # ---------------------------------------------------------
 
 async def tg_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reply to /start in private chat with help text."""
-    await update.message.reply_text(HELP_TEXT_TG)
+    """Reply to /start in private chat with help text and user ID."""
+    user = update.effective_user
+    name = html.escape(user.first_name)
+    greeting = f"👋 Hi {name} (<code>{user.id}</code>)!\n\nI'm the DC Bridge bot.\n\nI relay messages between Telegram and Delta Chat groups.\n\nCommands (group admins only):\n/id — Show this group's chat ID (needed for bridging)\n/help — Show this help message\n\nTo get started, add me to a Telegram group and use /id to get the group ID. Then use /bridge in the Delta Chat group to connect them.\n\nℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings."
+    await update.message.reply_text(greeting, parse_mode='HTML')
 
 async def tg_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reply to /help with help text."""
