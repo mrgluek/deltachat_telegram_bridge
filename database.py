@@ -205,8 +205,10 @@ def update_bridge_tg_chat_id(old_tg_id: int, new_tg_id: int):
             cursor.execute("UPDATE message_map SET tg_chat_id = ? WHERE tg_chat_id = ?", (new_tg_id, old_tg_id))
             cursor.execute("UPDATE polls SET tg_chat_id = ? WHERE tg_chat_id = ?", (new_tg_id, old_tg_id))
             conn.commit()
-        except Exception:
+            print(f"Database updated for migration: {old_tg_id} -> {new_tg_id}")
+        except Exception as e:
             conn.rollback()
+            print(f"Error updating database for migration: {e}")
         finally:
             conn.close()
 

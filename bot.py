@@ -13,6 +13,7 @@ from deltabot_cli import BotCli
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler
+from telegram import ReactionTypeEmoji
 
 import database
 import io
@@ -434,12 +435,15 @@ def handle_dc_reaction(bot, accid, event):
     try:
         # Ignore events triggered by the bot itself to prevent echo loops
         contact_id = getattr(event, 'contact_id', None)
-        if bot_contact_id and contact_id == bot_contact_id:
+        # Only return if both exist and match
+        if bot_contact_id and contact_id and str(contact_id) == str(bot_contact_id):
             return
 
         msg_id = getattr(event, 'msg_id', None)
         if not msg_id:
             return
+
+        bot.logger.info(f"DC Reaction event for msg {msg_id} from contact {contact_id}")
             
         try:
             dc_reactions = bot.rpc.get_message_reactions(accid, msg_id)
@@ -455,10 +459,11 @@ def handle_dc_reaction(bot, accid, event):
         primary_emoji = None
         if dc_reactions and hasattr(dc_reactions, 'reactions') and dc_reactions.reactions:
             primary_emoji = dc_reactions.reactions[0].emoji
+        else:
+            bot.logger.info(f"No reactions found for DC msg {msg_id}")
                 
         for tg_msg_id, tg_chat_id in tg_mappings:
             try:
-                from telegram import ReactionTypeEmoji
                 reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
                 asyncio.run_coroutine_threadsafe(
                     tg_app.bot.set_message_reaction(chat_id=tg_chat_id, message_id=tg_msg_id, reaction=reaction),
@@ -761,6 +766,8 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Ignore events triggered by the bot itself to prevent echo loops
     if reaction_update.user and reaction_update.user.id == context.bot.id:
         return
+        
+    logger.info(f"TG Reaction update in {tg_chat_id} msg {tg_msg_id} from user {reaction_update.user.id if reaction_update.user else 'unknown'}")
         
     tg_chat_id = reaction_update.chat.id
     tg_msg_id = reaction_update.message_id
