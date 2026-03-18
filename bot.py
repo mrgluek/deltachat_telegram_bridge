@@ -414,8 +414,8 @@ def handle_dc_reaction(bot, accid, event):
         return
         
     try:
-        # Extact msg_id from the raw event. It's usually in event.event.data1 or msg_id
-        msg_id = getattr(event.event, 'msg_id', None) or getattr(event.event, 'data1', None)
+        # Extact msg_id from the raw event. It's usually in event.msg_id or event.data1
+        msg_id = getattr(event, 'msg_id', None) or getattr(event, 'data1', None)
         if not msg_id:
             return
             
