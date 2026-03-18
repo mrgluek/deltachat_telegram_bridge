@@ -190,11 +190,11 @@ def get_dc_help_text(sender_email: str) -> str:
     mode = "Private (bot owner only)" if admin_dc else "Public (group admins only)"
     return (
         f"👋 Hi {sender_email}!\n\n"
-        f"I'm the TG Bridge bot. Mode: {mode}\n\n"
+        f"I'm the TG Bridge bot. Current mode: <b>{mode}</b>\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
         f"Commands:\n"
-        f"/bridge <tg_group_id> — Link this DC group to a Telegram group\n"
-        f"/unbridge — Remove the bridge from this group\n"
+        f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
+        f"/unbridge — Remove the bridge from the group\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them."
     )
@@ -204,12 +204,12 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     mode = "Private (bot owner only)" if admin_tg else "Public (group admins only)"
     return (
         f"👋 Hi {name} (<code>{user_id}</code>)!\n\n"
-        f"I'm the DC Bridge bot. Mode: {mode}\n\n"
+        f"I'm the DC Bridge bot. Current mode: <b>{mode}</b>\n\n"
         f"I relay messages between Telegram and Delta Chat groups.\n\n"
         f"Commands:\n"
-        f"/id — Show this group's chat ID (needed for bridging)\n"
+        f"/id — Show group's chat ID (needed for bridging)\n"
         f"/help — Show this help message\n\n"
-        f"To get started, add me to a Telegram group and use /id to get the group ID. Then use /bridge in the Delta Chat group to connect them.\n\n"
+        f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
         f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings."
     )
 
