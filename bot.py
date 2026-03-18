@@ -12,7 +12,7 @@ from deltachat2 import EventType, MsgData, events
 from deltabot_cli import BotCli
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler
 
 import database
 import io
@@ -406,6 +406,52 @@ def handle_dc_message(bot, accid, event):
         except Exception as e:
             bot.logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
 
+@dc_cli.on(events.RawEvent(events.EventType.REACTIONS_CHANGED))
+def handle_dc_reaction(bot, accid, event):
+    """Relay Delta Chat reactions to Telegram."""
+    global tg_app, main_loop
+    if not tg_app or not main_loop:
+        return
+        
+    try:
+        # Extact msg_id from the raw event. It's usually in event.event.data1 or msg_id
+        msg_id = getattr(event.event, 'msg_id', None) or getattr(event.event, 'data1', None)
+        if not msg_id:
+            return
+            
+        try:
+            dc_reactions = bot.rpc.get_message_reactions(accid, msg_id)
+        except Exception:
+            # Fallback if the method fails
+            dc_reactions = []
+            
+        tg_mappings = database.get_tg_mappings_by_dc_msg_id(msg_id)
+        if not tg_mappings:
+            return
+            
+        primary_emoji = None
+        if isinstance(dc_reactions, dict) and dc_reactions:
+            primary_emoji = list(dc_reactions.keys())[0]
+        elif isinstance(dc_reactions, list) and dc_reactions:
+            first = dc_reactions[0]
+            if isinstance(first, dict):
+                primary_emoji = first.get("emoji") or first.get("reaction")
+            elif isinstance(first, str):
+                primary_emoji = first
+                
+        for tg_msg_id, tg_chat_id in tg_mappings:
+            try:
+                from telegram import ReactionTypeEmoji
+                reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
+                asyncio.run_coroutine_threadsafe(
+                    tg_app.bot.set_message_reaction(chat_id=tg_chat_id, message_id=tg_msg_id, reaction=reaction),
+                    main_loop
+                )
+            except Exception as e:
+                bot.logger.error(f"Failed to relay DC reaction to TG chat {tg_chat_id}: {e}")
+    except Exception as e:
+        bot.logger.error(f"Error handling DC reaction: {e}")
+
 # Save references for Telegram to use and print QR
 @dc_cli.on_start
 def on_start(bot, _args):
@@ -661,6 +707,42 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to relay poll results to DC chat {dc_chat_id}: {e}")
 
+async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Relay Telegram reactions to Delta Chat."""
+    global dc_bot_instance, dc_accid
+    if not dc_bot_instance or not dc_accid:
+        return
+        
+    reaction_update = update.message_reaction
+    if not reaction_update:
+        return
+        
+    tg_chat_id = reaction_update.chat.id
+    tg_msg_id = reaction_update.message_id
+    
+    dc_chats = database.get_dc_chats(tg_chat_id)
+    if not dc_chats:
+        return
+        
+    primary_emoji = None
+    if reaction_update.new_reaction:
+        from telegram import ReactionTypeEmoji
+        for r in reaction_update.new_reaction:
+            if isinstance(r, ReactionTypeEmoji):
+                primary_emoji = r.emoji
+                break
+                
+    for dc_chat_id in dc_chats:
+        dc_msg_id = database.get_dc_msg_id(tg_msg_id, tg_chat_id, dc_chat_id)
+        if dc_msg_id:
+            try:
+                # To clear a reaction, send empty string
+                emoji_to_send = primary_emoji if primary_emoji else ""
+                dc_bot_instance.rpc.send_reaction(dc_accid, dc_msg_id, emoji_to_send)
+                logger.info(f"Relayed TG reaction '{emoji_to_send}' to DC chat {dc_chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to relay TG reaction to DC: {e}")
+
 # ---------------------------------------------------------
 # MAIN ASYNC RUNNER
 # ---------------------------------------------------------
@@ -729,10 +811,15 @@ async def main():
     # Handler for poll state changes
     from telegram.ext import PollHandler
     tg_app.add_handler(PollHandler(handle_tg_poll))
+    
+    # Handler for message reactions
+    tg_app.add_handler(MessageReactionHandler(handle_tg_reaction))
 
     await tg_app.initialize()
     await tg_app.start()
-    await tg_app.updater.start_polling()
+    
+    # allowed_updates=Update.ALL_TYPES implicitly includes message_reaction
+    await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
     # Start DB cleanup loop
     asyncio.create_task(db_cleanup_loop())

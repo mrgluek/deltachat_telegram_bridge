@@ -140,6 +140,19 @@ def get_tg_msg_id(dc_msg_id: int, dc_chat_id: int, tg_chat_id: int) -> int | Non
         conn.close()
         return row[0] if row else None
 
+def get_tg_mappings_by_dc_msg_id(dc_msg_id: int) -> list[tuple[int, int]]:
+    """Look up all (tg_msg_id, tg_chat_id) mappings for a given DC message."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tg_msg_id, tg_chat_id FROM message_map WHERE dc_msg_id = ?",
+            (dc_msg_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
 def get_dc_msg_id(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> int | None:
     """Look up the DC message ID for a given TG message."""
     with _lock:
