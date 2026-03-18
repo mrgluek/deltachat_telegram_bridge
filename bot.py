@@ -81,8 +81,12 @@ class AdminLogHandler(logging.Handler):
                     contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
                     chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
                     dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
-                except Exception:
-                    pass
+                except Exception as e:
+                    sys.stderr.write(f"ERROR: Failed to send DC log: {e}\n")
+            elif not admin_dc_email:
+                pass # not configured
+            else:
+                sys.stderr.write(f"DEBUG: DC log skip - instance: {bool(dc_bot_instance)}, accid: {bool(dc_accid)}\n")
         finally:
             self._is_emitting.flag = False
 
@@ -246,6 +250,11 @@ def help_command(bot, accid, event):
     
     help_msg = get_dc_help_text(sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
+
+@dc_cli.on(events.NewMessage(command="/error"))
+def error_test_command(bot, accid, event):
+    """Trigger a test error."""
+    raise ValueError("This is a test error from Delta Chat /error command")
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
