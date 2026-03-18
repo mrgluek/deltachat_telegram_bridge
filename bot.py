@@ -190,13 +190,14 @@ def get_dc_help_text(sender_email: str) -> str:
     mode = "Private (bot owner only)" if admin_dc else "Public (group admins only)"
     return (
         f"👋 Hi {sender_email}!\n\n"
-        f"I'm the TG Bridge bot. Current mode: <b>{mode}</b>\n\n"
+        f"I'm the TG Bridge bot. Current mode: {mode}\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
         f"Commands:\n"
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from the group\n"
         f"/help — Show this help message\n\n"
-        f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them."
+        f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
+        f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
 
 def get_tg_help_text(name: str, user_id: int) -> str:
@@ -210,7 +211,8 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/id — Show group's chat ID (needed for bridging)\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
-        f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings."
+        f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.\n\n"
+        f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
 
 
@@ -235,7 +237,7 @@ def bridge_command(bot, accid, event):
     # Check if it's a group chat
     chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
     if chat_info.get("type") == 1:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Bridging is supported in group chats only."))
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
     # Admin check: if a global admin is set, only they can manage bridges
@@ -277,6 +279,12 @@ def unbridge_command(bot, accid, event):
     """Remove the bridge for this Delta Chat group. Admin only."""
     msg = event.msg
     chat_id = msg.chat_id
+
+    # Check if it's a group chat
+    chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+    if chat_info.get("type") == 1:
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
+        return
 
     # Admin check
     admin_dc_email = database.get_config("admin_dc_email")
