@@ -649,10 +649,32 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg_data = MsgData(text=formatted_msg)
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
-                if dc_reply_id:
-                    msg_data.quoted_message_id = dc_reply_id
-                    
-                sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                try:
+                    sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                except Exception as e:
+                    # If quoting failed because the message was deleted in DC, retry without the quote
+                    if "does not exist" in str(e).lower() and "message" in str(e).lower():
+                        logger.warning(f"Quoted message {dc_reply_id} not found in DC chat {dc_chat_id}. Retrying without quote.")
+                        msg_data.quoted_message_id = None
+                        # Add a hint to the text that it was a reply to something now missing
+                        if chat_reply_prefix:
+                           # Already has the prefix if dc_reply_id was NOT found initially
+                           pass
+                        else:
+                            # We thought we had a dc_reply_id, but it's gone from DC DB.
+                            # Add the "↩" prefix back to the text
+                            tg_reply_to_msg_id = update.message.reply_to_message.message_id
+                            replied = update.message.reply_to_message
+                            replied_text = replied.text or replied.caption or ""
+                            if replied_text:
+                                short_quote = _truncate(replied_text, 80)
+                                chat_reply_prefix = f"↩ {short_quote}\n"
+                                msg_data.text = _truncate(f"{chat_reply_prefix}{sender_name}: {text}" if text else f"{chat_reply_prefix}{sender_name}:", DC_MAX_MSG_LEN)
+                        
+                        sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                    else:
+                        raise  # Re-raise other exceptions
+                
                 if sent_msg_id:
                     database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id)
                 logger.info(f"Relayed TG msg to DC chat {dc_chat_id}")
