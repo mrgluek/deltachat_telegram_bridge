@@ -767,10 +767,9 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if reaction_update.user and reaction_update.user.id == context.bot.id:
         return
         
-    logger.info(f"TG Reaction update in {tg_chat_id} msg {tg_msg_id} from user {reaction_update.user.id if reaction_update.user else 'unknown'}")
-        
     tg_chat_id = reaction_update.chat.id
     tg_msg_id = reaction_update.message_id
+    logger.info(f"TG Reaction update in {tg_chat_id} msg {tg_msg_id} from user {reaction_update.user.id if reaction_update.user else 'unknown'}")
     
     dc_chats = database.get_dc_chats(tg_chat_id)
     if not dc_chats:

@@ -80,7 +80,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
 
-3. **Maintenance and Cleanup**:
+4. **Maintenance and Cleanup**:
 
    To stop the bot and remove containers:
 
