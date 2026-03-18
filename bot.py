@@ -432,30 +432,26 @@ def handle_dc_reaction(bot, accid, event):
         return
         
     try:
-        # Extact msg_id from the raw event. It's usually in event.msg_id or event.data1
-        msg_id = getattr(event, 'msg_id', None) or getattr(event, 'data1', None)
+        # The ReactionsChanged event has chat_id, msg_id, contact_id
+        # AttrDict converts camelCase keys (msgId -> msg_id, chatId -> chat_id)
+        msg_id = getattr(event, 'msg_id', None)
         if not msg_id:
             return
             
         try:
             dc_reactions = bot.rpc.get_message_reactions(accid, msg_id)
         except Exception:
-            # Fallback if the method fails
-            dc_reactions = []
+            dc_reactions = None
             
         tg_mappings = database.get_tg_mappings_by_dc_msg_id(msg_id)
         if not tg_mappings:
             return
             
+        # get_message_reactions returns:
+        # {'reactions': [{'count': N, 'emoji': '👍', 'is_from_self': True}], 'reactions_by_contact': {'1': ['👍']}}
         primary_emoji = None
-        if isinstance(dc_reactions, dict) and dc_reactions:
-            primary_emoji = list(dc_reactions.keys())[0]
-        elif isinstance(dc_reactions, list) and dc_reactions:
-            first = dc_reactions[0]
-            if isinstance(first, dict):
-                primary_emoji = first.get("emoji") or first.get("reaction")
-            elif isinstance(first, str):
-                primary_emoji = first
+        if dc_reactions and hasattr(dc_reactions, 'reactions') and dc_reactions.reactions:
+            primary_emoji = dc_reactions.reactions[0].emoji
                 
         for tg_msg_id, tg_chat_id in tg_mappings:
             try:
@@ -665,6 +661,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     formatted_msg += timeout_error_text
 
                 msg_data = MsgData(text=formatted_msg)
+                if dc_reply_id:
+                    msg_data.quoted_message_id = dc_reply_id
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
                 try:
@@ -776,10 +774,10 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
         dc_msg_id = database.get_dc_msg_id(tg_msg_id, tg_chat_id, dc_chat_id)
         if dc_msg_id:
             try:
-                # To clear a reaction, send empty string
-                emoji_to_send = primary_emoji if primary_emoji else ""
-                dc_bot_instance.rpc.send_reaction(dc_accid, dc_msg_id, emoji_to_send)
-                logger.info(f"Relayed TG reaction '{emoji_to_send}' to DC chat {dc_chat_id}")
+                # send_reaction expects a list of emojis; empty list to clear
+                emoji_list = [primary_emoji] if primary_emoji else []
+                dc_bot_instance.rpc.send_reaction(dc_accid, dc_msg_id, emoji_list)
+                logger.info(f"Relayed TG reaction '{primary_emoji or '(cleared)'}' to DC chat {dc_chat_id}")
             except Exception as e:
                 logger.error(f"Failed to relay TG reaction to DC: {e}")
 
