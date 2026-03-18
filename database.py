@@ -195,6 +195,21 @@ def get_poll_context(poll_id: str) -> tuple[int, int] | None:
         conn.close()
         return row if row else None
 
+def update_bridge_tg_chat_id(old_tg_id: int, new_tg_id: int):
+    """Update all references when a TG group migrates to a supergroup."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE bridges SET tg_chat_id = ? WHERE tg_chat_id = ?", (new_tg_id, old_tg_id))
+            cursor.execute("UPDATE message_map SET tg_chat_id = ? WHERE tg_chat_id = ?", (new_tg_id, old_tg_id))
+            cursor.execute("UPDATE polls SET tg_chat_id = ? WHERE tg_chat_id = ?", (new_tg_id, old_tg_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+
 def cleanup_old_messages(limit=10000):
     """Run this periodically to prevent DB bloat."""
     with _lock:

@@ -781,6 +781,24 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception as e:
                 logger.error(f"Failed to relay TG reaction to DC: {e}")
 
+async def handle_tg_migration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle group -> supergroup migration by updating stored chat IDs."""
+    msg = update.message
+    if not msg:
+        return
+
+    old_id = msg.chat.id
+    new_id = msg.migrate_to_chat_id
+    if not new_id:
+        # This is the message in the NEW chat with migrate_from_chat_id
+        old_id = msg.migrate_from_chat_id
+        new_id = msg.chat.id
+        if not old_id:
+            return
+
+    logger.info(f"TG group migrated: {old_id} -> {new_id}")
+    database.update_bridge_tg_chat_id(old_id, new_id)
+
 # ---------------------------------------------------------
 # MAIN ASYNC RUNNER
 # ---------------------------------------------------------
@@ -790,7 +808,21 @@ async def tg_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -
     exc = context.error
     exc_str = str(exc)
     exc_type = type(exc).__name__
-    
+
+    # Handle group -> supergroup migration errors
+    from telegram.error import ChatMigrated
+    if isinstance(exc, ChatMigrated):
+        new_id = exc.new_chat_id
+        old_id = None
+        if isinstance(update, Update) and update.effective_chat:
+            old_id = update.effective_chat.id
+        if old_id and new_id:
+            logger.info(f"TG group migrated (from error): {old_id} -> {new_id}")
+            database.update_bridge_tg_chat_id(old_id, new_id)
+        else:
+            logger.warning(f"ChatMigrated error but could not determine old chat ID: {exc_str}")
+        return
+
     # Common network/timeout errors that we handle via retries or just want to log less noisily
     network_errors = ("ReadTimeout", "ConnectTimeout", "ProxyError", "NetworkError", "RemoteProtocolError")
     is_network = any(err in exc_str or err in exc_type for err in network_errors) or "Server disconnected" in exc_str
@@ -844,6 +876,8 @@ async def main():
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
+    # Handler for group -> supergroup migration (must be before the general message handler)
+    tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
         filters.Document.ALL | filters.VOICE | filters.AUDIO |

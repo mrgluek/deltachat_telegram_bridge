@@ -99,6 +99,8 @@ The bot needs to be added to both the Telegram group and the Delta Chat group.
 
 *Note: Group mappings are saved locally in the `bridge.db` SQLite file.*
 
+> **Reactions:** For reaction bridging (TG → DC) to work, the bot must be an **administrator** in the Telegram group. No special permissions are needed — just the admin role. When a basic group is promoted, Telegram may migrate it to a supergroup (changing the chat ID). The bot detects this automatically and updates its stored mappings.
+
 ## Security Notes
 
 - The `bridge.db` file contains your **Telegram bot token** in plaintext. Protect it with appropriate file permissions (e.g. `chmod 600 bridge.db`).
@@ -166,8 +168,9 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 ## Changelog
 
+- **2026-03-18**: Added automatic handling of Telegram group → supergroup migration. The bot now detects the new chat ID and updates all bridge mappings transparently.
 - **2026-03-18**: Added retry logic with exponential backoff for Telegram API timeouts during media relaying. Improved network error logging.
-- **2026-03-18**: Implemented bidirectional message reaction proxying. Standard emojis are now synced between DeltaChat and Telegram.
+- **2026-03-18**: Implemented bidirectional message reaction proxying. Standard emojis are now synced between DeltaChat and Telegram. Note: the bot must be a group admin for TG → DC reactions.
 - **2026-03-18**: Native quoting support added. Replaced text-based citations ("↩") with native app replies using `quoted_message_id` and corresponding Telegram reply IDs.
 - **2026-03-18**: Enhanced bot greeting and `/help` command with dynamic **Mode: Private (bot owner only)** / **Mode: Public (group admins only)** formatting based on configuration.
 - **2026-03-18**: Fixed `/bridge` command behavior in private chats to consistently display error messages like `/id`.
