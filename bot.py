@@ -432,8 +432,11 @@ def handle_dc_reaction(bot, accid, event):
         return
         
     try:
-        # The ReactionsChanged event has chat_id, msg_id, contact_id
-        # AttrDict converts camelCase keys (msgId -> msg_id, chatId -> chat_id)
+        # Ignore events triggered by the bot itself to prevent echo loops
+        contact_id = getattr(event, 'contact_id', None)
+        if bot_contact_id and contact_id == bot_contact_id:
+            return
+
         msg_id = getattr(event, 'msg_id', None)
         if not msg_id:
             return
@@ -753,6 +756,10 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     reaction_update = update.message_reaction
     if not reaction_update:
+        return
+
+    # Ignore events triggered by the bot itself to prevent echo loops
+    if reaction_update.user and reaction_update.user.id == context.bot.id:
         return
         
     tg_chat_id = reaction_update.chat.id
