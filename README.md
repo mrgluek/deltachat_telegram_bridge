@@ -166,6 +166,7 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 ## Changelog
 
+- **2026-03-18**: Added retry logic with exponential backoff for Telegram API timeouts during media relaying. Improved network error logging.
 - **2026-03-18**: Implemented bidirectional message reaction proxying. Standard emojis are now synced between DeltaChat and Telegram.
 - **2026-03-18**: Native quoting support added. Replaced text-based citations ("↩") with native app replies using `quoted_message_id` and corresponding Telegram reply IDs.
 - **2026-03-18**: Enhanced bot greeting and `/help` command with dynamic **Mode: Private (bot owner only)** / **Mode: Public (group admins only)** formatting based on configuration.

@@ -104,6 +104,21 @@ dc_accid = None
 main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 
+async def retry_async(coro_func, *args, max_retries=3, delay=2.0, backoff=2.0, exceptions=(TimeoutError, asyncio.TimeoutError), **kwargs):
+    """Retries an async function with exponential backoff."""
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return await coro_func(*args, **kwargs)
+        except exceptions as e:
+            last_exception = e
+            if attempt == max_retries - 1:
+                break
+            wait = delay * (backoff ** attempt)
+            logger.warning(f"Operation failed with {type(e).__name__}, retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+            await asyncio.sleep(wait)
+    raise last_exception
+
 # Simple per-chat rate limiter
 _rate_limits: dict[int, list[float]] = defaultdict(list)
 
@@ -131,24 +146,27 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
         if file_path and os.path.exists(file_path):
             filename = os.path.basename(file_path)
             try:
-                coro = None
                 if is_image:
                     f = open(file_path, 'rb')
-                    coro = tg_app.bot.send_photo(chat_id=tg_chat_id, photo=f, caption=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                    func = tg_app.bot.send_photo
+                    kwargs = {'chat_id': tg_chat_id, 'photo': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 elif is_video:
                     f = open(file_path, 'rb')
-                    coro = tg_app.bot.send_video(chat_id=tg_chat_id, video=f, caption=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                    func = tg_app.bot.send_video
+                    kwargs = {'chat_id': tg_chat_id, 'video': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 elif is_voice:
                     f = open(file_path, 'rb')
-                    coro = tg_app.bot.send_voice(chat_id=tg_chat_id, voice=f, caption=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                    func = tg_app.bot.send_voice
+                    kwargs = {'chat_id': tg_chat_id, 'voice': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 else:
                     f = open(file_path, 'rb')
-                    coro = tg_app.bot.send_document(chat_id=tg_chat_id, document=f, caption=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                    func = tg_app.bot.send_document
+                    kwargs = {'chat_id': tg_chat_id, 'document': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 
-                # using asyncio.wait_for for Python 3.9+ compatibility
-                tg_msg = await asyncio.wait_for(coro, timeout=30.0)
+                # using retry_async with a longer overall timeout
+                tg_msg = await retry_async(func, **kwargs)
             except (TimeoutError, asyncio.TimeoutError):
-                fallback_text = formatted_msg + f"\n\n<i>[Failed to download media: {html.escape(filename)} - timeout exceeded]</i>"
+                fallback_text = formatted_msg + f"\n\n<i>[Failed to relay media: {html.escape(filename)} - timeout exceeded after retries]</i>"
                 tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id)
             except Exception as e:
                 logger.error(f"Error uploading media to TG: {e}")
@@ -623,11 +641,11 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             suffix = os.path.splitext(file_name)[1] if file_name else ""
             tmp_fd, local_file_path = tempfile.mkstemp(suffix=suffix)
             os.close(tmp_fd)
-            await asyncio.wait_for(tg_file_obj.download_to_drive(local_file_path), timeout=30.0)
+            await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path)
         except (TimeoutError, asyncio.TimeoutError):
-            logger.error(f"Timeout formatting file {file_name}")
+            logger.error(f"Timeout downloading file {file_name} after retries")
             local_file_path = None
-            timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded]</i>"
+            timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]</i>"
         except Exception as e:
             logger.error(f"Failed to download TG file: {e}")
             local_file_path = None
@@ -775,11 +793,15 @@ async def tg_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -
     exc_str = str(exc)
     exc_type = type(exc).__name__
     
-    if "ReadTimeout" in exc_str or "ReadTimeout" in exc_type or "Server disconnected" in exc_str or "NetworkError" in exc_type:
+    # Common network/timeout errors that we handle via retries or just want to log less noisily
+    network_errors = ("ReadTimeout", "ConnectTimeout", "ProxyError", "NetworkError", "RemoteProtocolError")
+    is_network = any(err in exc_str or err in exc_type for err in network_errors) or "Server disconnected" in exc_str
+
+    if is_network:
         logger.warning(f"Telegram network error: {exc_type}: {exc_str}")
         return
 
-    logger.error("Telegram Application Error:", exc_info=exc)
+    logger.error(f"Telegram Application Error [{exc_type}]: {exc_str}", exc_info=exc)
 
 def start_dc_bot():
     """Runs the DC Bot CLI (it is blocking)"""
