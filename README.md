@@ -35,7 +35,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
    venv/bin/python bot.py init dc YOUR_DELTA_CHAT_EMAIL YOUR_EMAIL_PASSWORD
    ```
 
-   *This saves the account configuration locally, by default in your OS config directory under `tgbridge` (e.g. on macOS it is located at `~/Library/Application\ Support/tgbridge`).*
+   *This saves the account configuration locally, by default in your OS config directory under `tgbridge` (e.g. on linux it is located at `~/.config/tgbridge`, on macOS it is located at `~/Library/Application\ Support/tgbridge` etc).*
 
 2. **Initialize the Telegram Token**
    Configure your bot's Telegram API token. You can pass it as an argument or enter it interactively to keep it out of your command history:
