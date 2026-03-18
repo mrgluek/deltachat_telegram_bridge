@@ -8,6 +8,9 @@ if [ "$(id -u)" = "0" ]; then
     exit 1
 fi
 
+export UID=$(id -u)
+export GID=$(id -g)
+
 git pull
 docker compose up -d --build
 
