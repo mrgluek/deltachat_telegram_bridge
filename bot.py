@@ -172,6 +172,8 @@ def on_init(bot, args):
     for accid in bot.rpc.get_all_account_ids():
         bot.rpc.set_config(accid, "displayname", "TG Bridge")
         bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups")
+        # Auto-delete messages after 1 hour to save disk space
+        bot.rpc.set_config(accid, "delete_device_after", "3600")
         # Set bot avatar if icon file exists (prefer .jpg)
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
