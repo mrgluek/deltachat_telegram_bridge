@@ -60,27 +60,33 @@ class AdminLogHandler(logging.Handler):
         try:
             log_entry = self.format(record)
             
+            # Use local refs for globals to be safe
+            local_tg_app = tg_app
+            local_main_loop = main_loop
+            local_dc_bot = dc_bot_instance
+            local_dc_accid = dc_accid
+            
             # Send to TG
             admin_tg_id = database.get_config("admin_tg_id")
-            if admin_tg_id and tg_app and main_loop:
+            if admin_tg_id and local_tg_app and local_main_loop:
                 try:
                     tg_id = int(admin_tg_id)
                     msg_text = f"⚠️ <b>Bot Error Log</b>\n\n<pre>{html.escape(_truncate(log_entry, 3800))}</pre>"
                     asyncio.run_coroutine_threadsafe(
-                        tg_app.bot.send_message(chat_id=tg_id, text=msg_text, parse_mode='HTML'),
-                        main_loop
+                        local_tg_app.bot.send_message(chat_id=tg_id, text=msg_text, parse_mode='HTML'),
+                        local_main_loop
                     )
                 except Exception:
                     pass
 
             # Send to DC
             admin_dc_email = database.get_config("admin_dc_email")
-            if admin_dc_email and dc_bot_instance and dc_accid:
+            if admin_dc_email and local_dc_bot and local_dc_accid:
                 try:
                     dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
-                    contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
-                    chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
-                    dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
+                    contact_id = local_dc_bot.rpc.create_contact(local_dc_accid, admin_dc_email, "Admin")
+                    chat_id = local_dc_bot.rpc.create_chat_by_contact_id(local_dc_accid, contact_id)
+                    local_dc_bot.rpc.send_msg(local_dc_accid, chat_id, MsgData(text=dc_msg_text))
                 except Exception:
                     pass
         finally:
@@ -263,19 +269,24 @@ def error_test_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/debug"))
 def debug_command(bot, accid, event):
     """Check bot status."""
-    msg = event.msg
-    admin_dc = database.get_config("admin_dc_email")
-    admin_tg = database.get_config("admin_tg_id")
-    status = (
-        f"DEBUG STATUS:\n"
-        f"accid: {accid}\n"
-        f"dc_accid (global): {dc_accid}\n"
-        f"dc_bot_instance (global): {bool(dc_bot_instance)}\n"
-        f"admin_dc: {admin_dc}\n"
-        f"admin_tg: {admin_tg}\n"
-        f"bot_contact_id: {bot_contact_id}"
-    )
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=status))
+    try:
+        msg = event.msg
+        admin_dc = database.get_config("admin_dc_email") or "Not set"
+        admin_tg = database.get_config("admin_tg_id") or "Not set"
+        
+        status = (
+            f"DEBUG STATUS:\n"
+            f"accid (handler): {accid}\n"
+            f"dc_accid (global): {dc_accid}\n"
+            f"dc_bot_instance (global): {'Set' if dc_bot_instance else 'None'}\n"
+            f"admin_dc_email: {admin_dc}\n"
+            f"admin_tg_id: {admin_tg}\n"
+            f"bot_contact_id: {bot_contact_id}\n"
+            f"chat_id: {msg.chat_id}"
+        )
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=status))
+    except Exception as e:
+        logger.error(f"Error in debug command: {e}")
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
