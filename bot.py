@@ -81,12 +81,8 @@ class AdminLogHandler(logging.Handler):
                     contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
                     chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
                     dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_msg_text))
-                except Exception as e:
-                    sys.stderr.write(f"ERROR: Failed to send DC log: {e}\n")
-            elif not admin_dc_email:
-                pass # not configured
-            else:
-                sys.stderr.write(f"DEBUG: DC log skip - instance: {bool(dc_bot_instance)}, accid: {bool(dc_accid)}\n")
+                except Exception:
+                    pass
         finally:
             self._is_emitting.flag = False
 
@@ -196,6 +192,10 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
     bot.logger.info("Initializing Delta Chat tgbridge...")
+    
+    # Ensure our error handler is attached to the bot's own logger
+    bot.logger.addHandler(admin_handler)
+    
     for accid in bot.rpc.get_all_account_ids():
         bot.rpc.set_config(accid, "displayname", "TG Bridge")
         bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups")
