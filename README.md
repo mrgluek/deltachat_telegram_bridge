@@ -1,4 +1,4 @@
-# Delta Chat <-> Telegram Bridge Bot
+# Delta Chat ↔ Telegram Bridge Bot
 
 A bot that acts as a bridge between Delta Chat groups and Telegram groups. It relays messages sent in mapped Telegram groups to corresponding Delta Chat groups, and vice-versa.
 
