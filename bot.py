@@ -377,7 +377,7 @@ async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass  # If we can't verify, allow it
 
-    await update.message.reply_text(f"Group ID: {chat.id}")
+    await update.message.reply_text(f"Group ID: <code>{chat.id}</code>", parse_mode='HTML')
 
 async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Relay Telegram messages to Delta Chat."""
