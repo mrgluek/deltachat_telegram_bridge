@@ -1,5 +1,6 @@
 services:
   bridge:
+    image: deltachat_telegram_bridge:latest
     build:
       context: .
       args:
