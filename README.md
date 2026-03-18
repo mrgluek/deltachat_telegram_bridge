@@ -6,9 +6,9 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 ## Prerequisites
 
-- **Python 3.9+**
-- A Telegram Bot token (from [@BotFather](https://t.me/BotFather))
-- A Delta Chat account (email and password)
+- **Python 3.9+** (for local/venv setup)
+- **Telegram Bot token** (create a new bot and obtain one from [@BotFather](https://t.me/BotFather))
+- **Delta Chat account** (can be automatically created during setup by providing a valid email address, e.g. from one of [public chatmail relays](https://chatmail.at/relays), and a random password)
 
 ## Installation
 
