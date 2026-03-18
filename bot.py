@@ -261,33 +261,6 @@ def help_command(bot, accid, event):
     help_msg = get_dc_help_text(sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
 
-@dc_cli.on(events.NewMessage(command="/error"))
-def error_test_command(bot, accid, event):
-    """Trigger a test error."""
-    raise ValueError("This is a test error from Delta Chat /error command")
-
-@dc_cli.on(events.NewMessage(command="/debug"))
-def debug_command(bot, accid, event):
-    """Check bot status."""
-    try:
-        msg = event.msg
-        admin_dc = database.get_config("admin_dc_email") or "Not set"
-        admin_tg = database.get_config("admin_tg_id") or "Not set"
-        
-        status = (
-            f"DEBUG STATUS:\n"
-            f"accid (handler): {accid}\n"
-            f"dc_accid (global): {dc_accid}\n"
-            f"dc_bot_instance (global): {'Set' if dc_bot_instance else 'None'}\n"
-            f"admin_dc_email: {admin_dc}\n"
-            f"admin_tg_id: {admin_tg}\n"
-            f"bot_contact_id: {bot_contact_id}\n"
-            f"chat_id: {msg.chat_id}"
-        )
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=status))
-    except Exception as e:
-        logger.error(f"Error in debug command: {e}")
-
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
     """Bridge a Delta Chat group to a Telegram group. Admin only."""
