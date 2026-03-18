@@ -76,6 +76,8 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    docker-compose up -d --build
    ```
 
+   Also check `update.sh` for an example of how to automatically update the bot.
+
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
 
 ## Usage: Bridging Groups
