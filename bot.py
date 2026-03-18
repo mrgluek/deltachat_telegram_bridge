@@ -366,16 +366,6 @@ def handle_dc_message(bot, accid, event):
             short_quote = _truncate(quote_text, 50)
             reply_quote = f"<i>↩ {html.escape(short_quote)}</i>\n"
 
-    # Build caption/text
-    if safe_text:
-        if reply_quote:
-            formatted_msg = f"{reply_quote}<b>{safe_name}</b>: {safe_text}"
-        else:
-            formatted_msg = f"<b>{safe_name}</b>: {safe_text}"
-    else:
-        formatted_msg = f"<b>{safe_name}</b>"
-    formatted_msg = _truncate(formatted_msg, TG_MAX_MSG_LEN)
-
     # Determine if this is a media message
     viewtype = getattr(msg, 'viewtype', None) or ''
     is_image = viewtype in ('Image', 'Gif', 'Sticker') or (
@@ -394,6 +384,18 @@ def handle_dc_message(bot, accid, event):
                 quote_msg_id = msg.quote.get('message_id') if isinstance(msg.quote, dict) else None
                 if quote_msg_id:
                     tg_reply_id = database.get_tg_msg_id(quote_msg_id, dc_chat_id, tg_chat_id)
+
+            # Build caption/text for this specific chat
+            chat_reply_quote = reply_quote if not tg_reply_id else None
+            
+            if safe_text:
+                if chat_reply_quote:
+                    formatted_msg = f"{chat_reply_quote}<b>{safe_name}</b>: {safe_text}"
+                else:
+                    formatted_msg = f"<b>{safe_name}</b>: {safe_text}"
+            else:
+                formatted_msg = f"<b>{safe_name}</b>"
+            formatted_msg = _truncate(formatted_msg, TG_MAX_MSG_LEN)
 
             if main_loop:
                 asyncio.run_coroutine_threadsafe(
@@ -557,18 +559,18 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check if this is a reply to another message
     reply_prefix = ""
+    tg_reply_to_msg_id = None
     if update.message.reply_to_message:
         replied = update.message.reply_to_message
+        tg_reply_to_msg_id = replied.message_id
         replied_text = replied.text or replied.caption or ""
         if replied_text:
             short_quote = _truncate(replied_text, 80)
             reply_prefix = f"↩ {short_quote}\n"
 
-    formatted_msg = f"{reply_prefix}{sender_name}: {text}" if text else f"{sender_name}:"
-    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
-
     # Download the TG file to a temp path if present
     local_file_path = None
+    timeout_error_text = ""
     if tg_file:
         try:
             tg_file_obj = await tg_file.get_file()
@@ -579,7 +581,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (TimeoutError, asyncio.TimeoutError):
             logger.error(f"Timeout formatting file {file_name}")
             local_file_path = None
-            formatted_msg = formatted_msg + f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded]</i>"
+            timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded]</i>"
         except Exception as e:
             logger.error(f"Failed to download TG file: {e}")
             local_file_path = None
@@ -587,9 +589,23 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for dc_chat_id in dc_chats:
             try:
+                dc_reply_id = None
+                if tg_reply_to_msg_id:
+                    dc_reply_id = database.get_dc_msg_id(tg_reply_to_msg_id, tg_chat_id, dc_chat_id)
+
+                chat_reply_prefix = reply_prefix if not dc_reply_id else ""
+                
+                formatted_msg = f"{chat_reply_prefix}{sender_name}: {text}" if text else f"{sender_name}:"
+                formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+                if timeout_error_text:
+                    formatted_msg += timeout_error_text
+
                 msg_data = MsgData(text=formatted_msg)
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
+                if dc_reply_id:
+                    msg_data.quoted_message_id = dc_reply_id
+                    
                 sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
                 if sent_msg_id:
                     database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id)
