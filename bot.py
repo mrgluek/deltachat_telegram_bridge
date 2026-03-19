@@ -228,6 +228,7 @@ def get_dc_help_text(sender_email: str) -> str:
         f"Commands:\n"
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from the group\n"
+        f"/stats — Show bridge statistics\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
@@ -242,6 +243,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"I relay messages between Telegram and Delta Chat groups.\n\n"
         f"Commands:\n"
         f"/id — Show group's chat ID (needed for bridging)\n"
+        f"/stats — Show bridge statistics\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
         f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.\n\n"
@@ -340,6 +342,47 @@ def unbridge_command(bot, accid, event):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is not bridged."))
+
+
+@dc_cli.on(events.NewMessage(command="/stats"))
+def stats_command(bot, accid, event):
+    """Show bridge statistics."""
+    msg = event.msg
+    chat_id = msg.chat_id
+
+    chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+    is_private = chat_info.get("type") == 1
+
+    if is_private:
+        # In private chat: show all bridges (admin only)
+        admin_dc_email = database.get_config("admin_dc_email")
+        sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+        if admin_dc_email and sender_email.lower() != admin_dc_email.lower():
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
+            return
+
+        bridges = database.get_all_bridges()
+        if not bridges:
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges configured."))
+            return
+
+        lines = [f"📊 Bridge Statistics ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
+        for dc_cid, tg_cid in bridges:
+            count = database.get_bridge_message_count(dc_cid, tg_cid)
+            lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} — {count} msgs relayed")
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+    else:
+        # In group chat: show stats for this bridge only
+        tg_chats = database.get_tg_chats(chat_id)
+        if not tg_chats:
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 This group is not bridged."))
+            return
+
+        lines = ["📊 Bridge Statistics\n"]
+        for tg_cid in tg_chats:
+            count = database.get_bridge_message_count(chat_id, tg_cid)
+            lines.append(f"• TG {tg_cid} — {count} msgs relayed")
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(is_info=False))
@@ -565,6 +608,43 @@ async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass  # If we can't verify, allow it
 
     await update.message.reply_text(f"Group ID: <code>{chat.id}</code>", parse_mode='HTML')
+
+
+async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show bridge statistics on Telegram side."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type == "private":
+        # In private chat: show all bridges (admin only)
+        admin_tg_id = database.get_config("admin_tg_id")
+        if admin_tg_id and str(user.id) != str(admin_tg_id):
+            await update.message.reply_text("❌ Only the bot admin can view all stats.")
+            return
+
+        bridges = database.get_all_bridges()
+        if not bridges:
+            await update.message.reply_text("📊 No bridges configured.")
+            return
+
+        lines = [f"📊 <b>Bridge Statistics</b> ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
+        for dc_cid, tg_cid in bridges:
+            count = database.get_bridge_message_count(dc_cid, tg_cid)
+            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {count} msgs relayed")
+        await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    else:
+        # In group chat: show stats for this bridge only
+        dc_chats = database.get_dc_chats(chat.id)
+        if not dc_chats:
+            await update.message.reply_text("📊 This group is not bridged.")
+            return
+
+        lines = ["📊 <b>Bridge Statistics</b>\n"]
+        for dc_cid in dc_chats:
+            count = database.get_bridge_message_count(dc_cid, chat.id)
+            lines.append(f"• DC <code>{dc_cid}</code> — {count} msgs relayed")
+        await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
 
 async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Relay Telegram messages to Delta Chat."""
@@ -903,6 +983,7 @@ async def main():
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
+    tg_app.add_handler(CommandHandler("stats", tg_stats_command))
     # Handler for group -> supergroup migration (must be before the general message handler)
     tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
     tg_app.add_handler(MessageHandler(

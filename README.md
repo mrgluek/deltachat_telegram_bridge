@@ -188,6 +188,7 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 ## Changelog
 
+- **2026-03-19**: Added `/stats` command to view bridge statistics. In group chats, it shows stats for that specific bridge; in private chats, it provides a summary of all configured bridges (admin only).
 - **2026-03-18**: Added automatic handling of Telegram group → supergroup migration. The bot now detects the new chat ID and updates all bridge mappings transparently.
 - **2026-03-18**: Added retry logic with exponential backoff for Telegram API timeouts during media relaying. Improved network error logging.
 - **2026-03-18**: Implemented bidirectional message reaction proxying. Standard emojis are now synced between DeltaChat and Telegram. Note: the bot must be a group admin for TG → DC reactions.

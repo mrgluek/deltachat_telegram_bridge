@@ -212,6 +212,31 @@ def update_bridge_tg_chat_id(old_tg_id: int, new_tg_id: int):
         finally:
             conn.close()
 
+def get_all_bridges() -> list[tuple[int, int]]:
+    """Return all bridge pairs as (dc_chat_id, tg_chat_id)."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT dc_chat_id, tg_chat_id FROM bridges")
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+
+def get_bridge_message_count(dc_chat_id: int, tg_chat_id: int) -> int:
+    """Return the number of relayed messages for a specific bridge pair."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM message_map WHERE dc_chat_id = ? AND tg_chat_id = ?",
+            (dc_chat_id, tg_chat_id)
+        )
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+
 def cleanup_old_messages(limit=10000):
     """Run this periodically to prevent DB bloat."""
     with _lock:
