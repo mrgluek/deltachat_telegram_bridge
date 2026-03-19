@@ -844,12 +844,38 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         # Fetch TG channel info to get the title and photo
         try:
             tg_chat_info = await context.bot.get_chat(f"@{username}")
+            if tg_chat_info.type != "channel":
+                await update.message.reply_text(f"❌ <code>@{html.escape(username)}</code> is not a channel.", parse_mode='HTML')
+                return
+
+            # Check if the bot is admin in that channel
+            try:
+                bot_member = await tg_chat_info.get_member(context.bot.id)
+                if bot_member.status != "administrator":
+                    await update.message.reply_text(f"❌ I must be an <b>administrator</b> in @{html.escape(username)} to bridge it.", parse_mode='HTML')
+                    return
+            except Exception:
+                await update.message.reply_text(f"❌ I am not in channel @{html.escape(username)} or have no rights to see members. Please add me as an administrator first.", parse_mode='HTML')
+                return
+
+            # Check if the user is admin in that channel (unless they are the global bot admin)
+            admin_tg_id = database.get_config("admin_tg_id")
+            if not admin_tg_id or str(update.effective_user.id) != str(admin_tg_id):
+                try:
+                    user_member = await tg_chat_info.get_member(update.effective_user.id)
+                    if user_member.status not in ("administrator", "creator"):
+                        await update.message.reply_text(f"❌ Only administrators of @{html.escape(username)} can bridge it.", parse_mode='HTML')
+                        return
+                except Exception:
+                    await update.message.reply_text(f"❌ Could not verify your permissions in @{html.escape(username)}. Are you an administrator there?", parse_mode='HTML')
+                    return
+
             channel_title = tg_chat_info.title or f"@{username}"
             tg_channel_id = tg_chat_info.id
         except Exception as e:
             logger.warning(f"Could not fetch TG channel info for @{username}: {e}")
-            channel_title = f"@{username}"
-            tg_channel_id = None
+            await update.message.reply_text(f"❌ Could not find channel <code>@{html.escape(username)}</code>. Is it public?", parse_mode='HTML')
+            return
 
         # Create DC broadcast channel
         dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
