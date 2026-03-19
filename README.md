@@ -186,8 +186,31 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
 
+## Channel Bridging (TG Channel → DC Broadcast)
+
+The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (one-way, read-only).
+
+> **Note:** The bot must be added as an **administrator** to the Telegram channel to receive channel posts.
+
+### Setup
+
+1. **Add the bot** as an admin to the Telegram channel you want to bridge.
+2. **In a private chat** with the bot, use `/channeladd @channel_username` to create the bridge.
+3. The bot will create a DC broadcast channel (with the same name and avatar) and return an **invite link** for subscribing.
+
+### Commands (private chat, admin only)
+
+| Command | Description |
+|---------|-------------|
+| `/channeladd @username` | Bridge a TG channel to a new DC broadcast |
+| `/channels` | List all bridged channels |
+| `/channel N` | Show invite link for channel #N |
+| `/channelqr N` | Show QR code invite for channel #N |
+| `/channelremove N` | Remove channel bridge #N |
+
 ## Changelog
 
+- **2026-03-19**: Added Telegram channel → Delta Chat broadcast bridging. One-way relay of channel posts (text + media) to DC broadcast channels with avatar syncing and invite link management.
 - **2026-03-19**: Added `/invite` and `/inviteqr` commands to the Telegram side. These allow generating clickable `i.delta.chat` invite links or QR code images directly from a bridged Telegram group (admin/owner only). Using these commands in a private chat with the bot provides the setup link to add the bot itself to Delta Chat.
 - **2026-03-19**: Added `/stats` command to view bridge statistics. In group chats, it shows stats for that specific bridge; in private chats, it provides a summary of all configured bridges (admin only).
 - **2026-03-18**: Added automatic handling of Telegram group → supergroup migration. The bot now detects the new chat ID and updates all bridge mappings transparently.

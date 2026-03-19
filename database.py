@@ -46,6 +46,16 @@ def init_db():
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_msg ON message_map (tg_msg_id, tg_chat_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_dc_msg ON message_map (dc_msg_id, dc_chat_id)')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_channel_username TEXT NOT NULL UNIQUE,
+                tg_channel_id INTEGER,
+                dc_chat_id INTEGER NOT NULL,
+                invite_link TEXT,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        ''')
         conn.commit()
         conn.close()
         try:
@@ -252,5 +262,105 @@ def cleanup_old_messages(limit=10000):
             conn.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------
+# CHANNEL BRIDGING
+# ---------------------------------------------------------
+
+def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = None) -> int | None:
+    """Add a TG channel -> DC broadcast mapping. Returns the row id."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link) VALUES (?, ?, ?)",
+                (tg_username.lower(), dc_chat_id, invite_link)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+def get_channel_by_id(channel_id: int) -> dict | None:
+    """Get a channel row by its autoincrement id."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+def get_channel_by_tg_username(username: str) -> dict | None:
+    """Get a channel row by TG username."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels WHERE tg_channel_username = ?", (username.lower(),))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+def get_channel_by_tg_id(tg_channel_id: int) -> dict | None:
+    """Get a channel row by TG numeric channel ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+def get_all_channels() -> list[dict]:
+    """Return all channel rows."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels ORDER BY id")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+def remove_channel(channel_id: int) -> bool:
+    """Remove a channel by its id."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+def update_channel_tg_id(username: str, tg_channel_id: int):
+    """Set the numeric TG channel ID once we receive the first post."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channels SET tg_channel_id = ? WHERE tg_channel_username = ?",
+            (tg_channel_id, username.lower())
+        )
+        conn.commit()
+        conn.close()
+
+def get_dc_channel_chat_id(tg_channel_id: int) -> int | None:
+    """Get the DC broadcast chat ID for a TG channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT dc_chat_id FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
 
 init_db()

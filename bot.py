@@ -246,6 +246,11 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/stats — Show bridge statistics\n"
         f"/invite — Get Delta Chat group invite link\n"
         f"/inviteqr — Get Delta Chat group invite QR code\n"
+        f"/channeladd @name — Bridge a Telegram channel\n"
+        f"/channels — List bridged channels\n"
+        f"/channel N — Get channel invite link\n"
+        f"/channelqr N — Get channel invite QR code\n"
+        f"/channelremove N — Remove a channel bridge\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
         f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.\n\n"
@@ -788,6 +793,345 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"❌ Error generating QR code for DC Group {dc_cid}.", parse_mode='HTML')
 
 
+# ---------------------------------------------------------
+# CHANNEL BRIDGING COMMANDS
+# ---------------------------------------------------------
+
+async def _check_channel_admin(update: Update) -> bool:
+    """Only the bot admin may manage channels. Must be in private chat."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type != "private":
+        await update.message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
+        return False
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id and str(user.id) != str(admin_tg_id):
+        await update.message.reply_text("❌ Only the bot admin can manage channels.")
+        return False
+    return True
+
+
+async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bridge a Telegram channel to a new DC broadcast channel."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Usage: <code>/channeladd @channel_username</code>\n\n"
+            "Example: <code>/channeladd @ia_panorama</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    username = context.args[0].lstrip("@").strip()
+    if not username:
+        await update.message.reply_text("❌ Please provide a valid channel username.")
+        return
+
+    # Check if already added
+    if database.get_channel_by_tg_username(username):
+        await update.message.reply_text(f"❌ Channel <code>@{html.escape(username)}</code> is already bridged.", parse_mode='HTML')
+        return
+
+    if not dc_bot_instance or not dc_accid:
+        await update.message.reply_text("❌ Delta Chat bot is not ready yet.")
+        return
+
+    await update.message.reply_text(f"⏳ Setting up channel bridge for <code>@{html.escape(username)}</code>...", parse_mode='HTML')
+
+    try:
+        # Fetch TG channel info to get the title and photo
+        try:
+            tg_chat_info = await context.bot.get_chat(f"@{username}")
+            channel_title = tg_chat_info.title or f"@{username}"
+            tg_channel_id = tg_chat_info.id
+        except Exception as e:
+            logger.warning(f"Could not fetch TG channel info for @{username}: {e}")
+            channel_title = f"@{username}"
+            tg_channel_id = None
+
+        # Create DC broadcast channel
+        dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
+
+        # Copy TG channel avatar to DC broadcast
+        try:
+            if tg_channel_id:
+                tg_chat_info_full = await context.bot.get_chat(tg_channel_id)
+                if tg_chat_info_full.photo:
+                    avatar_file = await tg_chat_info_full.photo.get_big_file()
+                    tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
+                    os.close(tmp_fd)
+                    await avatar_file.download_to_drive(custom_path=avatar_path)
+                    dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
+                    try:
+                        os.unlink(avatar_path)
+                    except Exception:
+                        pass
+                    logger.info(f"Copied avatar from @{username} to DC broadcast {dc_chat_id}")
+        except Exception as e:
+            logger.warning(f"Could not copy avatar for @{username}: {e}")
+
+        # Generate invite link
+        invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
+        if invite_link.startswith("OPEN-CHAT:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[10:]
+        elif invite_link.startswith("OPEN:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[5:]
+
+        # Save to DB
+        row_id = database.add_channel(username, dc_chat_id, invite_link)
+        if tg_channel_id:
+            database.update_channel_tg_id(username, tg_channel_id)
+
+        if row_id:
+            await update.message.reply_text(
+                f"✅ Channel <b>@{html.escape(username)}</b> bridged!\n\n"
+                f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
+                f"🆔 Channel #{row_id}\n\n"
+                f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+        else:
+            await update.message.reply_text("❌ Failed to save channel to database (may already exist).")
+    except Exception as e:
+        logger.error(f"Failed to add channel @{username}: {e}")
+        await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
+
+
+async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all bridged channels."""
+    if not await _check_channel_admin(update):
+        return
+
+    channels = database.get_all_channels()
+    if not channels:
+        await update.message.reply_text("📺 No channels are bridged.")
+        return
+
+    lines = [f"📺 <b>Bridged Channels</b> ({len(channels)})\n"]
+    for ch in channels:
+        tg_id_str = f" (ID: <code>{ch['tg_channel_id']}</code>)" if ch['tg_channel_id'] else " (ID: pending)"
+        lines.append(f"#{ch['id']} — <b>@{html.escape(ch['tg_channel_username'])}</b>{tg_id_str}")
+    lines.append(f"\nUse <code>/channel N</code> for invite link")
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
+
+async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show invite link for a specific channel by number."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text("Usage: <code>/channel N</code> (use /channels to see numbers)", parse_mode='HTML')
+        return
+
+    try:
+        channel_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid channel number.")
+        return
+
+    ch = database.get_channel_by_id(channel_id)
+    if not ch:
+        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        return
+
+    invite_link = ch['invite_link'] or "No invite link available"
+    await update.message.reply_text(
+        f"📺 Channel #{ch['id']} — <b>@{html.escape(ch['tg_channel_username'])}</b>\n\n"
+        f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
+        parse_mode='HTML',
+        disable_web_page_preview=True
+    )
+
+
+async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate QR code for a specific channel's invite link."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not qrcode:
+        await update.message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text("Usage: <code>/channelqr N</code> (use /channels to see numbers)", parse_mode='HTML')
+        return
+
+    try:
+        channel_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid channel number.")
+        return
+
+    ch = database.get_channel_by_id(channel_id)
+    if not ch:
+        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        return
+
+    if not ch['invite_link']:
+        await update.message.reply_text("❌ No invite link available for this channel.")
+        return
+
+    try:
+        # Get the original QR data (securejoin format, not the https link)
+        if dc_bot_instance and dc_accid:
+            qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, ch['dc_chat_id'])
+        else:
+            qrdata = ch['invite_link']
+
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(qrdata)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        bio = io.BytesIO()
+        bio.name = 'channel_invite_qr.png'
+        img.save(bio, 'PNG')
+        bio.seek(0)
+        await update.message.reply_photo(
+            photo=bio,
+            caption=f"Scan to subscribe to @{ch['tg_channel_username']} in Delta Chat"
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate channel QR: {e}")
+        await update.message.reply_text("❌ Error generating QR code.")
+
+
+async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a channel bridge."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text("Usage: <code>/channelremove N</code> (use /channels to see numbers)", parse_mode='HTML')
+        return
+
+    try:
+        channel_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid channel number.")
+        return
+
+    ch = database.get_channel_by_id(channel_id)
+    if not ch:
+        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        return
+
+    channel_name = ch['tg_channel_username']
+    if database.remove_channel(channel_id):
+        await update.message.reply_text(f"✅ Channel #{channel_id} (<b>@{html.escape(channel_name)}</b>) removed.", parse_mode='HTML')
+    else:
+        await update.message.reply_text("❌ Failed to remove channel.")
+
+
+# ---------------------------------------------------------
+# CHANNEL POST HANDLER
+# ---------------------------------------------------------
+
+async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Relay Telegram channel posts to corresponding DC broadcast channels."""
+    global dc_bot_instance, dc_accid
+
+    post = update.channel_post
+    if not post:
+        return
+
+    tg_channel_id = post.chat.id
+    tg_username = post.chat.username
+
+    # Look up by numeric ID first, then by username
+    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+
+    if not dc_chat_id and tg_username:
+        # First post — resolve username to numeric ID
+        ch = database.get_channel_by_tg_username(tg_username)
+        if ch:
+            database.update_channel_tg_id(tg_username, tg_channel_id)
+            dc_chat_id = ch['dc_chat_id']
+
+    if not dc_chat_id or not dc_bot_instance or not dc_accid:
+        return
+
+    # Rate limit
+    if _is_rate_limited(tg_channel_id):
+        return
+
+    text = post.text or post.caption or ""
+
+    # Author signature (shown for channel posts with signatures enabled)
+    author = getattr(post, 'author_signature', None)
+
+    # Detect media
+    tg_file = None
+    file_name = None
+    if post.photo:
+        tg_file = post.photo[-1]
+        file_name = "photo.jpg"
+    elif post.video:
+        tg_file = post.video
+        file_name = post.video.file_name or "video.mp4"
+    elif post.animation:
+        tg_file = post.animation
+        file_name = "animation.gif"
+    elif post.voice:
+        tg_file = post.voice
+        file_name = "voice.ogg"
+    elif post.audio:
+        tg_file = post.audio
+        file_name = post.audio.file_name or "audio.mp3"
+    elif post.document:
+        tg_file = post.document
+        file_name = post.document.file_name or "file"
+    elif post.sticker:
+        tg_file = post.sticker
+        file_name = "sticker.webp"
+
+    # Skip posts with no text and no media
+    if not text and not tg_file:
+        return
+
+    # Build message text
+    formatted_msg = text if text else ""
+    if author:
+        formatted_msg += f"\n\n— Author: {author}"
+    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+
+    # Download media if present
+    local_file_path = None
+    if tg_file:
+        try:
+            tg_file_obj = await tg_file.get_file()
+            suffix = os.path.splitext(file_name)[1] if file_name else ""
+            tmp_fd, local_file_path = tempfile.mkstemp(suffix=suffix)
+            os.close(tmp_fd)
+            await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.error(f"Timeout downloading channel media {file_name}")
+            local_file_path = None
+            formatted_msg += f"\n\n[Failed to download media: {file_name}]"
+        except Exception as e:
+            logger.error(f"Failed to download channel media: {e}")
+            local_file_path = None
+
+    try:
+        msg_data = MsgData(text=formatted_msg)
+        if local_file_path and os.path.exists(local_file_path):
+            msg_data.file = local_file_path
+        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        logger.info(f"Relayed channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to relay channel post to DC: {e}")
+    finally:
+        if local_file_path and os.path.exists(local_file_path):
+            try:
+                os.unlink(local_file_path)
+            except Exception:
+                pass
+
+
 async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Relay Telegram messages to Delta Chat."""
     global dc_bot_instance, dc_accid
@@ -1128,8 +1472,24 @@ async def main():
     tg_app.add_handler(CommandHandler("stats", tg_stats_command))
     tg_app.add_handler(CommandHandler("invite", tg_invite_command))
     tg_app.add_handler(CommandHandler("inviteqr", tg_inviteqr_command))
+    # Channel bridging commands
+    tg_app.add_handler(CommandHandler("channeladd", tg_channeladd_command))
+    tg_app.add_handler(CommandHandler("channels", tg_channels_command))
+    tg_app.add_handler(CommandHandler("channel", tg_channel_command))
+    tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
+    tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
     # Handler for group -> supergroup migration (must be before the general message handler)
     tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
+    # Handler for channel posts (TG channel -> DC broadcast)
+    tg_app.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & (
+            filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
+            filters.Document.ALL | filters.VOICE | filters.AUDIO |
+            filters.Sticker.ALL | filters.ANIMATION
+        ),
+        handle_tg_channel_post
+    ))
+    # Handler for group messages
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
         filters.Document.ALL | filters.VOICE | filters.AUDIO |
