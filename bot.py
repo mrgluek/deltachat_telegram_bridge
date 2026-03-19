@@ -150,6 +150,36 @@ def _truncate(text: str, max_len: int) -> str:
         return text
     return text[:max_len - 1] + "…"
 
+def _inline_links(text: str, entities) -> str:
+    """Inline text_link URLs into plain text so hidden links are not lost.
+
+    Telegram 'text_link' entities have a display text and a hidden URL.
+    This function appends the URL after the display text, e.g.:
+      'Click here' -> 'Click here ( https://example.com )'
+    Plain 'url' entities are already visible in the text and left untouched.
+    """
+    if not entities or not text:
+        return text
+
+    # Collect text_link entities, sorted by offset descending so we can
+    # insert from the end without shifting earlier offsets.
+    links = []
+    for ent in entities:
+        if ent.type == "text_link" and ent.url:
+            links.append((ent.offset, ent.offset + ent.length, ent.url))
+
+    if not links:
+        return text
+
+    links.sort(key=lambda x: x[0], reverse=True)
+    for start, end, url in links:
+        # Only insert if the URL isn't already in the display text
+        display_text = text[start:end]
+        if url not in display_text:
+            text = text[:end] + f" ( {url} )" + text[end:]
+
+    return text
+
 
 async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice):
     try:
@@ -1086,6 +1116,9 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     text = post.text or post.caption or ""
+    # Inline hidden links so they are not lost in DC
+    entities = post.entities or post.caption_entities or []
+    text = _inline_links(text, entities)
 
     # Author signature (shown for channel posts with signatures enabled)
     author = getattr(post, 'author_signature', None)
@@ -1189,6 +1222,9 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_name += f" {sender.last_name}"
 
     text = update.message.text or update.message.caption or ""
+    # Inline hidden links so they are not lost in DC
+    entities = update.message.entities or update.message.caption_entities or []
+    text = _inline_links(text, entities)
 
     # Detect and format polls
     if update.message.poll:
