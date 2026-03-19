@@ -144,6 +144,24 @@ def _is_rate_limited(chat_id: int) -> bool:
     _rate_limits[chat_id].append(now)
     return False
 
+# Per-message edit debounce: tracks last edit relay time per (chat_id, msg_id)
+EDIT_DEBOUNCE_SECONDS = 60
+_edit_timestamps: dict[tuple[int, int], float] = {}
+
+def _is_edit_debounced(chat_id: int, msg_id: int) -> bool:
+    """Returns True if an edit for this message was relayed too recently."""
+    now = time.time()
+    key = (chat_id, msg_id)
+    last = _edit_timestamps.get(key, 0)
+    if now - last < EDIT_DEBOUNCE_SECONDS:
+        return True
+    _edit_timestamps[key] = now
+    # Purge old entries periodically
+    if len(_edit_timestamps) > 500:
+        cutoff = now - EDIT_DEBOUNCE_SECONDS * 2
+        _edit_timestamps.clear()  # Simple cleanup
+    return False
+
 def _truncate(text: str, max_len: int) -> str:
     """Truncate text to max_len, appending '…' if truncated."""
     if len(text) <= max_len:
@@ -1191,6 +1209,101 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
                 pass
 
 
+async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Relay edited Telegram channel posts to DC broadcast with [Edited] prefix."""
+    global dc_bot_instance, dc_accid
+
+    post = update.edited_channel_post
+    if not post:
+        return
+
+    tg_channel_id = post.chat.id
+    tg_username = post.chat.username
+
+    # Look up DC broadcast
+    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+    if not dc_chat_id and tg_username:
+        ch = database.get_channel_by_tg_username(tg_username)
+        if ch:
+            dc_chat_id = ch['dc_chat_id']
+
+    if not dc_chat_id or not dc_bot_instance or not dc_accid:
+        return
+
+    # Debounce: max 1 edit relay per message per minute
+    if _is_edit_debounced(tg_channel_id, post.message_id):
+        return
+
+    text = post.text or post.caption or ""
+    entities = post.entities or post.caption_entities or []
+    text = _inline_links(text, entities)
+
+    author = getattr(post, 'author_signature', None)
+
+    if not text:
+        return
+
+    formatted_msg = f"✏️ [Edited]\n{text}"
+    if author:
+        formatted_msg += f"\n\n— Author: {author}"
+    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+
+    try:
+        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
+        logger.info(f"Relayed edited channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to relay edited channel post to DC: {e}")
+
+
+async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Relay edited Telegram group messages to Delta Chat with [Edited] prefix."""
+    global dc_bot_instance, dc_accid
+
+    msg = update.edited_message
+    if not msg:
+        return
+
+    tg_chat_id = msg.chat.id
+
+    # Only bridge group chats
+    if msg.chat.type == "private":
+        return
+
+    # Skip bot messages
+    if msg.from_user and msg.from_user.is_bot:
+        return
+
+    dc_chats = database.get_dc_chats(tg_chat_id)
+    if not dc_chats or not dc_bot_instance or not dc_accid:
+        return
+
+    # Debounce: max 1 edit relay per message per minute
+    if _is_edit_debounced(tg_chat_id, msg.message_id):
+        return
+
+    sender = msg.from_user
+    sender_name = sender.first_name
+    if sender.last_name:
+        sender_name += f" {sender.last_name}"
+
+    text = msg.text or msg.caption or ""
+    entities = msg.entities or msg.caption_entities or []
+    text = _inline_links(text, entities)
+
+    if not text:
+        return
+
+    formatted_msg = f"✏️ {sender_name} [Edited]:\n{text}"
+    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+
+    for dc_chat_id in dc_chats:
+        try:
+            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
+            logger.info(f"Relayed edited TG msg to DC chat {dc_chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to relay edited msg to DC chat {dc_chat_id}: {e}")
+
+
 async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Relay Telegram messages to Delta Chat."""
     global dc_bot_instance, dc_accid
@@ -1551,12 +1664,22 @@ async def main():
         ),
         handle_tg_channel_post
     ))
+    # Handler for edited channel posts
+    tg_app.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_CHANNEL_POST & (filters.TEXT | filters.CAPTION),
+        handle_tg_edited_channel_post
+    ))
     # Handler for group messages
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
         filters.Document.ALL | filters.VOICE | filters.AUDIO |
         filters.Sticker.ALL | filters.ANIMATION | filters.POLL,
         handle_tg_message
+    ))
+    # Handler for edited group messages
+    tg_app.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION),
+        handle_tg_edited_message
     ))
     # Handler for poll state changes
     from telegram.ext import PollHandler
