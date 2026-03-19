@@ -244,6 +244,8 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"Commands:\n"
         f"/id — Show group's chat ID (needed for bridging)\n"
         f"/stats — Show bridge statistics\n"
+        f"/invite — Get Delta Chat group invite link\n"
+        f"/inviteqr — Get Delta Chat group invite QR code\n"
         f"/help — Show this help message\n\n"
         f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
         f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.\n\n"
@@ -646,6 +648,102 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
+async def _check_invite_permissions(update: Update) -> bool:
+    """Check permissions for /invite and /inviteqr commands."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type == "private":
+        await update.message.reply_text("❌ This command can only be used in a bridged Telegram group.")
+        return False
+
+    # Permission check
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id:
+        if str(user.id) != str(admin_tg_id):
+            await update.message.reply_text("❌ Only the bot admin can generate invite links.")
+            return False
+    else:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("❌ Only group admins can generate invite links.")
+                return False
+        except Exception:
+            pass
+            
+    return True
+
+async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate invite link for the bridged Delta Chat group."""
+    if not await _check_invite_permissions(update):
+        return
+
+    chat = update.effective_chat
+    dc_chats = database.get_dc_chats(chat.id)
+    if not dc_chats:
+        await update.message.reply_text("❌ This group is not bridged to any Delta Chat group.")
+        return
+
+    lines = ["🔗 <b>Delta Chat Invite Links</b>\n"]
+    for dc_cid in dc_chats:
+        try:
+            qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_cid)
+            # Make sure it's a clickable i.delta.chat link if using OPEN-CHAT/OPEN protocol
+            if qrdata.startswith("OPEN-CHAT:"):
+                qrdata = "https://i.delta.chat/#" + qrdata[10:]
+            elif qrdata.startswith("OPEN:"):
+                qrdata = "https://i.delta.chat/#" + qrdata[5:]
+                
+            lines.append(f"• DC Group <code>{dc_cid}</code>: \n<pre>{html.escape(qrdata)}</pre>")
+        except Exception as e:
+            logger.error(f"Failed to generate invite link for DC chat {dc_cid}: {e}")
+            lines.append(f"• DC Group <code>{dc_cid}</code>: ❌ Error generating link.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML', disable_web_page_preview=True)
+
+async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate invite QR code for the bridged Delta Chat group."""
+    if not await _check_invite_permissions(update):
+        return
+
+    chat = update.effective_chat
+    dc_chats = database.get_dc_chats(chat.id)
+    if not dc_chats:
+        await update.message.reply_text("❌ This group is not bridged to any Delta Chat group.")
+        return
+
+    if not qrcode:
+        await update.message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
+        return
+
+    for dc_cid in dc_chats:
+        try:
+            qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_cid)
+            qr = qrcode.QRCode(version=1, box_size=10, border=4)
+            qr.add_data(qrdata)
+            qr.make(fit=True)
+            
+            try:
+                img = qr.make_image(fill_color="black", back_color="white")
+                import io
+                bio = io.BytesIO()
+                bio.name = 'invite_qr.png'
+                img.save(bio, 'PNG')
+                bio.seek(0)
+                await update.message.reply_photo(
+                    photo=bio, 
+                    caption=f"Scan to join bridged DC Group {dc_cid}"
+                )
+            except Exception as e:
+                logger.error(f"Image generation failed (Pillow might be missing): {e}")
+                await update.message.reply_text("❌ Cannot generate image. Ensure 'Pillow' is installed (`pip install Pillow`).")
+                
+        except Exception as e:
+            logger.error(f"Failed to generate invite QR for DC chat {dc_cid}: {e}")
+            await update.message.reply_text(f"• DC Group <code>{dc_cid}</code>: ❌ Error generating QR code.", parse_mode='HTML')
+
+
 async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Relay Telegram messages to Delta Chat."""
     global dc_bot_instance, dc_accid
@@ -984,6 +1082,8 @@ async def main():
     tg_app.add_handler(CommandHandler("help", tg_help_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
     tg_app.add_handler(CommandHandler("stats", tg_stats_command))
+    tg_app.add_handler(CommandHandler("invite", tg_invite_command))
+    tg_app.add_handler(CommandHandler("inviteqr", tg_inviteqr_command))
     # Handler for group -> supergroup migration (must be before the general message handler)
     tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
     tg_app.add_handler(MessageHandler(
