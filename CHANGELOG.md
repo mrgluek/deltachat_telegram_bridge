@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- /bridge command error ("Method not found") by using the correct `create_group_chat` RPC method.
 - Reverted channel auto-notifications for sub-admins (now owner-only for privacy).
 
 ## [2026-03-19]

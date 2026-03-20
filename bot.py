@@ -775,7 +775,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Create DC group with same name
-        dc_chat_id = dc_bot_instance.rpc.create_group(dc_accid, tg_title, False)
+        dc_chat_id = dc_bot_instance.rpc.create_group_chat(dc_accid, tg_title, False)
 
         # Copy TG group avatar to DC group
         try:
