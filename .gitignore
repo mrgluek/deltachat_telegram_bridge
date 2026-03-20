@@ -13,3 +13,4 @@ bridge.db
 
 # Config
 .env
+.DS_Store
