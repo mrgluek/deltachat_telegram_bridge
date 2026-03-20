@@ -436,20 +436,20 @@ def stats_command(bot, accid, event):
             dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
             m_count = database.get_bridge_message_count(dc_cid, tg_cid)
             try:
-                title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("title", "Unknown Group")
+                title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("name", "Unknown Group")
             except Exception:
                 title = "Unknown Group"
             lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
         
         if channels:
-            lines.append("\n📺 Channel Statistics")
+            lines.append(f"\n📺 Bridged Channels ({len(channels)})")
             for ch in channels:
                 dc_cid = ch['dc_chat_id']
                 tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
                 r_count = ch.get('reactions_count', 0)
                 m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
                 try:
-                    title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("title", "Unknown Channel")
+                    title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("name", "Unknown Channel")
                 except Exception:
                     title = "Unknown Channel"
                 lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
@@ -467,7 +467,7 @@ def stats_command(bot, accid, event):
             m_count = database.get_bridge_message_count(chat_id, tg_cid)
             r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
             try:
-                title = bot.rpc.get_basic_chat_info(accid, chat_id).get("title", "this group")
+                title = bot.rpc.get_basic_chat_info(accid, chat_id).get("name", "this group")
             except Exception:
                 title = "this group"
             lines.append(f"• TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
