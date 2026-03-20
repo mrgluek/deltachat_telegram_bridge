@@ -1317,12 +1317,18 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     lines = [f"📺 <b>Bridged Channels</b> ({len(channels)})\n"]
     for ch in channels:
-        tg_id_str = f" (ID: <code>{ch['tg_channel_id']}</code>)" if ch['tg_channel_id'] else " (ID: pending)"
-        if ch['tg_channel_username']:
-            name_str = f"@{html.escape(ch['tg_channel_username'])}"
-        else:
-            name_str = f"ID {ch['tg_channel_id']}" if ch['tg_channel_id'] else "unknown"
-        lines.append(f"#{ch['id']} — <b>{name_str}</b>{tg_id_str}")
+        dc_cid = ch['dc_chat_id']
+        tg_id = ch.get('tg_channel_id', 0)
+        r_count = ch.get('reactions_count', 0)
+        m_count = database.get_bridge_message_count(dc_cid, tg_id)
+        
+        try:
+            title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Channel")
+        except Exception:
+            title = "Unknown Channel"
+
+        tg_ref = f"@{html.escape(ch['tg_channel_username'])}" if ch['tg_channel_username'] else f"ID: <code>{ch['tg_channel_id']}</code>"
+        lines.append(f"#{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {m_count} 💬 {r_count} 🙂")
     lines.append(f"\nUse <code>/channel N</code> for invite link")
     await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
