@@ -13,6 +13,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS bridges (
                 dc_chat_id INTEGER,
                 tg_chat_id INTEGER,
+                reactions_count INTEGER DEFAULT 0,
                 PRIMARY KEY (dc_chat_id, tg_chat_id)
             )
         ''')
@@ -53,6 +54,7 @@ def init_db():
                 tg_channel_id INTEGER UNIQUE,
                 dc_chat_id INTEGER NOT NULL,
                 invite_link TEXT,
+                reactions_count INTEGER DEFAULT 0,
                 created_at INTEGER DEFAULT (strftime('%s','now')),
                 created_by_tg_id INTEGER
             )
@@ -104,6 +106,20 @@ def init_db():
                 cursor.execute("ALTER TABLE channels ADD COLUMN created_by_tg_id INTEGER")
         except Exception:
             pass
+        # Migration: add reactions_count to bridges
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
+            if 'reactions_count' not in col_names:
+                cursor.execute("ALTER TABLE bridges ADD COLUMN reactions_count INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        # Migration: add reactions_count to channels
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
+            if 'reactions_count' not in col_names:
+                cursor.execute("ALTER TABLE channels ADD COLUMN reactions_count INTEGER DEFAULT 0")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         try:
@@ -133,7 +149,7 @@ def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id) VALUES (?, ?, ?)", (dc_chat_id, tg_chat_id, created_by_tg_id))
+            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id, reactions_count) VALUES (?, ?, ?, 0)", (dc_chat_id, tg_chat_id, created_by_tg_id))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -281,12 +297,12 @@ def update_bridge_tg_chat_id(old_tg_id: int, new_tg_id: int):
         finally:
             conn.close()
 
-def get_all_bridges() -> list[tuple[int, int]]:
-    """Return all bridge pairs as (dc_chat_id, tg_chat_id)."""
+def get_all_bridges() -> list[tuple]:
+    """Return all bridge info as (dc_chat_id, tg_chat_id, reactions_count)."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT dc_chat_id, tg_chat_id FROM bridges")
+        cursor.execute("SELECT dc_chat_id, tg_chat_id, reactions_count FROM bridges")
         rows = cursor.fetchall()
         conn.close()
         return rows
@@ -323,6 +339,60 @@ def cleanup_old_messages(limit=10000):
             pass
 
 
+def increment_bridge_reaction_count(dc_chat_id: int, tg_chat_id: int):
+    """Increment the reaction counter for a specific bridge."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE bridges SET reactions_count = reactions_count + 1 WHERE dc_chat_id = ? AND tg_chat_id = ?",
+            (dc_chat_id, tg_chat_id)
+        )
+        conn.commit()
+        conn.close()
+
+
+def increment_channel_reaction_count(tg_channel_id: int):
+    """Increment the reaction counter for a specific channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channels SET reactions_count = reactions_count + 1 WHERE tg_channel_id = ?",
+            (tg_channel_id,)
+        )
+        conn.commit()
+        conn.close()
+
+
+def get_bridge_reaction_count(dc_chat_id: int, tg_chat_id: int) -> int:
+    """Return the reaction count for a specific bridge."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT reactions_count FROM bridges WHERE dc_chat_id = ? AND tg_chat_id = ?",
+            (dc_chat_id, tg_chat_id)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0
+
+
+def get_channel_reaction_count(tg_channel_id: int) -> int:
+    """Return the reaction count for a specific channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT reactions_count FROM channels WHERE tg_channel_id = ?",
+            (tg_channel_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0
+
+
 # ---------------------------------------------------------
 # CHANNEL BRIDGING
 # ---------------------------------------------------------
@@ -334,7 +404,7 @@ def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = Non
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link, created_by_tg_id) VALUES (?, ?, ?, ?)",
+                "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link, created_by_tg_id, reactions_count) VALUES (?, ?, ?, ?, 0)",
                 (tg_username.lower(), dc_chat_id, invite_link, created_by_tg_id)
             )
             conn.commit()
@@ -351,7 +421,7 @@ def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | No
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id, reactions_count) VALUES (?, ?, ?, ?, ?, 0)",
                 (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id)
             )
             conn.commit()

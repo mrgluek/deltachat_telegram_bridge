@@ -290,18 +290,18 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"I'm the DC Bridge bot. Current mode: <b>{mode}</b>\n",
         f"I relay messages between Telegram and Delta Chat groups.\n",
         f"Commands:",
+        f"/help — Show this help message",
+        f"/id — Show group's chat ID",
         f"/bridge — Bridge this TG group to a new DC group",
         f"/unbridge — Remove the bridge from this TG group",
-        f"/id — Show group's chat ID",
         f"/stats — Show bridge statistics",
-        f"/invite — Get Delta Chat group invite link",
-        f"/inviteqr — Get Delta Chat group invite QR code",
+        f"/invite — Get Delta Chat bot/group invite link",
+        f"/inviteqr — Get Delta Chat bot/group invite QR code",
         f"/channeladd @name or ID — Bridge a Telegram channel",
         f"/channels — List bridged channels",
         f"/channel N — Get channel invite link",
         f"/channelqr N — Get channel invite QR code",
         f"/channelremove N — Remove a channel bridge",
-        f"/help — Show this help message",
     ]
     if database.is_owner(user_id):
         lines.append(f"\n<b>Owner commands:</b>")
@@ -425,14 +425,35 @@ def stats_command(bot, accid, event):
             return
 
         bridges = database.get_all_bridges()
-        if not bridges:
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges configured."))
+        channels = database.get_all_channels()
+        if not bridges and not channels:
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges or channels configured."))
             return
 
-        lines = [f"📊 Bridge Statistics ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
-        for dc_cid, tg_cid in bridges:
-            count = database.get_bridge_message_count(dc_cid, tg_cid)
-            lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} — {count} msgs relayed")
+        lines = [f"📊 Bridge Statistics ({len(bridges) + len(channels)} total)\n"]
+        for row in bridges:
+            # row: (dc_chat_id, tg_chat_id, reactions_count)
+            dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
+            m_count = database.get_bridge_message_count(dc_cid, tg_cid)
+            try:
+                title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("title", "Unknown Group")
+            except Exception:
+                title = "Unknown Group"
+            lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
+        
+        if channels:
+            lines.append("\n📺 Channel Statistics")
+            for ch in channels:
+                dc_cid = ch['dc_chat_id']
+                tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
+                r_count = ch.get('reactions_count', 0)
+                m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
+                try:
+                    title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("title", "Unknown Channel")
+                except Exception:
+                    title = "Unknown Channel"
+                lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
+                
         bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
     else:
         # In group chat: show stats for this bridge only
@@ -443,8 +464,13 @@ def stats_command(bot, accid, event):
 
         lines = ["📊 Bridge Statistics\n"]
         for tg_cid in tg_chats:
-            count = database.get_bridge_message_count(chat_id, tg_cid)
-            lines.append(f"• TG {tg_cid} — {count} msgs relayed")
+            m_count = database.get_bridge_message_count(chat_id, tg_cid)
+            r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
+            try:
+                title = bot.rpc.get_basic_chat_info(accid, chat_id).get("title", "this group")
+            except Exception:
+                title = "this group"
+            lines.append(f"• TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
         bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
 
 
@@ -560,10 +586,12 @@ def handle_dc_reaction(bot, accid, event):
             return
 
         msg_id = getattr(event, 'msg_id', None)
-        if not msg_id:
+        if not tg_mappings:
             return
 
-        bot.logger.info(f"DC Reaction event for msg {msg_id} from contact {contact_id}")
+        dc_chat_id = bot.rpc.get_message(accid, msg_id).chat_id
+        
+        bot.logger.info(f"DC Reaction event for msg {msg_id} in DC chat {dc_chat_id} from contact {contact_id}")
             
         try:
             dc_reactions = bot.rpc.get_message_reactions(accid, msg_id)
@@ -589,6 +617,10 @@ def handle_dc_reaction(bot, accid, event):
                     tg_app.bot.set_message_reaction(chat_id=tg_chat_id, message_id=tg_msg_id, reaction=reaction),
                     main_loop
                 )
+                if database.get_dc_channel_chat_id(tg_chat_id):
+                    database.increment_channel_reaction_count(tg_channel_id)
+                else:
+                    database.increment_bridge_reaction_count(int(dc_chat_id), int(tg_chat_id))
             except Exception as e:
                 bot.logger.error(f"Failed to relay DC reaction to TG chat {tg_chat_id}: {e}")
     except Exception as e:
@@ -697,9 +729,24 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         lines = [f"📊 <b>Bridge Statistics</b> ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
-        for dc_cid, tg_cid in bridges:
-            count = database.get_bridge_message_count(dc_cid, tg_cid)
-            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {count} msgs relayed")
+        for row in bridges:
+            # row: (dc_cid, tg_cid, reactions_count)
+            dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
+            m_count = database.get_bridge_message_count(dc_cid, tg_cid)
+            # Try to get TG title if possible (fetching title from TG is async and slow in loop,
+            # but we can at least show codes)
+            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {m_count} 💬 {r_count} 🙂")
+        
+        channels = database.get_all_channels()
+        if channels:
+            lines.append("\n📺 <b>Channel Statistics</b>")
+            for ch in channels:
+                dc_cid = ch['dc_chat_id']
+                tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
+                r_count = ch.get('reactions_count', 0)
+                m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
+                lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {m_count} 💬 {r_count} 🙂")
+        
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
     else:
         # In group chat: owner, sub-admin (if they created this bridge), or TG group admin
@@ -725,8 +772,9 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lines = ["📊 <b>Bridge Statistics</b>\n"]
         for dc_cid in dc_chats:
-            count = database.get_bridge_message_count(dc_cid, chat.id)
-            lines.append(f"• DC <code>{dc_cid}</code> — {count} msgs relayed")
+            m_count = database.get_bridge_message_count(dc_cid, chat.id)
+            r_count = database.get_bridge_reaction_count(dc_cid, chat.id)
+            lines.append(f"• DC <code>{dc_cid}</code> — {m_count} 💬 {r_count} 🙂")
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
@@ -1515,7 +1563,10 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         msg_data = MsgData(text=formatted_msg)
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
-        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        dc_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        if dc_msg_id:
+            database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id)
+        
         logger.info(f"Relayed channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay channel post to DC: {e}")
@@ -1846,7 +1897,11 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     dc_chats = database.get_dc_chats(tg_chat_id)
     if not dc_chats:
-        return
+        chan_dc_id = database.get_dc_channel_chat_id(tg_chat_id)
+        if chan_dc_id:
+            dc_chats = [chan_dc_id]
+        else:
+            return
         
     primary_emoji = None
     if reaction_update.new_reaction:
@@ -1863,6 +1918,11 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # send_reaction expects a list of emojis; empty list to clear
                 emoji_list = [primary_emoji] if primary_emoji else []
                 dc_bot_instance.rpc.send_reaction(dc_accid, dc_msg_id, emoji_list)
+                if primary_emoji:
+                    if database.get_dc_channel_chat_id(tg_chat_id):
+                        database.increment_channel_reaction_count(tg_chat_id)
+                    else:
+                        database.increment_bridge_reaction_count(dc_chat_id, tg_chat_id)
                 logger.info(f"Relayed TG reaction '{primary_emoji or '(cleared)'}' to DC chat {dc_chat_id}")
             except Exception as e:
                 logger.error(f"Failed to relay TG reaction to DC: {e}")

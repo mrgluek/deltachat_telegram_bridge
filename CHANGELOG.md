@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Sub-admin system** for private mode. The bot owner can designate sub-admins (`/adminadd`, `/adminremove`, `/admins`) who can independently bridge groups and channels but only see and manage their own resources.
+- **Detailed statistics** in `/stats`: now shows group/channel names, message counts (with 💬 icon), and reaction counts (with 🙂 icon).
+- **Reaction tracking**: the bot now counts bridged reactions in the database for better reporting.
+- **Channel message statistics**: channel posts are now included in the message relay count.
+- **Sub-admin system** for private mode...
 - Telegram-side `/bridge` command that auto-creates a Delta Chat group (with the same name and avatar), links it, and sends an invite link.
 - Telegram-side `/unbridge` command.
 - Support for bridging **private Telegram channels** (without a public `@username`) using numeric IDs.
