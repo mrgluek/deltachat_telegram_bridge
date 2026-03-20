@@ -1038,8 +1038,13 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     invite_link = ch['invite_link'] or "No invite link available"
+    if ch['tg_channel_username']:
+        name_str = f"@{html.escape(ch['tg_channel_username'])}"
+    else:
+        name_str = f"ID <code>{ch['tg_channel_id']}</code>"
+        
     await update.message.reply_text(
-        f"📺 Channel #{ch['id']} — <b>@{html.escape(ch['tg_channel_username'])}</b>\n\n"
+        f"📺 Channel #{ch['id']} — <b>{name_str}</b>\n\n"
         f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
         parse_mode='HTML',
         disable_web_page_preview=True
@@ -1090,9 +1095,15 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
         bio.name = 'channel_invite_qr.png'
         img.save(bio, 'PNG')
         bio.seek(0)
+        
+        if ch['tg_channel_username']:
+            caption = f"Scan to subscribe to @{ch['tg_channel_username']} in Delta Chat"
+        else:
+            caption = f"Scan to subscribe to channel ID {ch['tg_channel_id']} in Delta Chat"
+            
         await update.message.reply_photo(
             photo=bio,
-            caption=f"Scan to subscribe to @{ch['tg_channel_username']} in Delta Chat"
+            caption=caption
         )
     except Exception as e:
         logger.error(f"Failed to generate channel QR: {e}")
@@ -1120,8 +1131,13 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
         return
 
     channel_name = ch['tg_channel_username']
+    if channel_name:
+        display_name = f"@{html.escape(channel_name)}"
+    else:
+        display_name = f"ID <code>{ch['tg_channel_id']}</code>"
+
     if database.remove_channel(channel_id):
-        await update.message.reply_text(f"✅ Channel #{channel_id} (<b>@{html.escape(channel_name)}</b>) removed.", parse_mode='HTML')
+        await update.message.reply_text(f"✅ Channel #{channel_id} (<b>{display_name}</b>) removed.", parse_mode='HTML')
     else:
         await update.message.reply_text("❌ Failed to remove channel.")
 
