@@ -733,19 +733,25 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # row: (dc_cid, tg_cid, reactions_count)
             dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
             m_count = database.get_bridge_message_count(dc_cid, tg_cid)
-            # Try to get TG title if possible (fetching title from TG is async and slow in loop,
-            # but we can at least show codes)
-            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {m_count} 💬 {r_count} 🙂")
+            try:
+                title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Group")
+            except Exception:
+                title = "Unknown Group"
+            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         
         channels = database.get_all_channels()
         if channels:
-            lines.append("\n📺 <b>Channel Statistics</b>")
+            lines.append(f"\n📺 <b>Bridged Channels ({len(channels)})</b>")
             for ch in channels:
                 dc_cid = ch['dc_chat_id']
                 tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
                 r_count = ch.get('reactions_count', 0)
                 m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
-                lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {m_count} 💬 {r_count} 🙂")
+                try:
+                    title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Channel")
+                except Exception:
+                    title = "Unknown Channel"
+                lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
     else:
@@ -774,7 +780,11 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for dc_cid in dc_chats:
             m_count = database.get_bridge_message_count(dc_cid, chat.id)
             r_count = database.get_bridge_reaction_count(dc_cid, chat.id)
-            lines.append(f"• DC <code>{dc_cid}</code> — {m_count} 💬 {r_count} 🙂")
+            try:
+                title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "this group")
+            except Exception:
+                title = "this group"
+            lines.append(f"• DC <code>{dc_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
