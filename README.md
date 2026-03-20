@@ -102,20 +102,24 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 
 ## Usage: Bridging Groups
 
-The bot needs to be added to both the Telegram group and the Delta Chat group.
+The bot needs to be added to the Telegram group. When you bridge from Telegram, the bot automatically creates the corresponding Delta Chat group.
 
-> **Note:** By default, management commands (`/bridge`, `/unbridge`, `/id`) are restricted to **group admins** (or the group creator in Delta Chat). However, if you configure a global admin using `init admin_dc` or `init admin_tg`, **only** the configured bot owner will be able to manage the bot on that platform. The bot's help message will indicate its current state as **Mode: Private (bot owner only)** or **Mode: Public (group admins only)**.
+> **Note:** By default, management commands (`/bridge`, `/unbridge`, `/id`) are restricted to **group admins**. However, if you configure a global admin using `init admin_dc` or `init admin_tg`, **only** the configured bot owner (and designated sub-admins) will be able to manage the bot. The bot's help message will indicate its current state as **Mode: Private (bot owner only)** or **Mode: Public (group admins only)**.
 >
 > **Important:** You must disable **Group Privacy** for your Telegram bot via @BotFather → Bot Settings → Group Privacy → Turn off. Otherwise the bot cannot read normal group messages. After changing this, re-add the bot to the group.
 
-1. **Get the Telegram Group ID**:
-   - Add your Telegram bot to the target Telegram group.
-   - Send `/id` in the group (admin only). The bot will reply with the chat ID (e.g. `-100123456789`).
-2. **Bridge the Delta Chat Group**:
-   - Add your Delta Chat bot to the target Delta Chat group.
-   - Send `/bridge -100123456789` (admin only, replace with the Telegram group ID you got in step 1).
-3. **Unbridge**:
-   - To remove a bridge, send `/unbridge` in the Delta Chat group (admin only).
+### From Telegram (recommended)
+
+1. **Add your Telegram bot** to the target Telegram group.
+2. **Send `/bridge`** in the group (admin only). The bot will automatically create a Delta Chat group with the same name and avatar, link them, and reply with an invite link to join the DC group.
+3. **To remove the bridge**, send `/unbridge` in the Telegram group.
+
+### From Delta Chat (advanced)
+
+1. Get the Telegram Group ID by sending `/id` in the TG group.
+2. Add your Delta Chat bot to the target Delta Chat group.
+3. Send `/bridge -100123456789` in the DC group (owner only in private mode).
+4. To remove the bridge, send `/unbridge` in the DC group.
 
 *Note: Group mappings are saved locally in the `bridge.db` SQLite file.*
 
@@ -186,6 +190,24 @@ Here are the commands (shown for Docker, assuming the container is running):
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
 
+## Sub-Admins (Private Mode)
+
+In private mode (`admin_tg` is set), the bot owner can designate **sub-admins** who can independently manage their own bridges and channels.
+
+Sub-admins can:
+
+- Use `/bridge` and `/unbridge` in Telegram groups
+- Use `/channeladd` and `/channelremove` for channels
+- View their own bridges via `/stats` and `/channels`
+
+Sub-admins **cannot** see or manage resources created by the owner or other sub-admins.
+
+| Command | Description |
+|---------|-------------|
+| `/adminadd <user_id>` | Add a sub-admin (owner only, private chat) |
+| `/adminremove <user_id>` | Remove a sub-admin (owner only, private chat) |
+| `/admins` | List all sub-admins (owner only, private chat) |
+
 ## Channel Bridging (TG Channel → DC Broadcast)
 
 The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (one-way, read-only).
@@ -196,32 +218,21 @@ The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (o
 
 1. **Add the bot** as an admin to the Telegram channel you want to bridge.
 2. **In a private chat** with the bot, use `/channeladd @channel_username` or `/channeladd -1001234567890` (numeric ID) to create the bridge.
+
    - *Tip:* When you add the bot as an administrator to a channel, it will automatically send a private message to the configured `admin_tg` with the channel's numeric ID and a ready-to-use bridging command.
+
 3. The bot will create a DC broadcast channel (with the same name and avatar) and return an **invite link** for subscribing.
 
-### Commands (private chat, admin only)
+### Commands (private chat, admin/sub-admin)
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `/channeladd @name or ID` | Bridge a TG channel to a new DC broadcast |
-| `/channels` | List all bridged channels |
+| `/channels` | List bridged channels (sub-admins see only own) |
 | `/channel N` | Show invite link for channel #N |
 | `/channelqr N` | Show QR code invite for channel #N |
-| `/channelremove N` | Remove channel bridge #N |
+| `/channelremove N` | Remove channel bridge #N (sub-admins: own only) |
 
 ## Changelog
 
-- **2026-03-20**: Added support for bridging **private Telegram channels** (without a public `@username`) using numeric IDs.
-- **2026-03-20**: Implemented `my_chat_member` auto-notifications. When the bot is added as an administrator to a Telegram channel, it automatically notifies the configured `admin_tg` in a private message with the channel's ID and a bridging command.
-- **2026-03-19**: Added Telegram channel → Delta Chat broadcast bridging. One-way relay of channel posts (text + media) to DC broadcast channels with avatar syncing and invite link management.
-- **2026-03-19**: Added `/invite` and `/inviteqr` commands to the Telegram side. These allow generating clickable `i.delta.chat` invite links or QR code images directly from a bridged Telegram group (admin/owner only). Using these commands in a private chat with the bot provides the setup link to add the bot itself to Delta Chat.
-- **2026-03-19**: Added `/stats` command to view bridge statistics. In group chats, it shows stats for that specific bridge; in private chats, it provides a summary of all configured bridges (admin only).
-- **2026-03-18**: Added automatic handling of Telegram group → supergroup migration. The bot now detects the new chat ID and updates all bridge mappings transparently.
-- **2026-03-18**: Added retry logic with exponential backoff for Telegram API timeouts during media relaying. Improved network error logging.
-- **2026-03-18**: Implemented bidirectional message reaction proxying. Standard emojis are now synced between DeltaChat and Telegram. Note: the bot must be a group admin for TG → DC reactions.
-- **2026-03-18**: Native quoting support added. Replaced text-based citations ("↩") with native app replies using `quoted_message_id` and corresponding Telegram reply IDs.
-- **2026-03-18**: Enhanced bot greeting and `/help` command with dynamic **Mode: Private (bot owner only)** / **Mode: Public (group admins only)** formatting based on configuration.
-- **2026-03-18**: Fixed `/bridge` command behavior in private chats to consistently display error messages like `/id`.
-- **2026-03-17**: Added support for bridging Telegram polls. Formats polls and sends final vote results to Delta Chat upon poll closing.
-- **2026-03-17**: Implemented full two-way media bridging support for images, videos, voice notes, gifs, stickers, and documents.
-- **2026-03-17**: Refactored database to use SQLite (`bridge.db`), added Docker Compose support, and implemented rate limiting.
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.

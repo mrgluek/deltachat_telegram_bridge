@@ -285,25 +285,33 @@ def get_dc_help_text(sender_email: str) -> str:
 def get_tg_help_text(name: str, user_id: int) -> str:
     admin_tg = database.get_config("admin_tg_id")
     mode = "Private (bot owner only)" if admin_tg else "Public (group admins only)"
-    return (
-        f"👋 Hi {name} (<code>{user_id}</code>)!\n\n"
-        f"I'm the DC Bridge bot. Current mode: <b>{mode}</b>\n\n"
-        f"I relay messages between Telegram and Delta Chat groups.\n\n"
-        f"Commands:\n"
-        f"/id — Show group's chat ID (needed for bridging)\n"
-        f"/stats — Show bridge statistics\n"
-        f"/invite — Get Delta Chat group invite link\n"
-        f"/inviteqr — Get Delta Chat group invite QR code\n"
-        f"/channeladd @name or ID — Bridge a Telegram channel\n"
-        f"/channels — List bridged channels\n"
-        f"/channel N — Get channel invite link\n"
-        f"/channelqr N — Get channel invite QR code\n"
-        f"/channelremove N — Remove a channel bridge\n"
-        f"/help — Show this help message\n\n"
-        f"To get started, add me to a Telegram group and use /id to get the group ID. Then use <code>/bridge</code> in the Delta Chat group to connect them.\n\n"
-        f"ℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.\n\n"
-        f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
-    )
+    lines = [
+        f"👋 Hi {name} (<code>{user_id}</code>)!\n",
+        f"I'm the DC Bridge bot. Current mode: <b>{mode}</b>\n",
+        f"I relay messages between Telegram and Delta Chat groups.\n",
+        f"Commands:",
+        f"/bridge — Bridge this TG group to a new DC group",
+        f"/unbridge — Remove the bridge from this TG group",
+        f"/id — Show group's chat ID",
+        f"/stats — Show bridge statistics",
+        f"/invite — Get Delta Chat group invite link",
+        f"/inviteqr — Get Delta Chat group invite QR code",
+        f"/channeladd @name or ID — Bridge a Telegram channel",
+        f"/channels — List bridged channels",
+        f"/channel N — Get channel invite link",
+        f"/channelqr N — Get channel invite QR code",
+        f"/channelremove N — Remove a channel bridge",
+        f"/help — Show this help message",
+    ]
+    if database.is_owner(user_id):
+        lines.append(f"\n<b>Owner commands:</b>")
+        lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
+        lines.append(f"/adminremove <i>user_id</i> — Remove a sub-admin")
+        lines.append(f"/admins — List sub-admins")
+    lines.append(f"\nTo get started, add me to a Telegram group and use /bridge to connect it to Delta Chat.")
+    lines.append(f"\nℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.")
+    lines.append(f"\nRun your own bot: https://github.com/mrgluek/deltachat_telegram_bridge")
+    return "\n".join(lines)
 
 
 @dc_cli.on(events.NewMessage(command="/help"))
@@ -671,13 +679,19 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type == "private":
-        # In private chat: show all bridges (admin only)
+        # In private chat: owner sees all, sub-admin sees own, others denied
         admin_tg_id = database.get_config("admin_tg_id")
-        if admin_tg_id and str(user.id) != str(admin_tg_id):
-            await update.message.reply_text("❌ Only the bot admin can view all stats.")
-            return
+        if admin_tg_id:
+            if database.is_owner(user.id):
+                bridges = database.get_all_bridges()
+            elif database.is_admin(user.id):
+                bridges = database.get_bridges_by_creator(user.id)
+            else:
+                await update.message.reply_text("❌ Only the bot admin can view stats.")
+                return
+        else:
+            bridges = database.get_all_bridges()
 
-        bridges = database.get_all_bridges()
         if not bridges:
             await update.message.reply_text("📊 No bridges configured.")
             return
@@ -688,7 +702,22 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> — {count} msgs relayed")
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
     else:
-        # In group chat: show stats for this bridge only
+        # In group chat: owner, sub-admin (if they created this bridge), or TG group admin
+        admin_tg_id = database.get_config("admin_tg_id")
+        if admin_tg_id:
+            is_privileged = database.is_owner(user.id)
+            if not is_privileged and database.is_admin(user.id):
+                creator = database.get_bridge_creator_by_tg(chat.id)
+                is_privileged = (creator is not None and creator == user.id)
+            if not is_privileged:
+                try:
+                    member = await chat.get_member(user.id)
+                    if member.status not in ("administrator", "creator"):
+                        await update.message.reply_text("❌ Only group admins can view stats.")
+                        return
+                except Exception:
+                    pass
+
         dc_chats = database.get_dc_chats(chat.id)
         if not dc_chats:
             await update.message.reply_text("📊 This group is not bridged.")
@@ -701,6 +730,224 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
+# ---------------------------------------------------------
+# TG BRIDGE / UNBRIDGE COMMANDS
+# ---------------------------------------------------------
+
+async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bridge a TG group to a new DC group. Auto-creates the DC group."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type == "private":
+        await update.message.reply_text("❌ You must send /bridge in a Telegram group, not here.")
+        return
+
+    # Permission check: owner, sub-admin, or (in public mode) TG group admin
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id:
+        if not database.is_owner_or_admin(user.id):
+            await update.message.reply_text("❌ Only the bot admin can use /bridge.")
+            return
+    else:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("❌ Only group admins can use /bridge.")
+                return
+        except Exception:
+            pass
+
+    # Check if already bridged
+    existing = database.get_dc_chats(chat.id)
+    if existing:
+        await update.message.reply_text("❌ This group is already bridged.")
+        return
+
+    if not dc_bot_instance or not dc_accid:
+        await update.message.reply_text("❌ Delta Chat bot is not ready yet.")
+        return
+
+    tg_chat_id = chat.id
+    tg_title = chat.title or f"TG Group {tg_chat_id}"
+
+    await update.message.reply_text(f"⏳ Setting up bridge for <b>{html.escape(tg_title)}</b>...", parse_mode='HTML')
+
+    try:
+        # Create DC group with same name
+        dc_chat_id = dc_bot_instance.rpc.create_group(dc_accid, tg_title, False)
+
+        # Copy TG group avatar to DC group
+        try:
+            tg_chat_info = await context.bot.get_chat(tg_chat_id)
+            if tg_chat_info.photo:
+                avatar_file = await tg_chat_info.photo.get_big_file()
+                tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
+                os.close(tmp_fd)
+                await avatar_file.download_to_drive(custom_path=avatar_path)
+                dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
+                try:
+                    os.unlink(avatar_path)
+                except Exception:
+                    pass
+                logger.info(f"Copied avatar from TG group {tg_chat_id} to DC group {dc_chat_id}")
+        except Exception as e:
+            logger.warning(f"Could not copy group avatar: {e}")
+
+        # Save bridge to DB
+        database.add_bridge(dc_chat_id, tg_chat_id, created_by_tg_id=user.id)
+
+        # Generate invite link
+        invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
+        if invite_link.startswith("OPEN-CHAT:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[10:]
+        elif invite_link.startswith("OPEN:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[5:]
+
+        await update.message.reply_text(
+            f"✅ Bridged! DC group <b>{html.escape(tg_title)}</b> created.\n\n"
+            f"🔗 Join in Delta Chat:\n{html.escape(invite_link)}",
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
+        logger.info(f"TG bridge: user {user.id} bridged TG {tg_chat_id} -> DC {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to create TG bridge: {e}")
+        await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
+
+
+async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove bridge for this TG group."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type == "private":
+        await update.message.reply_text("❌ You must send /unbridge in a Telegram group, not here.")
+        return
+
+    # Permission check
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id:
+        if database.is_owner(user.id):
+            pass  # owner can unbridge anything
+        elif database.is_admin(user.id):
+            creator = database.get_bridge_creator_by_tg(chat.id)
+            if creator != user.id:
+                await update.message.reply_text("❌ You can only unbridge groups you created.")
+                return
+        else:
+            await update.message.reply_text("❌ Only the bot admin can use /unbridge.")
+            return
+    else:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("❌ Only group admins can use /unbridge.")
+                return
+        except Exception:
+            pass
+
+    if database.remove_bridge_by_tg(chat.id):
+        await update.message.reply_text("✔️ Bridge removed.")
+    else:
+        await update.message.reply_text("❌ This group is not bridged.")
+
+
+# ---------------------------------------------------------
+# ADMIN MANAGEMENT COMMANDS (owner only)
+# ---------------------------------------------------------
+
+async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a sub-admin. Owner only, private chat only."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type != "private":
+        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        return
+
+    if not database.is_owner(user.id):
+        await update.message.reply_text("❌ Only the bot owner can manage admins.")
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Usage: <code>/adminadd user_id</code>\n\n"
+            "The user should send /start to the bot first to get their user ID.",
+            parse_mode='HTML'
+        )
+        return
+
+    try:
+        new_admin_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+
+    # Don't allow adding self
+    if str(new_admin_id) == str(database.get_config("admin_tg_id")):
+        await update.message.reply_text("❌ You are already the owner.")
+        return
+
+    if database.add_admin(new_admin_id):
+        await update.message.reply_text(f"✅ User <code>{new_admin_id}</code> added as sub-admin.", parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"❌ User <code>{new_admin_id}</code> is already a sub-admin.", parse_mode='HTML')
+
+
+async def tg_adminremove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a sub-admin. Owner only, private chat only."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type != "private":
+        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        return
+
+    if not database.is_owner(user.id):
+        await update.message.reply_text("❌ Only the bot owner can manage admins.")
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text("Usage: <code>/adminremove user_id</code>", parse_mode='HTML')
+        return
+
+    try:
+        admin_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+
+    if database.remove_admin(admin_id):
+        await update.message.reply_text(f"✅ User <code>{admin_id}</code> removed from sub-admins.", parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"❌ User <code>{admin_id}</code> is not a sub-admin.", parse_mode='HTML')
+
+
+async def tg_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all sub-admins. Owner only, private chat only."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type != "private":
+        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        return
+
+    if not database.is_owner(user.id):
+        await update.message.reply_text("❌ Only the bot owner can view admins.")
+        return
+
+    admins = database.get_all_admins()
+    if not admins:
+        await update.message.reply_text("👥 No sub-admins configured.\n\nUse <code>/adminadd user_id</code> to add one.", parse_mode='HTML')
+        return
+
+    lines = [f"👥 <b>Sub-admins</b> ({len(admins)})\n"]
+    for admin_id in admins:
+        lines.append(f"• <code>{admin_id}</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
+
 async def _check_invite_permissions(update: Update) -> bool:
     """Check permissions for /invite and /inviteqr commands."""
     chat = update.effective_chat
@@ -709,7 +956,7 @@ async def _check_invite_permissions(update: Update) -> bool:
     # Permission check
     admin_tg_id = database.get_config("admin_tg_id")
     if admin_tg_id:
-        if str(user.id) != str(admin_tg_id):
+        if not database.is_owner_or_admin(user.id):
             await update.message.reply_text("❌ Only the bot admin can generate invite links.")
             return False
             
@@ -846,14 +1093,14 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------------------------------------------------------
 
 async def _check_channel_admin(update: Update) -> bool:
-    """Only the bot admin may manage channels. Must be in private chat."""
+    """Only the bot owner or sub-admin may manage channels. Must be in private chat."""
     chat = update.effective_chat
     user = update.effective_user
     if chat.type != "private":
         await update.message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
         return False
     admin_tg_id = database.get_config("admin_tg_id")
-    if admin_tg_id and str(user.id) != str(admin_tg_id):
+    if admin_tg_id and not database.is_owner_or_admin(user.id):
         await update.message.reply_text("❌ Only the bot admin can manage channels.")
         return False
     return True
@@ -974,7 +1221,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
             invite_link = "https://i.delta.chat/#" + invite_link[5:]
 
         # Save to DB
-        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username)
+        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=update.effective_user.id)
 
         if row_id:
             title_display = f"<b>{html.escape(channel_title)}</b>"
@@ -996,11 +1243,16 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all bridged channels."""
+    """List bridged channels (owner sees all, sub-admin sees own)."""
     if not await _check_channel_admin(update):
         return
 
-    channels = database.get_all_channels()
+    user = update.effective_user
+    if database.is_owner(user.id):
+        channels = database.get_all_channels()
+    else:
+        channels = database.get_channels_by_creator(user.id)
+
     if not channels:
         await update.message.reply_text("📺 No channels are bridged.")
         return
@@ -1036,6 +1288,14 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not ch:
         await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
+
+    # Sub-admin can only view own channels
+    user = update.effective_user
+    if not database.is_owner(user.id):
+        creator = database.get_channel_creator(channel_id)
+        if creator != user.id:
+            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            return
 
     invite_link = ch['invite_link'] or "No invite link available"
     if ch['tg_channel_username']:
@@ -1074,6 +1334,14 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not ch:
         await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
+
+    # Sub-admin can only view own channels
+    user = update.effective_user
+    if not database.is_owner(user.id):
+        creator = database.get_channel_creator(channel_id)
+        if creator != user.id:
+            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            return
 
     if not ch['invite_link']:
         await update.message.reply_text("❌ No invite link available for this channel.")
@@ -1129,6 +1397,14 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
     if not ch:
         await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
+
+    # Sub-admin can only remove own channels
+    user = update.effective_user
+    if not database.is_owner(user.id):
+        creator = database.get_channel_creator(channel_id)
+        if creator != user.id:
+            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            return
 
     channel_name = ch['tg_channel_username']
     if channel_name:
@@ -1592,7 +1868,7 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 logger.error(f"Failed to relay TG reaction to DC: {e}")
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Notify admin when the bot is added as admin to a channel."""
+    """Notify owner and sub-admins when the bot is added as admin to a channel."""
     member_update = update.my_chat_member
     if not member_update:
         return
@@ -1617,27 +1893,29 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     if already:
         return  # Already bridged, no need to notify
 
+    if channel_username:
+        msg_text = (
+            f"📺 I was added as admin to channel <b>{html.escape(channel_title)}</b> "
+            f"(@{html.escape(channel_username)}, ID: <code>{channel_id}</code>).\n\n"
+            f"To bridge it:\n"
+            f"<code>/channeladd @{html.escape(channel_username)}</code>\n"
+            f"or\n"
+            f"<code>/channeladd {channel_id}</code>"
+        )
+    else:
+        msg_text = (
+            f"📺 I was added as admin to private channel <b>{html.escape(channel_title)}</b> "
+            f"(ID: <code>{channel_id}</code>).\n\n"
+            f"To bridge it:\n"
+            f"<code>/channeladd {channel_id}</code>"
+        )
+
+    # Notify owner only (not sub-admins — channels may be private)
     try:
-        if channel_username:
-            msg_text = (
-                f"📺 I was added as admin to channel <b>{html.escape(channel_title)}</b> "
-                f"(@{html.escape(channel_username)}, ID: <code>{channel_id}</code>).\n\n"
-                f"To bridge it:\n"
-                f"<code>/channeladd @{html.escape(channel_username)}</code>\n"
-                f"or\n"
-                f"<code>/channeladd {channel_id}</code>"
-            )
-        else:
-            msg_text = (
-                f"📺 I was added as admin to private channel <b>{html.escape(channel_title)}</b> "
-                f"(ID: <code>{channel_id}</code>).\n\n"
-                f"To bridge it:\n"
-                f"<code>/channeladd {channel_id}</code>"
-            )
         await context.bot.send_message(chat_id=int(admin_tg_id), text=msg_text, parse_mode='HTML')
-        logger.info(f"Notified admin about new channel: {channel_title} ({channel_id})")
+        logger.info(f"Notified owner about new channel: {channel_title} ({channel_id})")
     except Exception as e:
-        logger.error(f"Failed to notify admin about channel {channel_id}: {e}")
+        logger.error(f"Failed to notify owner about channel {channel_id}: {e}")
 
 
 async def handle_tg_migration(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1738,6 +2016,13 @@ async def main():
     tg_app.add_handler(CommandHandler("stats", tg_stats_command))
     tg_app.add_handler(CommandHandler("invite", tg_invite_command))
     tg_app.add_handler(CommandHandler("inviteqr", tg_inviteqr_command))
+    # Bridge commands (TG side)
+    tg_app.add_handler(CommandHandler("bridge", tg_bridge_command))
+    tg_app.add_handler(CommandHandler("unbridge", tg_unbridge_command))
+    # Admin management commands
+    tg_app.add_handler(CommandHandler("adminadd", tg_adminadd_command))
+    tg_app.add_handler(CommandHandler("adminremove", tg_adminremove_command))
+    tg_app.add_handler(CommandHandler("admins", tg_admins_command))
     # Channel bridging commands
     tg_app.add_handler(CommandHandler("channeladd", tg_channeladd_command))
     tg_app.add_handler(CommandHandler("channels", tg_channels_command))

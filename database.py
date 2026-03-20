@@ -53,7 +53,8 @@ def init_db():
                 tg_channel_id INTEGER UNIQUE,
                 dc_chat_id INTEGER NOT NULL,
                 invite_link TEXT,
-                created_at INTEGER DEFAULT (strftime('%s','now'))
+                created_at INTEGER DEFAULT (strftime('%s','now')),
+                created_by_tg_id INTEGER
             )
         ''')
         # Migrate old channels table: allow NULL username and add UNIQUE on tg_channel_id
@@ -82,6 +83,27 @@ def init_db():
                     break
         except Exception:
             pass
+        # Admins table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admins (
+                tg_user_id INTEGER PRIMARY KEY,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        ''')
+        # Migration: add created_by_tg_id to bridges
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
+            if 'created_by_tg_id' not in col_names:
+                cursor.execute("ALTER TABLE bridges ADD COLUMN created_by_tg_id INTEGER")
+        except Exception:
+            pass
+        # Migration: add created_by_tg_id to channels
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
+            if 'created_by_tg_id' not in col_names:
+                cursor.execute("ALTER TABLE channels ADD COLUMN created_by_tg_id INTEGER")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         try:
@@ -106,12 +128,12 @@ def get_config(key: str) -> str:
         conn.close()
         return row[0] if row else None
 
-def add_bridge(dc_chat_id: int, tg_chat_id: int):
+def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = None):
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id) VALUES (?, ?)", (dc_chat_id, tg_chat_id))
+            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id) VALUES (?, ?, ?)", (dc_chat_id, tg_chat_id, created_by_tg_id))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -124,6 +146,17 @@ def remove_bridge(dc_chat_id: int):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+def remove_bridge_by_tg(tg_chat_id: int):
+    """Remove all bridges for a given TG chat ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
         deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()
@@ -294,15 +327,15 @@ def cleanup_old_messages(limit=10000):
 # CHANNEL BRIDGING
 # ---------------------------------------------------------
 
-def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = None) -> int | None:
+def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = None, created_by_tg_id: int | None = None) -> int | None:
     """Add a TG channel -> DC broadcast mapping by username. Returns the row id."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link) VALUES (?, ?, ?)",
-                (tg_username.lower(), dc_chat_id, invite_link)
+                "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link, created_by_tg_id) VALUES (?, ?, ?, ?)",
+                (tg_username.lower(), dc_chat_id, invite_link, created_by_tg_id)
             )
             conn.commit()
             return cursor.lastrowid
@@ -311,15 +344,15 @@ def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = Non
         finally:
             conn.close()
 
-def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | None = None, username: str | None = None) -> int | None:
+def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | None = None, username: str | None = None, created_by_tg_id: int | None = None) -> int | None:
     """Add a TG channel -> DC broadcast mapping by numeric ID (for private channels). Returns the row id."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link) VALUES (?, ?, ?, ?)",
-                (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link)
+                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id) VALUES (?, ?, ?, ?, ?)",
+                (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id)
             )
             conn.commit()
             return cursor.lastrowid
@@ -404,6 +437,124 @@ def get_dc_channel_chat_id(tg_channel_id: int) -> int | None:
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else None
+
+
+# ---------------------------------------------------------
+# ADMIN MANAGEMENT
+# ---------------------------------------------------------
+
+def add_admin(tg_user_id: int) -> bool:
+    """Add a sub-admin. Returns False if already exists."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO admins (tg_user_id) VALUES (?)", (tg_user_id,))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+def remove_admin(tg_user_id: int) -> bool:
+    """Remove a sub-admin. Returns False if not found."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM admins WHERE tg_user_id = ?", (tg_user_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+def get_all_admins() -> list[int]:
+    """Return all sub-admin TG user IDs."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT tg_user_id FROM admins ORDER BY created_at")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+def is_admin(tg_user_id: int) -> bool:
+    """Check if a TG user is a sub-admin."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM admins WHERE tg_user_id = ?", (tg_user_id,))
+        found = cursor.fetchone() is not None
+        conn.close()
+        return found
+
+def is_owner_or_admin(tg_user_id: int) -> bool:
+    """Check if a TG user is the owner or a sub-admin."""
+    admin_tg_id = get_config("admin_tg_id")
+    if admin_tg_id and str(tg_user_id) == str(admin_tg_id):
+        return True
+    return is_admin(tg_user_id)
+
+def is_owner(tg_user_id: int) -> bool:
+    """Check if a TG user is the owner."""
+    admin_tg_id = get_config("admin_tg_id")
+    return bool(admin_tg_id and str(tg_user_id) == str(admin_tg_id))
+
+
+# ---------------------------------------------------------
+# CREATOR-FILTERED QUERIES
+# ---------------------------------------------------------
+
+def get_bridge_creator(dc_chat_id: int) -> int | None:
+    """Get the TG user ID of the bridge creator, or None."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT created_by_tg_id FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+def get_bridge_creator_by_tg(tg_chat_id: int) -> int | None:
+    """Get the TG user ID of the bridge creator by TG chat ID, or None."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT created_by_tg_id FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+def get_bridges_by_creator(tg_user_id: int) -> list[tuple[int, int]]:
+    """Return bridge pairs created by a specific TG user."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT dc_chat_id, tg_chat_id FROM bridges WHERE created_by_tg_id = ?", (tg_user_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+def get_channel_creator(channel_id: int) -> int | None:
+    """Get the TG user ID of the channel creator, or None."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT created_by_tg_id FROM channels WHERE id = ?", (channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+def get_channels_by_creator(tg_user_id: int) -> list[dict]:
+    """Return channel rows created by a specific TG user."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels WHERE created_by_tg_id = ? ORDER BY id", (tg_user_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
 
 init_db()
