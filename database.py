@@ -49,13 +49,39 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tg_channel_username TEXT NOT NULL UNIQUE,
-                tg_channel_id INTEGER,
+                tg_channel_username TEXT UNIQUE,
+                tg_channel_id INTEGER UNIQUE,
                 dc_chat_id INTEGER NOT NULL,
                 invite_link TEXT,
                 created_at INTEGER DEFAULT (strftime('%s','now'))
             )
         ''')
+        # Migrate old channels table: allow NULL username and add UNIQUE on tg_channel_id
+        try:
+            col_info = cursor.execute("PRAGMA table_info(channels)").fetchall()
+            for col in col_info:
+                # col = (cid, name, type, notnull, default_value, pk)
+                if col[1] == 'tg_channel_username' and col[3] == 1:  # notnull == 1
+                    cursor.execute("ALTER TABLE channels RENAME TO channels_old")
+                    cursor.execute('''
+                        CREATE TABLE channels (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            tg_channel_username TEXT UNIQUE,
+                            tg_channel_id INTEGER UNIQUE,
+                            dc_chat_id INTEGER NOT NULL,
+                            invite_link TEXT,
+                            created_at INTEGER DEFAULT (strftime('%s','now'))
+                        )
+                    ''')
+                    cursor.execute('''
+                        INSERT INTO channels (id, tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_at)
+                        SELECT id, tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_at
+                        FROM channels_old
+                    ''')
+                    cursor.execute("DROP TABLE channels_old")
+                    break
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         try:
@@ -269,7 +295,7 @@ def cleanup_old_messages(limit=10000):
 # ---------------------------------------------------------
 
 def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = None) -> int | None:
-    """Add a TG channel -> DC broadcast mapping. Returns the row id."""
+    """Add a TG channel -> DC broadcast mapping by username. Returns the row id."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -277,6 +303,23 @@ def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = Non
             cursor.execute(
                 "INSERT INTO channels (tg_channel_username, dc_chat_id, invite_link) VALUES (?, ?, ?)",
                 (tg_username.lower(), dc_chat_id, invite_link)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | None = None, username: str | None = None) -> int | None:
+    """Add a TG channel -> DC broadcast mapping by numeric ID (for private channels). Returns the row id."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link) VALUES (?, ?, ?, ?)",
+                (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link)
             )
             conn.commit()
             return cursor.lastrowid

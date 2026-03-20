@@ -12,7 +12,7 @@ from deltachat2 import EventType, MsgData, events
 from deltabot_cli import BotCli
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler, ChatMemberHandler
 from telegram import ReactionTypeEmoji
 
 import database
@@ -294,7 +294,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/stats — Show bridge statistics\n"
         f"/invite — Get Delta Chat group invite link\n"
         f"/inviteqr — Get Delta Chat group invite QR code\n"
-        f"/channeladd @name — Bridge a Telegram channel\n"
+        f"/channeladd @name or ID — Bridge a Telegram channel\n"
         f"/channels — List bridged channels\n"
         f"/channel N — Get channel invite link\n"
         f"/channelqr N — Get channel invite QR code\n"
@@ -866,44 +866,63 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     if not context.args or len(context.args) < 1:
         await update.message.reply_text(
-            "Usage: <code>/channeladd @channel_username</code>\n\n"
-            "Example: <code>/channeladd @ia_panorama</code>",
+            "Usage: <code>/channeladd @channel_username</code>\n"
+            "or: <code>/channeladd -1001234567890</code>\n\n"
+            "Example: <code>/channeladd @ia_panorama</code>\n"
+            "For private channels, use the numeric ID.",
             parse_mode='HTML'
         )
         return
 
-    username = context.args[0].lstrip("@").strip()
-    if not username:
-        await update.message.reply_text("❌ Please provide a valid channel username.")
-        return
+    raw_arg = context.args[0].strip()
 
-    # Check if already added
-    if database.get_channel_by_tg_username(username):
-        await update.message.reply_text(f"❌ Channel <code>@{html.escape(username)}</code> is already bridged.", parse_mode='HTML')
-        return
+    # Determine if the argument is a numeric ID or a username
+    is_numeric = False
+    try:
+        numeric_id = int(raw_arg)
+        is_numeric = True
+    except ValueError:
+        numeric_id = None
+
+    if is_numeric:
+        # --- Numeric ID path (private channels) ---
+        if database.get_channel_by_tg_id(numeric_id):
+            await update.message.reply_text(f"❌ Channel <code>{numeric_id}</code> is already bridged.", parse_mode='HTML')
+            return
+    else:
+        # --- Username path ---
+        username = raw_arg.lstrip("@").strip()
+        if not username:
+            await update.message.reply_text("❌ Please provide a valid channel username or numeric ID.")
+            return
+        if database.get_channel_by_tg_username(username):
+            await update.message.reply_text(f"❌ Channel <code>@{html.escape(username)}</code> is already bridged.", parse_mode='HTML')
+            return
 
     if not dc_bot_instance or not dc_accid:
         await update.message.reply_text("❌ Delta Chat bot is not ready yet.")
         return
 
-    await update.message.reply_text(f"⏳ Setting up channel bridge for <code>@{html.escape(username)}</code>...", parse_mode='HTML')
+    display_name = str(numeric_id) if is_numeric else f"@{username}"
+    await update.message.reply_text(f"⏳ Setting up channel bridge for <code>{html.escape(display_name)}</code>...", parse_mode='HTML')
 
     try:
-        # Fetch TG channel info to get the title and photo
+        # Fetch TG channel info
         try:
-            tg_chat_info = await context.bot.get_chat(f"@{username}")
+            chat_arg = numeric_id if is_numeric else f"@{username}"
+            tg_chat_info = await context.bot.get_chat(chat_arg)
             if tg_chat_info.type != "channel":
-                await update.message.reply_text(f"❌ <code>@{html.escape(username)}</code> is not a channel.", parse_mode='HTML')
+                await update.message.reply_text(f"❌ <code>{html.escape(display_name)}</code> is not a channel.", parse_mode='HTML')
                 return
 
             # Check if the bot is admin in that channel
             try:
                 bot_member = await tg_chat_info.get_member(context.bot.id)
                 if bot_member.status != "administrator":
-                    await update.message.reply_text(f"❌ I must be an <b>administrator</b> in @{html.escape(username)} to bridge it.", parse_mode='HTML')
+                    await update.message.reply_text(f"❌ I must be an <b>administrator</b> in {html.escape(display_name)} to bridge it.", parse_mode='HTML')
                     return
             except Exception:
-                await update.message.reply_text(f"❌ I am not in channel @{html.escape(username)} or have no rights to see members. Please add me as an administrator first.", parse_mode='HTML')
+                await update.message.reply_text(f"❌ I am not in {html.escape(display_name)} or have no rights to see members. Please add me as an administrator first.", parse_mode='HTML')
                 return
 
             # Check if the user is admin in that channel (unless they are the global bot admin)
@@ -912,17 +931,18 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     user_member = await tg_chat_info.get_member(update.effective_user.id)
                     if user_member.status not in ("administrator", "creator"):
-                        await update.message.reply_text(f"❌ Only administrators of @{html.escape(username)} can bridge it.", parse_mode='HTML')
+                        await update.message.reply_text(f"❌ Only administrators of {html.escape(display_name)} can bridge it.", parse_mode='HTML')
                         return
                 except Exception:
-                    await update.message.reply_text(f"❌ Could not verify your permissions in @{html.escape(username)}. Are you an administrator there?", parse_mode='HTML')
+                    await update.message.reply_text(f"❌ Could not verify your permissions in {html.escape(display_name)}. Are you an administrator there?", parse_mode='HTML')
                     return
 
-            channel_title = tg_chat_info.title or f"@{username}"
+            channel_title = tg_chat_info.title or display_name
             tg_channel_id = tg_chat_info.id
+            resolved_username = tg_chat_info.username  # may be None for private channels
         except Exception as e:
-            logger.warning(f"Could not fetch TG channel info for @{username}: {e}")
-            await update.message.reply_text(f"❌ Could not find channel <code>@{html.escape(username)}</code>. Is it public?", parse_mode='HTML')
+            logger.warning(f"Could not fetch TG channel info for {display_name}: {e}")
+            await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code>. Is the bot added as admin?", parse_mode='HTML')
             return
 
         # Create DC broadcast channel
@@ -942,9 +962,9 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
                         os.unlink(avatar_path)
                     except Exception:
                         pass
-                    logger.info(f"Copied avatar from @{username} to DC broadcast {dc_chat_id}")
+                    logger.info(f"Copied avatar from {display_name} to DC broadcast {dc_chat_id}")
         except Exception as e:
-            logger.warning(f"Could not copy avatar for @{username}: {e}")
+            logger.warning(f"Could not copy avatar for {display_name}: {e}")
 
         # Generate invite link
         invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
@@ -954,13 +974,14 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
             invite_link = "https://i.delta.chat/#" + invite_link[5:]
 
         # Save to DB
-        row_id = database.add_channel(username, dc_chat_id, invite_link)
-        if tg_channel_id:
-            database.update_channel_tg_id(username, tg_channel_id)
+        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username)
 
         if row_id:
+            title_display = f"<b>{html.escape(channel_title)}</b>"
+            if resolved_username:
+                title_display += f" (@{html.escape(resolved_username)})"
             await update.message.reply_text(
-                f"✅ Channel <b>@{html.escape(username)}</b> bridged!\n\n"
+                f"✅ Channel {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
                 f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
@@ -970,7 +991,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await update.message.reply_text("❌ Failed to save channel to database (may already exist).")
     except Exception as e:
-        logger.error(f"Failed to add channel @{username}: {e}")
+        logger.error(f"Failed to add channel {display_name}: {e}")
         await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
 
 
@@ -987,7 +1008,11 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     lines = [f"📺 <b>Bridged Channels</b> ({len(channels)})\n"]
     for ch in channels:
         tg_id_str = f" (ID: <code>{ch['tg_channel_id']}</code>)" if ch['tg_channel_id'] else " (ID: pending)"
-        lines.append(f"#{ch['id']} — <b>@{html.escape(ch['tg_channel_username'])}</b>{tg_id_str}")
+        if ch['tg_channel_username']:
+            name_str = f"@{html.escape(ch['tg_channel_username'])}"
+        else:
+            name_str = f"ID {ch['tg_channel_id']}" if ch['tg_channel_id'] else "unknown"
+        lines.append(f"#{ch['id']} — <b>{name_str}</b>{tg_id_str}")
     lines.append(f"\nUse <code>/channel N</code> for invite link")
     await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
@@ -1120,10 +1145,11 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
 
     if not dc_chat_id and tg_username:
-        # First post — resolve username to numeric ID
+        # First post — resolve username to numeric ID (for channels added by @username)
         ch = database.get_channel_by_tg_username(tg_username)
         if ch:
-            database.update_channel_tg_id(tg_username, tg_channel_id)
+            if not ch.get('tg_channel_id'):
+                database.update_channel_tg_id(tg_username, tg_channel_id)
             dc_chat_id = ch['dc_chat_id']
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
@@ -1549,6 +1575,55 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception as e:
                 logger.error(f"Failed to relay TG reaction to DC: {e}")
 
+async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Notify admin when the bot is added as admin to a channel."""
+    member_update = update.my_chat_member
+    if not member_update:
+        return
+
+    chat = member_update.chat
+    new_status = member_update.new_chat_member.status if member_update.new_chat_member else None
+
+    # Only interested in becoming admin in channels
+    if chat.type != "channel" or new_status != "administrator":
+        return
+
+    admin_tg_id = database.get_config("admin_tg_id")
+    if not admin_tg_id:
+        return  # No admin configured — don't leak info
+
+    channel_title = chat.title or "Unknown"
+    channel_id = chat.id
+    channel_username = chat.username
+
+    # Check if already bridged
+    already = database.get_channel_by_tg_id(channel_id)
+    if already:
+        return  # Already bridged, no need to notify
+
+    try:
+        if channel_username:
+            msg_text = (
+                f"📺 I was added as admin to channel <b>{html.escape(channel_title)}</b> "
+                f"(@{html.escape(channel_username)}, ID: <code>{channel_id}</code>).\n\n"
+                f"To bridge it:\n"
+                f"<code>/channeladd @{html.escape(channel_username)}</code>\n"
+                f"or\n"
+                f"<code>/channeladd {channel_id}</code>"
+            )
+        else:
+            msg_text = (
+                f"📺 I was added as admin to private channel <b>{html.escape(channel_title)}</b> "
+                f"(ID: <code>{channel_id}</code>).\n\n"
+                f"To bridge it:\n"
+                f"<code>/channeladd {channel_id}</code>"
+            )
+        await context.bot.send_message(chat_id=int(admin_tg_id), text=msg_text, parse_mode='HTML')
+        logger.info(f"Notified admin about new channel: {channel_title} ({channel_id})")
+    except Exception as e:
+        logger.error(f"Failed to notify admin about channel {channel_id}: {e}")
+
+
 async def handle_tg_migration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle group -> supergroup migration by updating stored chat IDs."""
     msg = update.message
@@ -1653,6 +1728,8 @@ async def main():
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
+    # Handler for bot being added to / removed from chats (my_chat_member updates)
+    tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     # Handler for group -> supergroup migration (must be before the general message handler)
     tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
     # Handler for channel posts (TG channel -> DC broadcast)
