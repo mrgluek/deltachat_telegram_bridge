@@ -1603,38 +1603,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Failed to download channel media: {e}")
             local_file_path = None
 
-    if file_name == "video_note.mp4" and local_file_path and os.path.exists(local_file_path):
-        import subprocess
-        mask_path = "/tmp/tg_bridge_mask_400.png"
-        if not os.path.exists(mask_path):
-            try:
-                subprocess.run([
-                    "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=400x400",
-                    "-vf", "format=rgba,geq=r=0:g=0:b=0:a='if(gt(pow(X-W/2,2)+pow(Y-H/2,2),pow(min(W/2,H/2),2)),255,0)'",
-                    "-frames:v", "1", mask_path
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-        if os.path.exists(mask_path):
-            try:
-                out_fd, out_path = tempfile.mkstemp(suffix=".mp4")
-                os.close(out_fd)
-                proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", local_file_path, "-i", mask_path,
-                    "-filter_complex", "[0:v]scale=400:400[v];[v][1:v]overlay",
-                    "-c:v", "libx264", "-preset", "ultrafast", out_path,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                await proc.wait()
-                if proc.returncode == 0 and os.path.exists(out_path):
-                    os.unlink(local_file_path)
-                    local_file_path = out_path
-                else:
-                    if os.path.exists(out_path):
-                        os.unlink(out_path)
-            except Exception as e:
-                logger.error(f"Failed to mask video note: {e}")
+
 
     try:
         msg_data = MsgData(text=formatted_msg)
@@ -1884,38 +1853,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to download TG file: {e}")
             local_file_path = None
 
-    if file_name == "video_note.mp4" and local_file_path and os.path.exists(local_file_path):
-        import subprocess
-        mask_path = "/tmp/tg_bridge_mask_400.png"
-        if not os.path.exists(mask_path):
-            try:
-                subprocess.run([
-                    "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=400x400",
-                    "-vf", "format=rgba,geq=r=0:g=0:b=0:a='if(gt(pow(X-W/2,2)+pow(Y-H/2,2),pow(min(W/2,H/2),2)),255,0)'",
-                    "-frames:v", "1", mask_path
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-        if os.path.exists(mask_path):
-            try:
-                out_fd, out_path = tempfile.mkstemp(suffix=".mp4")
-                os.close(out_fd)
-                proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", local_file_path, "-i", mask_path,
-                    "-filter_complex", "[0:v]scale=400:400[v];[v][1:v]overlay",
-                    "-c:v", "libx264", "-preset", "ultrafast", out_path,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                await proc.wait()
-                if proc.returncode == 0 and os.path.exists(out_path):
-                    os.unlink(local_file_path)
-                    local_file_path = out_path
-                else:
-                    if os.path.exists(out_path):
-                        os.unlink(out_path)
-            except Exception as e:
-                logger.error(f"Failed to mask video note: {e}")
+
 
     try:
         for dc_chat_id in dc_chats:

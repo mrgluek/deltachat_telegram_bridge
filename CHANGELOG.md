@@ -12,10 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for bridging **video notes** (video circles), **locations**, and **live-locations** / venues from Telegram to Delta Chat.
 - **Live Location On-Demand Updates:** When a live location is active, simply reply with `/locupdate` in Delta Chat to receive the real-time position without spamming the chat log.
 
-### Fixed
-
-- Added an optimized, zero-latency black circular mask via `ffmpeg` to video notes bridged to Delta Chat so their backgrounds are black instead of white.
-
 ## [2026-03-20]
 
 ### Changed
