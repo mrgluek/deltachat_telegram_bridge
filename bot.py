@@ -2211,10 +2211,25 @@ async def main():
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
+    # Debug logger
+    async def debug_log_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            msg = getattr(update, "edited_message", None) or getattr(update, "edited_channel_post", None)
+            if msg and msg.location:
+                admin_tg_id = database.get_config("admin_tg_id")
+                if admin_tg_id:
+                    import json
+                    dump = json.dumps(update.to_dict(), indent=2)
+                    text = f"DEBUG LOCATION UPDATE:\n<pre>{dump[:3800]}</pre>"
+                    await context.bot.send_message(chat_id=int(admin_tg_id), text=text, parse_mode="HTML")
+        except Exception as e:
+            pass
+    tg_app.add_handler(MessageHandler(filters.ALL, debug_log_update), group=0)
+
     # Handler for bot being added to / removed from chats (my_chat_member updates)
-    tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)
     # Handler for group -> supergroup migration (must be before the general message handler)
-    tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration))
+    tg_app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_tg_migration), group=1)
     # Handler for channel posts (TG channel -> DC broadcast)
     tg_app.add_handler(MessageHandler(
         filters.UpdateType.CHANNEL_POST & (
@@ -2224,12 +2239,12 @@ async def main():
             filters.LOCATION | filters.VENUE
         ),
         handle_tg_channel_post
-    ))
+    ), group=1)
     # Handler for edited channel posts
     tg_app.add_handler(MessageHandler(
         filters.UpdateType.EDITED_CHANNEL_POST & (filters.TEXT | filters.CAPTION | filters.LOCATION),
         handle_tg_edited_channel_post
-    ))
+    ), group=1)
     # Handler for group messages
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
@@ -2237,12 +2252,12 @@ async def main():
         filters.Sticker.ALL | filters.ANIMATION | filters.POLL |
         filters.VIDEO_NOTE | filters.LOCATION | filters.VENUE,
         handle_tg_message
-    ))
+    ), group=1)
     # Handler for edited group messages
     tg_app.add_handler(MessageHandler(
         filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION | filters.LOCATION),
         handle_tg_edited_message
-    ))
+    ), group=1)
     # Handler for poll state changes
     from telegram.ext import PollHandler
     tg_app.add_handler(PollHandler(handle_tg_poll))
