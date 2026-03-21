@@ -105,6 +105,9 @@ DC_MAX_MSG_LEN = 10000   # Practical DC limit
 RATE_LIMIT_WINDOW = 60   # seconds
 RATE_LIMIT_MAX = 30       # max messages per window per chat
 
+LIVE_LOCATIONS = {}
+db_lock = threading.Lock()
+
 # Initialize DeltaBot CLI
 dc_cli = BotCli("tgbridge")
 
@@ -405,6 +408,41 @@ def unbridge_command(bot, accid, event):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is not bridged."))
+
+
+@dc_cli.on(events.NewMessage(command="/locupdate"))
+def locupdate_command(bot, accid, event):
+    """Fetch the latest coordinates for a live location message."""
+    msg = event.msg
+    chat_id = msg.chat_id
+
+    # Check if this is a reply to another message
+    if not hasattr(msg, 'quote') or not msg.quote:
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
+        return
+
+    quote_msg_id = msg.quote.get('message_id') if isinstance(msg.quote, dict) else None
+    if not quote_msg_id:
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
+        return
+
+    # Check group chat mappings
+    tg_chats = database.get_tg_chats(chat_id)
+    found = False
+    
+    if tg_chats:
+        for tg_chat_id in tg_chats:
+            tg_msg_id = database.get_tg_msg_id(quote_msg_id, chat_id, tg_chat_id)
+            if tg_msg_id and tg_msg_id in LIVE_LOCATIONS:
+                lat, lon = LIVE_LOCATIONS[tg_msg_id]
+                bot.rpc.send_msg(accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=msg.id))
+                found = True
+                break
+                
+    if not found:
+        # Check channel mapping if needed (very rare case for locupdate but just in case)
+        # We don't track channel reverse mapping in memory easily here, so we just return not found.
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ No active live location found for this message. It may have expired or not be a live location.", quoted_message_id=msg.id))
 
 
 @dc_cli.on(events.NewMessage(command="/stats"))
@@ -1529,7 +1567,13 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         loc_text = f"📍 Venue: {post.venue.title}\n{post.venue.address}\nhttps://maps.google.com/?q={post.venue.location.latitude},{post.venue.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
     elif post.location:
-        loc_text = f"📍 Location: https://maps.google.com/?q={post.location.latitude},{post.location.longitude}"
+        is_live = getattr(post.location, 'live_period', None) is not None
+        if is_live:
+            live_mins = post.location.live_period // 60
+            loc_text = f"📍 Live Location ({live_mins} min)\nhttps://maps.google.com/?q={post.location.latitude},{post.location.longitude}\n\n(Reply with /locupdate to get the latest coordinates)"
+            LIVE_LOCATIONS[post.message_id] = (post.location.latitude, post.location.longitude)
+        else:
+            loc_text = f"📍 Location: https://maps.google.com/?q={post.location.latitude},{post.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
 
     # Skip posts with no text and no media
@@ -1589,6 +1633,12 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     tg_channel_id = post.chat.id
     tg_username = post.chat.username
 
+    # Check if this is a live location update without text changes
+    if post.location and getattr(post.location, 'live_period', None):
+        LIVE_LOCATIONS[post.message_id] = (post.location.latitude, post.location.longitude)
+        if not (post.text or post.caption):
+            return
+
     # Look up DC broadcast
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
     if not dc_chat_id and tg_username:
@@ -1633,6 +1683,12 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     tg_chat_id = msg.chat.id
+
+    # Check if this is a live location update without text changes
+    if msg.location and getattr(msg.location, 'live_period', None):
+        LIVE_LOCATIONS[msg.message_id] = (msg.location.latitude, msg.location.longitude)
+        if not (msg.text or msg.caption):
+            return
 
     # Only bridge group chats
     if msg.chat.type == "private":
@@ -1753,7 +1809,13 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loc_text = f"📍 Venue: {update.message.venue.title}\n{update.message.venue.address}\nhttps://maps.google.com/?q={update.message.venue.location.latitude},{update.message.venue.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
     elif update.message.location:
-        loc_text = f"📍 Location: https://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}"
+        is_live = getattr(update.message.location, 'live_period', None) is not None
+        if is_live:
+            live_mins = update.message.location.live_period // 60
+            loc_text = f"📍 Live Location ({live_mins} min)\nhttps://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}\n\n(Reply with /locupdate to get the latest coordinates)"
+            LIVE_LOCATIONS[update.message.message_id] = (update.message.location.latitude, update.message.location.longitude)
+        else:
+            loc_text = f"📍 Location: https://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
 
     # Skip messages with no text and no media
@@ -2116,7 +2178,7 @@ async def main():
     ))
     # Handler for edited channel posts
     tg_app.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_CHANNEL_POST & (filters.TEXT | filters.CAPTION),
+        filters.UpdateType.EDITED_CHANNEL_POST & (filters.TEXT | filters.CAPTION | filters.LOCATION),
         handle_tg_edited_channel_post
     ))
     # Handler for group messages
@@ -2129,7 +2191,7 @@ async def main():
     ))
     # Handler for edited group messages
     tg_app.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION),
+        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION | filters.LOCATION),
         handle_tg_edited_message
     ))
     # Handler for poll state changes
