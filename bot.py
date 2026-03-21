@@ -2247,10 +2247,12 @@ async def main():
     ), group=1)
     # Handler for group messages
     tg_app.add_handler(MessageHandler(
-        filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
-        filters.Document.ALL | filters.VOICE | filters.AUDIO |
-        filters.Sticker.ALL | filters.ANIMATION | filters.POLL |
-        filters.VIDEO_NOTE | filters.LOCATION | filters.VENUE,
+        filters.UpdateType.MESSAGE & (
+            filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
+            filters.Document.ALL | filters.VOICE | filters.AUDIO |
+            filters.Sticker.ALL | filters.ANIMATION | filters.POLL |
+            filters.VIDEO_NOTE | filters.LOCATION | filters.VENUE
+        ),
         handle_tg_message
     ), group=1)
     # Handler for edited group messages
