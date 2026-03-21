@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Support for bridging **video notes** (video circles), **locations**, and **live-locations** / venues from Telegram to Delta Chat.
 - **Live Location On-Demand Updates:** When a live location is active, simply reply with `/locupdate` in Delta Chat to receive the real-time position without spamming the chat log.
+- **Live Location Auto-End:** When a live location broadcast is manually stopped or expires in Telegram, the bot will now automatically send a final "🛑 Live Location Ended" message with the last known coordinates to Delta Chat.
 
 ## [2026-03-20]
 

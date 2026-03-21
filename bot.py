@@ -435,7 +435,7 @@ def locupdate_command(bot, accid, event):
             tg_msg_id = database.get_tg_msg_id(quote_msg_id, chat_id, tg_chat_id)
             if tg_msg_id and tg_msg_id in LIVE_LOCATIONS:
                 lat, lon = LIVE_LOCATIONS[tg_msg_id]
-                bot.rpc.send_msg(accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=msg.id))
+                bot.rpc.send_msg(accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=quote_msg_id))
                 found = True
                 break
                 
@@ -1635,11 +1635,35 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     tg_channel_id = post.chat.id
     tg_username = post.chat.username
 
-    # Check if this is a live location update without text changes
-    if post.location and getattr(post.location, 'live_period', None):
-        LIVE_LOCATIONS[post.message_id] = (post.location.latitude, post.location.longitude)
-        if not (post.text or post.caption):
-            return
+    # Check if this is a live location update
+    if post.location:
+        is_live = getattr(post.location, 'live_period', None) is not None
+        if is_live or post.message_id in LIVE_LOCATIONS:
+            lat, lon = post.location.latitude, post.location.longitude
+            LIVE_LOCATIONS[post.message_id] = (lat, lon)
+            
+            if not is_live:
+                # Live location ended either manually or expired.
+                LIVE_LOCATIONS.pop(post.message_id, None)
+                final_text = f"🛑 Live Location Ended\nFinal coordinates: https://maps.google.com/?q={lat},{lon}"
+                dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+                if not dc_chat_id and tg_username:
+                    ch = database.get_channel_by_tg_username(tg_username)
+                    if ch:
+                        dc_chat_id = ch['dc_chat_id']
+                if dc_chat_id and dc_bot_instance and dc_accid:
+                    try:
+                        dc_reply_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
+                        msg_data = MsgData(text=final_text)
+                        if dc_reply_id:
+                            msg_data.quoted_message_id = dc_reply_id
+                        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                    except Exception as e:
+                        logger.error(f"Failed to send final location: {e}")
+                return
+
+            if not (post.text or post.caption):
+                return
 
     # Look up DC broadcast
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
@@ -1686,11 +1710,32 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
 
     tg_chat_id = msg.chat.id
 
-    # Check if this is a live location update without text changes
-    if msg.location and getattr(msg.location, 'live_period', None):
-        LIVE_LOCATIONS[msg.message_id] = (msg.location.latitude, msg.location.longitude)
-        if not (msg.text or msg.caption):
-            return
+    # Check if this is a live location update
+    if msg.location:
+        is_live = getattr(msg.location, 'live_period', None) is not None
+        if is_live or msg.message_id in LIVE_LOCATIONS:
+            lat, lon = msg.location.latitude, msg.location.longitude
+            LIVE_LOCATIONS[msg.message_id] = (lat, lon)
+            
+            if not is_live:
+                # Live location ended
+                LIVE_LOCATIONS.pop(msg.message_id, None)
+                final_text = f"🛑 Live Location Ended\nFinal coordinates: https://maps.google.com/?q={lat},{lon}"
+                dc_chats = database.get_dc_chats(tg_chat_id)
+                if dc_chats and dc_bot_instance and dc_accid:
+                    for dc_chat_id in dc_chats:
+                        dc_reply_id = database.get_dc_msg_id(msg.message_id, tg_chat_id, dc_chat_id)
+                        msg_data = MsgData(text=final_text)
+                        if dc_reply_id:
+                            msg_data.quoted_message_id = dc_reply_id
+                        try:
+                            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                        except Exception as e:
+                            logger.error(f"Failed to send final location edit: {e}")
+                return
+
+            if not (msg.text or msg.caption):
+                return
 
     # Only bridge group chats
     if msg.chat.type == "private":
