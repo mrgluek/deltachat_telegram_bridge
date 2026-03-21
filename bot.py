@@ -2211,20 +2211,6 @@ async def main():
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
-    # Debug logger
-    async def debug_log_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            msg = getattr(update, "edited_message", None) or getattr(update, "edited_channel_post", None)
-            if msg and msg.location:
-                admin_tg_id = database.get_config("admin_tg_id")
-                if admin_tg_id:
-                    import json
-                    dump = json.dumps(update.to_dict(), indent=2)
-                    text = f"DEBUG LOCATION UPDATE:\n<pre>{dump[:3800]}</pre>"
-                    await context.bot.send_message(chat_id=int(admin_tg_id), text=text, parse_mode="HTML")
-        except Exception as e:
-            pass
-    tg_app.add_handler(MessageHandler(filters.ALL, debug_log_update), group=0)
 
     # Handler for bot being added to / removed from chats (my_chat_member updates)
     tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)
