@@ -425,12 +425,11 @@ def stats_command(bot, accid, event):
             return
 
         bridges = database.get_all_bridges()
-        channels = database.get_all_channels()
-        if not bridges and not channels:
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges or channels configured."))
+        if not bridges:
+            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges configured."))
             return
 
-        lines = [f"📊 Bridge Statistics ({len(bridges) + len(channels)} total)\n"]
+        lines = [f"📊 Bridge Statistics ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
         for row in bridges:
             # row: (dc_chat_id, tg_chat_id, reactions_count)
             dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
@@ -440,19 +439,6 @@ def stats_command(bot, accid, event):
             except Exception:
                 title = "Unknown Group"
             lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
-        
-        if channels:
-            lines.append(f"\n📺 Bridged Channels ({len(channels)})")
-            for ch in channels:
-                dc_cid = ch['dc_chat_id']
-                tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
-                r_count = ch.get('reactions_count', 0)
-                m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
-                try:
-                    title = bot.rpc.get_basic_chat_info(accid, dc_cid).get("name", "Unknown Channel")
-                except Exception:
-                    title = "Unknown Channel"
-                lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
                 
         bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
     else:
@@ -739,19 +725,6 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = "Unknown Group"
             lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         
-        channels = database.get_all_channels()
-        if channels:
-            lines.append(f"\n📺 <b>Bridged Channels ({len(channels)})</b>")
-            for ch in channels:
-                dc_cid = ch['dc_chat_id']
-                tg_cid = ch.get('tg_channel_id') or ch.get('tg_channel_username') or "?"
-                r_count = ch.get('reactions_count', 0)
-                m_count = database.get_bridge_message_count(dc_cid, ch.get('tg_channel_id', 0))
-                try:
-                    title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Channel")
-                except Exception:
-                    title = "Unknown Channel"
-                lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
     else:
