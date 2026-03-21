@@ -1520,6 +1520,17 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     elif post.sticker:
         tg_file = post.sticker
         file_name = "sticker.webp"
+    elif post.video_note:
+        tg_file = post.video_note
+        file_name = "video_note.mp4"
+
+    # Handle location / venue
+    if post.venue:
+        loc_text = f"📍 Venue: {post.venue.title}\n{post.venue.address}\nhttps://maps.google.com/?q={post.venue.location.latitude},{post.venue.location.longitude}"
+        text = (text + "\n\n" + loc_text).strip()
+    elif post.location:
+        loc_text = f"📍 Location: https://maps.google.com/?q={post.location.latitude},{post.location.longitude}"
+        text = (text + "\n\n" + loc_text).strip()
 
     # Skip posts with no text and no media
     if not text and not tg_file:
@@ -1733,6 +1744,17 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.sticker:
         tg_file = update.message.sticker
         file_name = "sticker.webp"
+    elif update.message.video_note:
+        tg_file = update.message.video_note
+        file_name = "video_note.mp4"
+
+    # Handle location / venue
+    if update.message.venue:
+        loc_text = f"📍 Venue: {update.message.venue.title}\n{update.message.venue.address}\nhttps://maps.google.com/?q={update.message.venue.location.latitude},{update.message.venue.location.longitude}"
+        text = (text + "\n\n" + loc_text).strip()
+    elif update.message.location:
+        loc_text = f"📍 Location: https://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}"
+        text = (text + "\n\n" + loc_text).strip()
 
     # Skip messages with no text and no media
     if not text and not tg_file:
@@ -2087,7 +2109,8 @@ async def main():
         filters.UpdateType.CHANNEL_POST & (
             filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
             filters.Document.ALL | filters.VOICE | filters.AUDIO |
-            filters.Sticker.ALL | filters.ANIMATION
+            filters.Sticker.ALL | filters.ANIMATION | filters.VIDEO_NOTE |
+            filters.LOCATION | filters.VENUE
         ),
         handle_tg_channel_post
     ))
@@ -2100,7 +2123,8 @@ async def main():
     tg_app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
         filters.Document.ALL | filters.VOICE | filters.AUDIO |
-        filters.Sticker.ALL | filters.ANIMATION | filters.POLL,
+        filters.Sticker.ALL | filters.ANIMATION | filters.POLL |
+        filters.VIDEO_NOTE | filters.LOCATION | filters.VENUE,
         handle_tg_message
     ))
     # Handler for edited group messages
