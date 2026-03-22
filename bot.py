@@ -633,7 +633,7 @@ def handle_dc_reaction(bot, accid, event):
             return
 
         msg_id = getattr(event, 'msg_id', None)
-        if not tg_mappings:
+        if not msg_id:
             return
 
         dc_chat_id = bot.rpc.get_message(accid, msg_id).chat_id
