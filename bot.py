@@ -1564,8 +1564,20 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         tg_file = post.photo[-1]
         file_name = "photo.jpg"
     elif post.video:
-        tg_file = post.video
-        file_name = post.video.file_name or "video.mp4"
+        vid = post.video
+        tg_file = vid
+        file_name = vid.file_name or "video.mp4"
+        v_size = getattr(vid, 'file_size', 0) or 0
+        if v_size > 20 * 1024 * 1024:
+            qualities = getattr(vid, 'qualities', []) or []
+            valid_q = [q for q in qualities if (getattr(q, 'file_size', 0) or 0) < 20 * 1024 * 1024]
+            if valid_q:
+                valid_q.sort(key=lambda q: getattr(q, 'file_size', 0) or getattr(q, 'height', 0) or 0, reverse=True)
+                tg_file = valid_q[0]
+                text = (text + f"\n\n[Video was too large ({v_size//1024//1024} MB), forwarded in lower resolution]").strip()
+            else:
+                tg_file = None
+                text = (text + f"\n\n[🎥 Video is too large ({v_size//1024//1024} MB) to be forwarded]").strip()
     elif post.animation:
         tg_file = post.animation
         file_name = "animation.gif"
@@ -1853,8 +1865,20 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_file = update.message.photo[-1]  # Largest resolution
         file_name = "photo.jpg"
     elif update.message.video:
-        tg_file = update.message.video
-        file_name = update.message.video.file_name or "video.mp4"
+        vid = update.message.video
+        tg_file = vid
+        file_name = vid.file_name or "video.mp4"
+        v_size = getattr(vid, 'file_size', 0) or 0
+        if v_size > 20 * 1024 * 1024:
+            qualities = getattr(vid, 'qualities', []) or []
+            valid_q = [q for q in qualities if (getattr(q, 'file_size', 0) or 0) < 20 * 1024 * 1024]
+            if valid_q:
+                valid_q.sort(key=lambda q: getattr(q, 'file_size', 0) or getattr(q, 'height', 0) or 0, reverse=True)
+                tg_file = valid_q[0]
+                text = (text + f"\n\n[Video was too large ({v_size//1024//1024} MB), forwarded in lower resolution]").strip()
+            else:
+                tg_file = None
+                text = (text + f"\n\n[🎥 Video is too large ({v_size//1024//1024} MB) to be forwarded]").strip()
     elif update.message.animation:  # GIF
         tg_file = update.message.animation
         file_name = "animation.gif"
