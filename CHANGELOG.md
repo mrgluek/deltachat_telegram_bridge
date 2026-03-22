@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-22]
+
+### Added
+
+- **Large Video Fallback:** The bot now automatically downgrades and relays videos larger than 20 MB using lower available resolutions (e.g., 720p, 480p) provided by the Telegram Bot API, preventing silent drops and timeouts. A note is appended to the message in DC when this happens.
+- Updated `python-telegram-bot` to version 22.7 for extended Bot API features (`VideoQuality` support).
+
 ## [2026-03-21]
 
 ### Added
