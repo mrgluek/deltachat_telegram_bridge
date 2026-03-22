@@ -19,10 +19,13 @@ import database
 import io
 import sys
 import getpass
+import re
 try:
     import qrcode
 except ImportError:
     qrcode = None
+
+DC_FALLBACK_PATTERN = re.compile(r'\s*\[(?:Image|Video|Voice|Audio|Document|File|Sticker|Gif)[ \-–]+[^\]]+\]', re.IGNORECASE)
 
 # Initialize logging
 logging.basicConfig(
@@ -202,9 +205,26 @@ def _inline_links(text: str, entities) -> str:
     return text
 
 
-async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice):
+async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
     try:
         tg_msg = None
+        
+        # If the message should have a file but hasn't downloaded yet, wait up to 60s
+        is_media = is_image or is_video or is_voice or viewtype in ('Document', 'File', 'Image', 'Video', 'Voice', 'Audio', 'Gif', 'Sticker')
+        if is_media and not file_path:
+            for _ in range(30):
+                await asyncio.sleep(2)
+                try:
+                    updated_msg = dc_bot_instance.rpc.get_message(dc_accid, msg_id)
+                    file_path = getattr(updated_msg, 'file', None) or None
+                    if file_path and os.path.exists(file_path):
+                        break
+                except Exception:
+                    pass
+            if not file_path:
+                logger.warning(f"Timeout waiting for media to download for DC msg {msg_id}")
+                formatted_msg += "\n\n<i>[Failed to relay media: timeout waiting for DC download]</i>"
+
         if file_path and os.path.exists(file_path):
             filename = os.path.basename(file_path)
             try:
@@ -537,10 +557,13 @@ def handle_dc_message(bot, accid, event):
         sender_name = "Unknown"
 
     text = msg.text or ""
+    text = DC_FALLBACK_PATTERN.sub('', text).strip()
     file_path = getattr(msg, 'file', None) or None
+    viewtype = getattr(msg, 'viewtype', None) or ''
+    is_media = viewtype in ('Image', 'Gif', 'Sticker', 'Video', 'Voice', 'Audio', 'Document', 'File')
 
     # Skip messages with neither text nor file
-    if not text and not file_path:
+    if not text and not file_path and not is_media:
         return
 
     # HTML-escape both name and text to prevent injection
@@ -551,12 +574,12 @@ def handle_dc_message(bot, accid, event):
     reply_quote = None
     if hasattr(msg, 'quote') and msg.quote:
         quote_text = msg.quote.get('text', '') if isinstance(msg.quote, dict) else ''
+        quote_text = DC_FALLBACK_PATTERN.sub('', quote_text).strip()
         if quote_text:
             short_quote = _truncate(quote_text, 50)
             reply_quote = f"<i>↩ {html.escape(short_quote)}</i>\n"
 
     # Determine if this is a media message
-    viewtype = getattr(msg, 'viewtype', None) or ''
     is_image = viewtype in ('Image', 'Gif', 'Sticker') or (
         file_path and file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp'))
     )
@@ -588,7 +611,7 @@ def handle_dc_message(bot, accid, event):
 
             if main_loop:
                 asyncio.run_coroutine_threadsafe(
-                    async_relay_to_tg(tg_chat_id, dc_chat_id, msg.id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice),
+                    async_relay_to_tg(tg_chat_id, dc_chat_id, msg.id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype),
                     main_loop
                 )
             bot.logger.info(f"Relayed DC msg {msg.id} to TG chat {tg_chat_id}")
