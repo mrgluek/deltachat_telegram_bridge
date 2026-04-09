@@ -1800,12 +1800,14 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     if not text:
         return
 
-    formatted_msg = f"✏️ {sender_name} [Edited]:\n{text}"
+    formatted_msg = f"✏️ [Edited]:\n{text}"
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     for dc_chat_id in dc_chats:
         try:
-            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
+            msg_data = MsgData(text=formatted_msg)
+            msg_data.override_sender_name = sender_name
+            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
             logger.info(f"Relayed edited TG msg to DC chat {dc_chat_id}")
         except Exception as e:
             logger.error(f"Failed to relay edited msg to DC chat {dc_chat_id}: {e}")
@@ -1956,12 +1958,13 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 chat_reply_prefix = reply_prefix if not dc_reply_id else ""
                 
-                formatted_msg = f"{chat_reply_prefix}{sender_name}: {text}" if text else f"{sender_name}:"
+                formatted_msg = f"{chat_reply_prefix}{text}" if text else ""
                 formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
                 if timeout_error_text:
                     formatted_msg += timeout_error_text
 
                 msg_data = MsgData(text=formatted_msg)
+                msg_data.override_sender_name = sender_name
                 if dc_reply_id:
                     msg_data.quoted_message_id = dc_reply_id
                 if local_file_path and os.path.exists(local_file_path):
@@ -1986,7 +1989,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if replied_text:
                                 short_quote = _truncate(replied_text, 80)
                                 chat_reply_prefix = f"↩ {short_quote}\n"
-                                msg_data.text = _truncate(f"{chat_reply_prefix}{sender_name}: {text}" if text else f"{chat_reply_prefix}{sender_name}:", DC_MAX_MSG_LEN)
+                                msg_data.text = _truncate(f"{chat_reply_prefix}{text}" if text else "", DC_MAX_MSG_LEN)
                         
                         sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
                     else:
