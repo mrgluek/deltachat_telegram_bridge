@@ -14,6 +14,7 @@ from deltabot_cli import BotCli
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler, ChatMemberHandler
 from telegram import ReactionTypeEmoji
+from telegram.error import NetworkError, TimedOut
 
 import database
 import io
@@ -121,7 +122,7 @@ dc_accid = None
 main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 
-async def retry_async(coro_func, *args, max_retries=3, delay=2.0, backoff=2.0, exceptions=(TimeoutError, asyncio.TimeoutError), **kwargs):
+async def retry_async(coro_func, *args, max_retries=5, delay=2.0, backoff=2.0, exceptions=(TimeoutError, asyncio.TimeoutError, ConnectionError, OSError, NetworkError, TimedOut), **kwargs):
     """Retries an async function with exponential backoff."""
     last_exception = None
     for attempt in range(max_retries):
@@ -276,8 +277,9 @@ def on_init(bot, args):
     for accid in bot.rpc.get_all_account_ids():
         bot.rpc.set_config(accid, "displayname", "TG Bridge")
         bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups")
-        # Auto-delete messages after 1 hour to save disk space
-        bot.rpc.set_config(accid, "delete_device_after", "3600")
+        # Auto-delete messages after 7 days to save disk space
+        # (shorter values cause 'message does not exist' errors for reactions/replies)
+        bot.rpc.set_config(accid, "delete_device_after", "604800")
         # Set bot avatar if icon file exists (prefer .jpg)
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1617,8 +1619,11 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
 
     # Build message text
     formatted_msg = text if text else ""
-    if author:
-        formatted_msg += f"\n\n— Author: {author}"
+
+    # Add link to original Telegram post
+    if tg_username:
+        formatted_msg = (formatted_msg + f"\n\n🔗 t.me/{tg_username}/{post.message_id}").strip()
+
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     # Download media if present
@@ -1638,15 +1643,17 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Failed to download channel media: {e}")
             local_file_path = None
 
-
-
     try:
         msg_data = MsgData(text=formatted_msg)
+        if author:
+            msg_data.override_sender_name = author
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
         dc_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if dc_msg_id:
             database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id)
+        # Register in edit debounce so link-preview "edits" within 60s are suppressed
+        _edit_timestamps[(tg_channel_id, post.message_id)] = time.time()
         
         logger.info(f"Relayed channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
@@ -1723,13 +1730,21 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if not text:
         return
 
-    formatted_msg = f"✏️ [Edited]\n{text}"
-    if author:
-        formatted_msg += f"\n\n— Author: {author}"
+    formatted_msg = text
+
+    # Add link to original Telegram post
+    if tg_username:
+        formatted_msg = (formatted_msg + f"\n\n🔗 t.me/{tg_username}/{post.message_id}").strip()
+
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     try:
-        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
+        msg_data = MsgData(text=formatted_msg)
+        if author:
+            msg_data.override_sender_name = f"✏️ [Edited] {author}"
+        else:
+            msg_data.override_sender_name = "✏️ [Edited]"
+        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         logger.info(f"Relayed edited channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay edited channel post to DC: {e}")
@@ -1997,6 +2012,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if sent_msg_id:
                     database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id)
+                # Register in edit debounce so link-preview "edits" within 60s are suppressed
+                _edit_timestamps[(tg_chat_id, update.message.message_id)] = time.time()
                 logger.info(f"Relayed TG msg to DC chat {dc_chat_id}")
             except Exception as e:
                 logger.error(f"Failed to relay msg to DC chat {dc_chat_id}: {e}")
