@@ -8,6 +8,11 @@ if [ "$(id -u)" = "0" ]; then
     exit 1
 fi
 
+# Automatically create/update .env file with host user IDs
+# This is needed because UID is readonly in bash and won't be exported automatically to docker-compose
+echo "HOST_UID=$(id -u)" > .env
+echo "HOST_GID=$(id -g)" >> .env
+
 export HOST_UID=$(id -u)
 export HOST_GID=$(id -g)
 
