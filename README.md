@@ -70,15 +70,37 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    docker-compose up -d
    ```
 
-3. **To update the bot after pulling new code**, simply run:
+3. **To update the bot manually** after pulling new code:
 
    ```bash
    docker-compose up -d --build
    ```
 
-   Also check `update.sh` for an example of how to automatically update the bot.
-
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
+
+## Automatic Updates
+
+The repository includes an `update.sh` script that automates the update process. It performs the following steps:
+1. Runs `git fetch` to check for new commits on the remote repository.
+2. Compares the local version with the remote version.
+3. If new changes are found, it runs `git pull`, rebuilds the Docker container (`--build`), and cleans up old images.
+
+### Setting up a Cron Job
+
+To have the bot automatically check for updates every 15 minutes, you can set up a cron job:
+
+1. Open your crontab:
+   ```bash
+   crontab -e
+   ```
+2. Add the following line (replace `/path/to/` with the actual absolute path to the project directory):
+   ```cron
+   */15 * * * * /path/to/deltachat_telegram_bridge/update.sh >> /path/to/deltachat_telegram_bridge/update.log 2>&1
+   ```
+
+> [!TIP]
+> You can find the absolute path by running `realpath update.sh` inside the directory.
+
 
 4. **Maintenance and Cleanup**:
 

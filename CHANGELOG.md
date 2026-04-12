@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Message Deletion:** Messages are now automatically deleted from the bot's database after 7 days (instead of 1 hour) to prevent "message does not exist" errors for reactions and replies.
 - **Edit Debounce:** Added a 60-second debounce for edited messages to suppress Telegram's automatic link-preview "edits" and reduce log spam.
+- **Update Script:** Enhanced `update.sh` to automatically check for new Git commits and rebuild the Docker container only if changes are found. Added support for crontab-based automatic updates.
 
 ## [2026-04-09]
 

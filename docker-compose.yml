@@ -4,8 +4,8 @@ services:
     build:
       context: .
       args:
-        UID: ${UID:-1000}
-        GID: ${GID:-1000}
+        UID: ${BRIDGE_UID:-1000}
+        GID: ${BRIDGE_GID:-1000}
     container_name: tg_dc_bridge
     restart: unless-stopped
     volumes:

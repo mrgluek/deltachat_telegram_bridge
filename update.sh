@@ -8,11 +8,22 @@ if [ "$(id -u)" = "0" ]; then
     exit 1
 fi
 
-export UID=$(id -u)
-export GID=$(id -g)
+export BRIDGE_UID=$(id -u)
+export BRIDGE_GID=$(id -g)
 
-git pull
-docker compose up -d --build
-docker image prune -f
+echo "Checking for updates..."
+git fetch
 
-echo "✅ Updated, restarted, and cleaned up old images."
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse @{u})
+
+if [ "$LOCAL" != "$REMOTE" ]; then
+    echo "🆕 New changes detected. Updating..."
+    git pull
+    docker compose up -d --build
+    docker image prune -f
+    echo "✅ Updated, restarted, and cleaned up old images."
+else
+    echo "✅ Already up to date. No rebuild needed."
+fi
+
