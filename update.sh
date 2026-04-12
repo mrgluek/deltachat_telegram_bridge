@@ -8,8 +8,8 @@ if [ "$(id -u)" = "0" ]; then
     exit 1
 fi
 
-export BRIDGE_UID=$(id -u)
-export BRIDGE_GID=$(id -g)
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
 
 echo "Checking for updates..."
 git fetch
@@ -26,4 +26,3 @@ if [ "$LOCAL" != "$REMOTE" ]; then
 else
     echo "✅ Already up to date. No rebuild needed."
 fi
-
