@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./bridge.db:/app/bridge.db
+      - ./userbot_session.session:/app/userbot_session.session
       # Directory created by deltabot-cli to store account data
       - ~/.config/tgbridge:/home/bot/.config/tgbridge
     environment:
