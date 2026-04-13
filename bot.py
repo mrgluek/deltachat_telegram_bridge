@@ -17,12 +17,12 @@ from telegram import ReactionTypeEmoji
 from telegram.error import NetworkError, TimedOut
 
 try:
-    from telethon import TelegramClient, events
+    from telethon import TelegramClient, events as tg_events
     from telethon.tl.functions.channels import JoinChannelRequest
     from telethon.errors import ChannelPrivateError
 except ImportError:
     TelegramClient = None
-    events = None
+    tg_events = None
     JoinChannelRequest = None
     ChannelPrivateError = None
 
@@ -2488,11 +2488,11 @@ async def main():
             try:
                 userbot_client = TelegramClient('userbot_session', int(api_id), api_hash)
                 
-                @userbot_client.on(events.NewMessage())
+                @userbot_client.on(tg_events.NewMessage())
                 async def on_new_userbot_msg(event):
                     await _process_userbot_event(event, is_edit=False)
                     
-                @userbot_client.on(events.MessageEdited())
+                @userbot_client.on(tg_events.MessageEdited())
                 async def on_edited_userbot_msg(event):
                     await _process_userbot_event(event, is_edit=True)
 
