@@ -1492,9 +1492,14 @@ async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("⏳ Fetching your groups from Telegram...")
     
     try:
-        # Get already bridged IDs
+        # Get already bridged IDs from BOTH channels and regular bridges
         bridged_channels = database.get_all_channels()
         bridged_ids = {c['tg_channel_id'] for c in bridged_channels if c['tg_channel_id']}
+        
+        regular_bridges = database.get_all_bridges()
+        for b in regular_bridges:
+            if b.get('tg_chat_id'):
+                bridged_ids.add(b['tg_chat_id'])
         
         # Get dialogs via Userbot
         groups = []
