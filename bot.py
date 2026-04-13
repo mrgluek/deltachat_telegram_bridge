@@ -1498,8 +1498,8 @@ async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         regular_bridges = database.get_all_bridges()
         for b in regular_bridges:
-            if b.get('tg_chat_id'):
-                bridged_ids.add(b['tg_chat_id'])
+            if len(b) > 1 and b[1]:  # b[1] is tg_chat_id
+                bridged_ids.add(b[1])
         
         # Get dialogs via Userbot
         groups = []
