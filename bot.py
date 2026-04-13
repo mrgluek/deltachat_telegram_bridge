@@ -401,14 +401,18 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/stats — Show bridge statistics",
         f"/invite — Get Delta Chat bot/group invite link",
         f"/inviteqr — Get Delta Chat bot/group invite QR code",
-        f"/channeladd @name or ID — Bridge a Telegram channel",
-        f"/channels — List bridged channels",
-        f"/channel N — Get channel invite link",
-        f"/channelqr N — Get channel invite QR code",
-        f"/channelremove N — Remove a channel bridge",
     ]
     if database.is_owner(user_id):
-        lines.append(f"\n<b>Owner commands:</b>")
+        lines.append(f"\n<b>⚙️ Channel & Userbot (Owner):</b>")
+        lines.append(f"/channeladd @name or ID — Bridge a channel/group")
+        lines.append(f"/channels — List bridged channels")
+        lines.append(f"/groups — List Userbot groups to bridge")
+        lines.append(f"/channel N — Get channel invite link")
+        lines.append(f"/channelqr N — Get channel QR invite")
+        lines.append(f"/channelremove N — Remove a channel bridge")
+        lines.append(f"/userbotsync — Force Userbot re-sync")
+        
+        lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
         lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
         lines.append(f"/adminremove <i>user_id</i> — Remove a sub-admin")
         lines.append(f"/admins — List sub-admins")
