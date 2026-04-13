@@ -1270,11 +1270,11 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     if not context.args or len(context.args) < 1:
         await update.message.reply_text(
-            "Usage: <code>/channeladd @channel_username</code>\n"
-            "or: <code>/channeladd https://t.me/channel_username</code>\n"
+            "Usage: <code>/channeladd @name</code>\n"
+            "or: <code>/channeladd https://t.me/name</code>\n"
             "or: <code>/channeladd -1001234567890</code>\n\n"
             "Example: <code>/channeladd @ia_panorama</code>\n"
-            "For private channels, use the numeric ID.",
+            "Supports both <b>channels</b> and <b>groups</b> in read-only mode.",
             parse_mode='HTML'
         )
         return
@@ -1329,8 +1329,8 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             chat_arg = numeric_id if is_numeric else f"@{username}"
             tg_chat_info = await context.bot.get_chat(chat_arg)
-            if tg_chat_info.type != "channel":
-                await update.message.reply_text(f"❌ <code>{html.escape(display_name)}</code> is not a channel.", parse_mode='HTML')
+            if tg_chat_info.type not in ("channel", "group", "supergroup"):
+                await update.message.reply_text(f"❌ <code>{html.escape(display_name)}</code> is not a channel or group.", parse_mode='HTML')
                 return
 
             # Check if the bot is admin in that channel
@@ -1348,7 +1348,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     user_member = await tg_chat_info.get_member(update.effective_user.id)
                     if user_member.status not in ("administrator", "creator"):
-                        await update.message.reply_text(f"❌ Only administrators of {html.escape(display_name)} can bridge it.", parse_mode='HTML')
+                        await update.message.reply_text(f"❌ Only administrators of <code>{html.escape(display_name)}</code> can bridge it.", parse_mode='HTML')
                         return
                 except Exception:
                     await update.message.reply_text(f"❌ Could not verify your permissions in {html.escape(display_name)}. Are you an administrator there?", parse_mode='HTML')
@@ -1458,6 +1458,60 @@ async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_T
     
     await update.message.reply_text("⏳ Starting Userbot synchronization...")
     asyncio.create_task(sync_userbot_channels(force=True))
+
+
+async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all groups the Userbot is in that aren't bridged yet (Owner only)."""
+    if not database.is_owner(update.effective_user.id):
+        return
+    
+    if not (userbot_client and userbot_client.is_connected()):
+        await update.message.reply_text("❌ Userbot is not connected.")
+        return
+    
+    status_msg = await update.message.reply_text("⏳ Fetching your groups from Telegram...")
+    
+    try:
+        # Get already bridged IDs
+        bridged_channels = database.get_all_channels()
+        bridged_ids = {c['tg_channel_id'] for c in bridged_channels if c['tg_channel_id']}
+        
+        # Get dialogs via Userbot
+        groups = []
+        async for dialog in userbot_client.iter_dialogs():
+            if dialog.is_group:
+                if dialog.id not in bridged_ids:
+                    groups.append(dialog)
+        
+        if not groups:
+            await status_msg.edit_text("✅ No new groups found (all are already bridged or you aren't in any groups).")
+            return
+        
+        # Format response
+        lines = ["<b>Your Telegram Groups:</b>\n"]
+        for g in groups:
+            line = f"• <b>{html.escape(g.name)}</b> (ID: <code>{g.id}</code>)\n"
+            line += f"  └ Command: <code>/channeladd {g.id}</code>\n"
+            lines.append(line)
+        
+        # Split into chunks if too long (Telegram limit ~4096 chars)
+        full_text = "".join(lines)
+        if len(full_text) > 4000:
+            # Simple split by line
+            current_chunk = ""
+            for line in lines:
+                if len(current_chunk) + len(line) > 4000:
+                    await update.message.reply_text(current_chunk, parse_mode='HTML')
+                    current_chunk = ""
+                current_chunk += line
+            await update.message.reply_text(current_chunk, parse_mode='HTML')
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(full_text, parse_mode='HTML')
+            
+    except Exception as e:
+        logger.error(f"Failed to fetch groups: {e}")
+        await status_msg.edit_text(f"❌ Error fetching groups: {html.escape(str(e))}", parse_mode='HTML')
 
 
 async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2502,8 +2556,20 @@ async def _process_userbot_event(event, is_edit=False):
 
     try:
         msg_data = MsgData(text=formatted_msg)
+        display_author = None
         if hasattr(msg, 'post_author') and msg.post_author:
-            msg_data.override_sender_name = msg.post_author if not is_edit else f"✏️ [Edited] {msg.post_author}"
+            display_author = msg.post_author
+        else:
+            # Try to get sender name (for groups)
+            sender = await event.get_sender()
+            if sender:
+                if hasattr(sender, 'first_name'):
+                    display_author = f"{sender.first_name} {getattr(sender, 'last_name', '') or ''}".strip()
+                elif hasattr(sender, 'title'):
+                    display_author = sender.title
+
+        if display_author:
+            msg_data.override_sender_name = display_author if not is_edit else f"✏️ [Edited] {display_author}"
         elif is_edit:
             msg_data.override_sender_name = sender_name
         
@@ -2558,6 +2624,7 @@ async def main():
     # Channel bridging commands
     tg_app.add_handler(CommandHandler("channeladd", tg_channeladd_command))
     tg_app.add_handler(CommandHandler("channels", tg_channels_command))
+    tg_app.add_handler(CommandHandler("groups", tg_groups_command))
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))

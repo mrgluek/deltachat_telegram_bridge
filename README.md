@@ -232,9 +232,9 @@ Sub-admins **cannot** see or manage resources created by the owner or other sub-
 
 ## Channel Bridging (TG Channel → DC Broadcast)
 
-The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (one-way, read-only).
+The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcast channels** (one-way, read-only).
 
-> **Note:** By default, the bot requires being an **administrator** in a Telegram channel to receive posts. If you cannot make the bot an admin, you can enable **Userbot Mode** to bridge channels using your own Telegram account.
+> **Note:** By default, the bot requires being an **administrator** in a Telegram channel to receive posts. If you cannot make the bot an admin, or you want to bridge a regular group in "stealth" read-only mode, you can enable **Userbot Mode**.
 
 ### Setup
 
@@ -249,12 +249,13 @@ The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (o
 
 | Command | Description |
 | --------- | ------------- |
-| `/channeladd @name or ID` | Bridge a TG channel to a new DC broadcast (Owner only) |
+| `/channeladd @name or ID` | Bridge a TG channel/group to a new DC broadcast (Owner only) |
 | `/channels` | List all bridged channels (Owner only) |
 | `/channel N` | Show invite link for channel #N (Owner only) |
 | `/channelqr N` | Show QR code invite for channel #N (Owner only) |
 | `/channelremove N` | Remove channel bridge #N (Owner only) |
 | `/userbotsync` | Force re-sync Userbot subscriptions (Owner only) |
+| `/groups` | List technical account's groups for easy bridging (Owner only) |
 
 ## Userbot Mode (Bridging without Admin permissions)
 
