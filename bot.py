@@ -2419,7 +2419,10 @@ async def sync_userbot_channels(force=False):
         for chan in channels:
             tg_id = chan.get('tg_channel_id')
             username = chan.get('tg_channel_username')
-            target = tg_id or (f"@{username}" if username else None)
+            
+            # For a new account, we MUST use the @username if available, 
+            # because numeric IDs are not resolvable until the account "sees" the channel.
+            target = (f"@{username}" if username else None) or tg_id
             
             if not target:
                 continue
