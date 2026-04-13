@@ -228,9 +228,25 @@ def _is_edit_debounced(chat_id: int, msg_id: int) -> bool:
     _edit_timestamps[key] = now
     # Purge old entries periodically
     if len(_edit_timestamps) > 500:
-        cutoff = now - EDIT_DEBOUNCE_SECONDS * 2
         _edit_timestamps.clear()  # Simple cleanup
     return False
+
+# Content hash cache to prevent "Ghost Edits" (silent metadata updates like view counts)
+# Key: (tg_chat_id, tg_msg_id) -> hash(text + media_id)
+_msg_content_hashes: dict[tuple[int, int], int] = {}
+
+def _has_content_changed(chat_id: int, msg_id: int, text: str, media_id: str = None) -> bool:
+    """Returns True if the message content (text or media) has actually changed."""
+    content_str = f"{text}|{media_id or ''}"
+    new_hash = hash(content_str)
+    old_hash = _msg_content_hashes.get((chat_id, msg_id))
+    if old_hash == new_hash:
+        return False
+    _msg_content_hashes[(chat_id, msg_id)] = new_hash
+    # Simple cleanup
+    if len(_msg_content_hashes) > 1000:
+        _msg_content_hashes.clear()
+    return True
 
 def _truncate(text: str, max_len: int) -> str:
     """Truncate text to max_len, appending '…' if truncated."""
@@ -2519,6 +2535,20 @@ async def _process_userbot_event(event, is_edit=False):
     if is_edit and _is_edit_debounced(tg_channel_id, msg.id):
         return
 
+    text = msg.text or ""
+    # Use msg.file.id or document.id as media key for content comparison
+    media_key = ""
+    if hasattr(msg, 'file') and msg.file:
+        media_key = str(getattr(msg.file, 'id', ''))
+    
+    if is_edit and not _has_content_changed(tg_channel_id, msg.id, text, media_key):
+        # Silent metadata update (views, etc.), skip
+        return
+    
+    # Store/Update hash for the initial message too, so we can compare future edits
+    if not is_edit:
+        _has_content_changed(tg_channel_id, msg.id, text, media_key)
+
     # Check database
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
     # Note: userbot won't automatically link by username because it subscribes by entity,
@@ -2536,7 +2566,7 @@ async def _process_userbot_event(event, is_edit=False):
     if not text and not msg.media:
         return
 
-    formatted_msg = text if not is_edit else f"✏️ [Edited]:\n{text}"
+    formatted_msg = text
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     # Note: downloading media with Telethon if needed
@@ -2548,7 +2578,9 @@ async def _process_userbot_event(event, is_edit=False):
             if hasattr(msg, 'document') and msg.document and msg.document.size > 50 * 1024 * 1024:
                 formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
             else:
-                tmp_fd, file_path_tmp = tempfile.mkstemp()
+                # Attempt to preserve file extension
+                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
+                tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
                 os.close(tmp_fd)
                 file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
         except Exception as e:
