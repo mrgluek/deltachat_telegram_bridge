@@ -168,6 +168,37 @@ async def retry_async(coro_func, *args, max_retries=5, delay=2.0, backoff=2.0, e
             await asyncio.sleep(wait)
     raise last_exception
 
+async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> Optional[str]:
+    """Fetch message via Userbot and download its media if it exists and is <= 50MB."""
+    global userbot_client
+    if not (userbot_client and userbot_client.is_connected()):
+        return None
+    try:
+        # Telethon get_messages can fetch by ID
+        msg = await userbot_client.get_messages(chat_id, ids=msg_id)
+        if not (msg and msg.media):
+            return None
+        
+        # Check size (limit to 50MB for Delta Chat)
+        size = 0
+        if hasattr(msg, 'document') and msg.document:
+            size = msg.document.size
+        elif hasattr(msg, 'video') and msg.video:
+            size = msg.video.size
+
+        if size > 50 * 1024 * 1024:
+            logger.warning(f"Userbot: Media in {chat_id}:{msg_id} is too large ({size // 1024 // 1024} MB > 50 MB)")
+            return None
+
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+        os.close(tmp_fd)
+        logger.info(f"Userbot downloading media from {chat_id}:{msg_id} (size: {size // 1024 // 1024} MB)...")
+        path = await userbot_client.download_media(msg.media, file=tmp_path)
+        return path
+    except Exception as e:
+        logger.error(f"Userbot download failed for {chat_id}:{msg_id}: {e}")
+    return None
+
 # Simple per-chat rate limiter
 _rate_limits: dict[int, list[float]] = defaultdict(list)
 
@@ -2038,19 +2069,34 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     local_file_path = None
     timeout_error_text = ""
     if tg_file:
-        try:
-            tg_file_obj = await tg_file.get_file()
-            suffix = os.path.splitext(file_name)[1] if file_name else ""
-            tmp_fd, local_file_path = tempfile.mkstemp(suffix=suffix)
-            os.close(tmp_fd)
-            await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path)
-        except (TimeoutError, asyncio.TimeoutError):
-            logger.error(f"Timeout downloading file {file_name} after retries")
-            local_file_path = None
-            timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]</i>"
-        except Exception as e:
-            logger.error(f"Failed to download TG file: {e}")
-            local_file_path = None
+        suffix = os.path.splitext(file_name)[1] if file_name else ""
+        f_size = getattr(tg_file, 'file_size', 0) or 0
+        
+        # If file is potentially too large for Bot API, try Userbot first
+        if f_size > 20 * 1024 * 1024:
+            local_file_path = await _download_via_userbot(tg_chat_id, update.message.message_id, suffix=suffix)
+
+        if not local_file_path:
+            # Fallback (or first attempt if < 20MB) using regular Bot API
+            try:
+                tg_file_obj = await tg_file.get_file()
+                tmp_fd, local_file_path_tmp = tempfile.mkstemp(suffix=suffix)
+                os.close(tmp_fd)
+                await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path_tmp)
+                local_file_path = local_file_path_tmp
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.error(f"Timeout downloading file {file_name} after retries")
+                local_file_path = None
+                timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]</i>"
+            except Exception as e:
+                # If it's the "File is too big" error from Telegram
+                if "File is too big" in str(e) and not local_file_path:
+                    # Final attempt with Userbot if we haven't tried yet
+                    local_file_path = await _download_via_userbot(tg_chat_id, update.message.message_id, suffix=suffix)
+                
+                if not local_file_path:
+                    logger.error(f"Failed to download TG file {file_name}: {e}")
+                    local_file_path = None
 
 
 
@@ -2371,9 +2417,9 @@ async def _process_userbot_event(event, is_edit=False):
     if msg.media:
         try:
             # We save it to a temporary location
-            # Note: handle max file size (e.g. 20MB)
-            if hasattr(msg, 'document') and msg.document and msg.document.size > 20 * 1024 * 1024:
-                formatted_msg += f"\n\n[Media is too large to be forwarded]"
+            # Note: handle max file size (e.g. 50MB)
+            if hasattr(msg, 'document') and msg.document and msg.document.size > 50 * 1024 * 1024:
+                formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
             else:
                 tmp_fd, file_path_tmp = tempfile.mkstemp()
                 os.close(tmp_fd)

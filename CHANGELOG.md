@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Userbot Support (Telethon):** The bot can now bridge Telegram channels **without being an administrator**. This is achieved by integrating the Telethon MTProto library, allowing the bot to act as a regular subscriber.
 - **Double Bridge Protection:** Implemented a deduplication mechanism that prevents duplicate messages if a channel is bridged via both the core bot (as admin) and the userbot.
 - **Enhanced `/channeladd`:** The command now automatically falls back to userbot mode if the core bot lacks the necessary permissions to read a channel.
-- **Improved Media Relay:** Userbot mode supports full media forwarding (images, videos, etc.) including profile photo sync for bridged channels.
+- **Improved Media Relay:** Userbot mode supports full media forwarding (images, videos, etc.) including profile photo sync for bridged channels. Increased Userbot media limit to **50MB**.
+- **High-Capacity Media Fallback:** Regular group bridging now automatically uses the Userbot (if authorized and present in the group) to download files larger than 20MB, bypassing standard Bot API limits.
 - **Setup Commands:** Added `init api_id`, `init api_hash`, and `init userbot` for easy configuration of MTProto credentials and interactive session authorization.
 
 ## [2026-04-12]
