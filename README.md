@@ -234,7 +234,7 @@ Sub-admins **cannot** see or manage resources created by the owner or other sub-
 
 The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (one-way, read-only).
 
-> **Note:** The bot must be added as an **administrator** to the Telegram channel to receive channel posts.
+> **Note:** By default, the bot requires being an **administrator** in a Telegram channel to receive posts. If you cannot make the bot an admin, you can enable **Userbot Mode** to bridge channels using your own Telegram account.
 
 ### Setup
 
@@ -254,6 +254,43 @@ The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (o
 | `/channel N` | Show invite link for channel #N |
 | `/channelqr N` | Show QR code invite for channel #N |
 | `/channelremove N` | Remove channel bridge #N (sub-admins: own only) |
+
+## Userbot Mode (Bridging without Admin permissions)
+
+If you want to bridge channels where you cannot add the bot as an administrator, you can configure **Userbot Mode**. This allows the bot daemon to act as a regular Telegram client using your personal account.
+
+### 1. Obtain API Credentials
+1. Go to [my.telegram.org](https://my.telegram.org) and log in.
+2. Go to **API development tools**.
+3. Create a new application (e.g., "DC-TG-Bridge").
+4. Copy your **App api_id** and **App api_hash**.
+
+### 2. Configure Credentials
+Run these commands inside your environment (or via `docker-compose exec bridge python bot.py ...`):
+
+```bash
+python bot.py init api_id YOUR_API_ID
+python bot.py init api_hash YOUR_API_HASH
+```
+
+### 3. Initialize Interactive Login
+This step requires entering your phone number and the SMS/Telegram validation code. If using Docker, you must run it interactively:
+
+```bash
+docker-compose exec bridge python bot.py init userbot
+```
+
+### 4. Security Risks
+> [!CAUTION]
+> Using your personal account for Userbot Mode comes with risks:
+> - **Session Security:** A file named `userbot_session.session` will be created. This file is essentially a "master key" to your Telegram account. **Never share it.** Ensure your server has strict file permissions.
+> - **Account Activity:** The bot will join channels on your behalf to read posts.
+> - **API Limits:** While safe for moderate use, intensive API operations can theoretically lead to temporary rate limits or account flags from Telegram's anti-spam systems. It is recommended to use a dedicated "feeder" account if you plan to bridge a very large number of channels.
+
+---
+
+## Double Bridge Protection
+If a channel is bridged via both the core bot (as admin) and Userbot Mode, the bridge will automatically deduplicate messages, ensuring Delta Chat users receive only one copy of each post.
 
 ## Changelog
 

@@ -16,6 +16,17 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram import ReactionTypeEmoji
 from telegram.error import NetworkError, TimedOut
 
+try:
+    from telethon import TelegramClient, events
+    from telethon.tl.functions.channels import JoinChannelRequest
+    from telethon.errors import ChannelPrivateError
+except ImportError:
+    TelegramClient = None
+    events = None
+    JoinChannelRequest = None
+    ChannelPrivateError = None
+
+
 import database
 import io
 import sys
@@ -121,6 +132,26 @@ dc_bot_instance = None
 dc_accid = None
 main_loop = None
 bot_contact_id = None  # To detect and skip own messages
+userbot_client = None
+
+# Double bridging protection
+_processed_tg_msgs: dict[tuple[int, int], float] = {}
+
+def _mark_processed(chat_id: int, msg_id: int) -> bool:
+    """Returns True if this message was already processed in the last 120 seconds."""
+    now = time.time()
+    key = (chat_id, msg_id)
+    last = _processed_tg_msgs.get(key, 0)
+    if now - last < 120:
+        return True
+    _processed_tg_msgs[key] = now
+    if len(_processed_tg_msgs) > 2000:
+        cutoff = now - 120
+        keys_to_delete = [k for k, v in _processed_tg_msgs.items() if v < cutoff]
+        for k in keys_to_delete:
+            del _processed_tg_msgs[k]
+    return False
+
 
 async def retry_async(coro_func, *args, max_retries=5, delay=2.0, backoff=2.0, exceptions=(TimeoutError, asyncio.TimeoutError, ConnectionError, OSError, NetworkError, TimedOut), **kwargs):
     """Retries an async function with exponential backoff."""
@@ -1249,6 +1280,11 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     try:
         # Fetch TG channel info
+        channel_title = display_name
+        tg_channel_id = None
+        resolved_username = username
+        avatar_file = None
+        
         try:
             chat_arg = numeric_id if is_numeric else f"@{username}"
             tg_chat_info = await context.bot.get_chat(chat_arg)
@@ -1260,13 +1296,12 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
             try:
                 bot_member = await tg_chat_info.get_member(context.bot.id)
                 if bot_member.status != "administrator":
-                    await update.message.reply_text(f"❌ I must be an <b>administrator</b> in {html.escape(display_name)} to bridge it.", parse_mode='HTML')
-                    return
-            except Exception:
-                await update.message.reply_text(f"❌ I am not in {html.escape(display_name)} or have no rights to see members. Please add me as an administrator first.", parse_mode='HTML')
-                return
+                    raise Exception("Bot is not an administrator")
+            except Exception as e:
+                # Bot is not admin or not in channel, throw to trigger fallback
+                raise Exception(f"Validation failed: {e}")
 
-            # Check if the user is admin in that channel (unless they are the global bot admin)
+            # Check if the user is admin in that channel (unless global admin)
             admin_tg_id = database.get_config("admin_tg_id")
             if not admin_tg_id or str(update.effective_user.id) != str(admin_tg_id):
                 try:
@@ -1280,33 +1315,64 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
 
             channel_title = tg_chat_info.title or display_name
             tg_channel_id = tg_chat_info.id
-            resolved_username = tg_chat_info.username  # may be None for private channels
+            resolved_username = tg_chat_info.username
+            if tg_chat_info.photo:
+                avatar_file = await tg_chat_info.photo.get_big_file()
+                
         except Exception as e:
-            logger.warning(f"Could not fetch TG channel info for {display_name}: {e}")
-            await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code>. Is the bot added as admin?", parse_mode='HTML')
-            return
+            # Fallback to userbot
+            if userbot_client:
+                try:
+                    chat_arg = numeric_id if is_numeric else username
+                    entity = await userbot_client.get_entity(chat_arg)
+                    if getattr(entity, 'left', True):
+                        if JoinChannelRequest:
+                            await userbot_client(JoinChannelRequest(entity))
+                            
+                    from telethon.utils import get_peer_id
+                    raw_id = get_peer_id(entity)
+                    # Telethon returns -100 prefix for channels in get_peer_id
+                    tg_channel_id = raw_id
+                    channel_title = getattr(entity, 'title', display_name)
+                    resolved_username = getattr(entity, 'username', username)
+                    
+                    # Also try to get avatar via userbot if needed (omitted for brevity, will leave avatar empty)
+                except Exception as userbot_e:
+                    logger.warning(f"Could not fetch TG channel info via bot or userbot for {display_name}: PTB: {e}, Telethon: {userbot_e}")
+                    await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code> or access denied.", parse_mode='HTML')
+                    return
+            else:
+                logger.warning(f"Could not fetch TG channel info for {display_name}: {e}")
+                await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code>. Is the bot added as admin? (Userbot not configured)", parse_mode='HTML')
+                return
 
         # Create DC broadcast channel
         dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
 
         # Copy TG channel avatar to DC broadcast
         try:
-            if tg_channel_id:
-                tg_chat_info_full = await context.bot.get_chat(tg_channel_id)
-                if tg_chat_info_full.photo:
-                    avatar_file = await tg_chat_info_full.photo.get_big_file()
-                    tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
-                    os.close(tmp_fd)
-                    await avatar_file.download_to_drive(custom_path=avatar_path)
-                    dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
+            if avatar_file:
+                tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
+                os.close(tmp_fd)
+                await avatar_file.download_to_drive(custom_path=avatar_path)
+                dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
+                try:
+                    os.unlink(avatar_path)
+                except Exception:
+                    pass
+                logger.info(f"Copied avatar from {display_name} to DC broadcast {dc_chat_id}")
+            elif userbot_client and tg_channel_id:
+                # Userbot fallback to download profile photo
+                photo = await userbot_client.download_profile_photo(tg_channel_id)
+                if photo:
+                    dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, photo)
                     try:
-                        os.unlink(avatar_path)
+                        os.unlink(photo)
                     except Exception:
                         pass
-                    logger.info(f"Copied avatar from {display_name} to DC broadcast {dc_chat_id}")
+                    logger.info(f"Copied avatar (via userbot) from {display_name} to DC broadcast {dc_chat_id}")
         except Exception as e:
             logger.warning(f"Could not copy avatar for {display_name}: {e}")
-
         # Generate invite link
         invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
         if invite_link.startswith("OPEN-CHAT:"):
@@ -1531,6 +1597,9 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     tg_channel_id = post.chat.id
+    if _mark_processed(tg_channel_id, post.message_id):
+        return
+    
     tg_username = post.chat.username
 
     # Look up by numeric ID first, then by username
@@ -1675,6 +1744,9 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         return
 
     tg_channel_id = post.chat.id
+    if _mark_processed(tg_channel_id, post.message_id):
+        return
+    
     tg_username = post.chat.username
 
     # Check if this is a live location update
@@ -1759,6 +1831,8 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     tg_chat_id = msg.chat.id
+    if _mark_processed(tg_chat_id, msg.message_id):
+        return
 
     # Check if this is a live location update
     if msg.location:
@@ -1836,6 +1910,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tg_chat_id = update.effective_chat.id
+    if _mark_processed(tg_chat_id, update.message.message_id):
+        return
 
     # Only bridge group chats
     if update.effective_chat.type == "private":
@@ -2238,6 +2314,80 @@ async def db_cleanup_loop():
             logger.error(f"Cleanup error: {e}")
             await asyncio.sleep(60)
 
+# ---------------------------------------------------------
+# TELETHON USERBOT HANDLERS
+# ---------------------------------------------------------
+
+async def _process_userbot_event(event, is_edit=False):
+    """Common logic for userbot new and edited posts."""
+    global dc_bot_instance, dc_accid
+    msg = event.message
+    if not msg:
+        return
+
+    tg_channel_id = msg.chat_id
+    if _mark_processed(tg_channel_id, msg.id):
+        return
+
+    if is_edit and _is_edit_debounced(tg_channel_id, msg.id):
+        return
+
+    # Check database
+    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+    # Note: userbot won't automatically link by username because it subscribes by entity,
+    # but theoretically we already did that via /channeladd.
+
+    if not dc_chat_id or not dc_bot_instance or not dc_accid:
+        return
+
+    text = msg.text or ""
+    # Add link to original post
+    sender_name = "✏️ [Edited]" if is_edit else ""
+    if msg.chat and getattr(msg.chat, 'username', None):
+        text = (text + f"\n\n🔗 t.me/{msg.chat.username}/{msg.id}").strip()
+
+    if not text and not msg.media:
+        return
+
+    formatted_msg = text if not is_edit else f"✏️ [Edited]:\n{text}"
+    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+
+    # Note: downloading media with Telethon if needed
+    file_path = None
+    if msg.media:
+        try:
+            # We save it to a temporary location
+            # Note: handle max file size (e.g. 20MB)
+            if hasattr(msg, 'document') and msg.document and msg.document.size > 20 * 1024 * 1024:
+                formatted_msg += f"\n\n[Media is too large to be forwarded]"
+            else:
+                tmp_fd, file_path_tmp = tempfile.mkstemp()
+                os.close(tmp_fd)
+                file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
+        except Exception as e:
+            logger.error(f"Failed to download userbot media: {e}")
+
+    try:
+        msg_data = MsgData(text=formatted_msg)
+        if hasattr(msg, 'post_author') and msg.post_author:
+            msg_data.override_sender_name = msg.post_author if not is_edit else f"✏️ [Edited] {msg.post_author}"
+        elif is_edit:
+            msg_data.override_sender_name = sender_name
+        
+        if file_path:
+            msg_data.file = file_path
+            
+        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC broadcast {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to relay userbot post: {e}")
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
+
 async def main():
     global tg_app, main_loop
 
@@ -2329,6 +2479,29 @@ async def main():
     # Start DB cleanup loop
     asyncio.create_task(db_cleanup_loop())
 
+    # Start Userbot if configured
+    global userbot_client
+    if TelegramClient:
+        api_id = database.get_config("api_id")
+        api_hash = database.get_config("api_hash")
+        if api_id and api_hash:
+            try:
+                userbot_client = TelegramClient('userbot_session', int(api_id), api_hash)
+                
+                @userbot_client.on(events.NewMessage())
+                async def on_new_userbot_msg(event):
+                    await _process_userbot_event(event, is_edit=False)
+                    
+                @userbot_client.on(events.MessageEdited())
+                async def on_edited_userbot_msg(event):
+                    await _process_userbot_event(event, is_edit=True)
+
+                await userbot_client.start()
+                logger.info("Telethon Userbot client started successfully.")
+            except Exception as e:
+                logger.error(f"Failed to start Userbot client: {e}")
+                userbot_client = None
+
     # 2. Start DC Bot in a background thread
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, start_dc_bot)
@@ -2368,12 +2541,45 @@ if __name__ == "__main__":
             else:
                 print("Usage: python bot.py init admin_dc <deltachat_account_email>")
             sys.exit(0)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "api_id":
+            if len(sys.argv) > init_idx + 2:
+                database.set_config("api_id", sys.argv[init_idx + 2])
+                print("API ID saved in bridge.db.")
+            else:
+                print("Usage: python bot.py init api_id <api_id>")
+            sys.exit(0)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "api_hash":
+            if len(sys.argv) > init_idx + 2:
+                database.set_config("api_hash", sys.argv[init_idx + 2])
+                print("API HASH saved in bridge.db.")
+            else:
+                print("Usage: python bot.py init api_hash <api_hash>")
+            sys.exit(0)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "userbot":
+            api_id = database.get_config("api_id")
+            api_hash = database.get_config("api_hash")
+            if not api_id or not api_hash:
+                print("Error: Provide api_id and api_hash first before initializing userbot.")
+                sys.exit(1)
+            
+            if not TelegramClient:
+                print("Error: telethon is not installed.")
+                sys.exit(1)
+            
+            print("Initializing userbot interactive login...")
+            client = TelegramClient('userbot_session', int(api_id), api_hash)
+            client.start()
+            print("Userbot session successfully created in userbot_session.session")
+            sys.exit(0)
         else:
             print("Usage:")
             print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account")
             print("  python bot.py init tg [token]             - Initialize Telegram bot token")
             print("  python bot.py init admin_tg <tg_id>       - Set Admin Telegram ID for error logs")
             print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email for error logs")
+            print("  python bot.py init api_id <id>            - Set MTProto API ID for userbot")
+            print("  python bot.py init api_hash <hash>        - Set MTProto API HASH for userbot")
+            print("  python bot.py init userbot                - Interactive sign-in for userbot channels")
             sys.exit(1)
 
     try:
