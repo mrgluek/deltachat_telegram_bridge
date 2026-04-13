@@ -249,11 +249,12 @@ The bot can bridge **Telegram channels** to **Delta Chat broadcast channels** (o
 
 | Command | Description |
 | --------- | ------------- |
-| `/channeladd @name or ID` | Bridge a TG channel to a new DC broadcast |
-| `/channels` | List bridged channels (sub-admins see only own) |
-| `/channel N` | Show invite link for channel #N |
-| `/channelqr N` | Show QR code invite for channel #N |
-| `/channelremove N` | Remove channel bridge #N (sub-admins: own only) |
+| `/channeladd @name or ID` | Bridge a TG channel to a new DC broadcast (Owner only) |
+| `/channels` | List all bridged channels (Owner only) |
+| `/channel N` | Show invite link for channel #N (Owner only) |
+| `/channelqr N` | Show QR code invite for channel #N (Owner only) |
+| `/channelremove N` | Remove channel bridge #N (Owner only) |
+| `/userbotsync` | Force re-sync Userbot subscriptions (Owner only) |
 
 ## Userbot Mode (Bridging without Admin permissions)
 
