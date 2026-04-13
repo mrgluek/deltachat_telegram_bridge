@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import threading
+import random
 from collections import defaultdict
 from typing import Optional
 
@@ -1446,6 +1447,18 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"Failed to add channel {display_name}: {e}")
         await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
 
+async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually trigger a Userbot subscription sync."""
+    if not database.is_owner(update.effective_user.id):
+        return
+    
+    if not (userbot_client and userbot_client.is_connected()):
+        await update.message.reply_text("❌ Userbot is not connected.")
+        return
+    
+    await update.message.reply_text("⏳ Starting Userbot synchronization...")
+    asyncio.create_task(sync_userbot_channels(force=True))
+
 
 async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List bridged channels (owner sees all, sub-admin sees own)."""
@@ -2378,6 +2391,63 @@ async def db_cleanup_loop():
 # TELETHON USERBOT HANDLERS
 # ---------------------------------------------------------
 
+_is_syncing_userbot = False
+
+async def sync_userbot_channels(force=False):
+    """
+    Ensures the userbot is a member of all bridged channels.
+    Runs when a new account is detected or manually triggered.
+    """
+    global userbot_client, _is_syncing_userbot
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+    
+    if _is_syncing_userbot and not force:
+        logger.info("Userbot sync is already in progress.")
+        return
+
+    _is_syncing_userbot = True
+    try:
+        me = await userbot_client.get_me()
+        if not me:
+            return
+
+        logger.info(f"Starting Userbot sync for account {me.id} (@{getattr(me, 'username', 'N/A')})...")
+        channels = database.get_all_channels()
+        
+        joined_count = 0
+        for chan in channels:
+            tg_id = chan.get('tg_channel_id')
+            username = chan.get('tg_channel_username')
+            target = tg_id or (f"@{username}" if username else None)
+            
+            if not target:
+                continue
+
+            try:
+                # Check if we are already in the channel
+                entity = await userbot_client.get_entity(target)
+                if getattr(entity, 'left', True):
+                    logger.info(f"Userbot: Joining channel {target}...")
+                    if JoinChannelRequest:
+                        await userbot_client(JoinChannelRequest(entity))
+                        joined_count += 1
+                        # Human-like delay
+                        delay = random.uniform(5, 20)
+                        await asyncio.sleep(delay)
+                else:
+                    # Already a member
+                    pass
+            except Exception as e:
+                logger.warning(f"Userbot: Could not sync/join channel {target}: {e}")
+        
+        # Save last successful sync user ID
+        database.set_config("userbot_last_user_id", str(me.id))
+        logger.info(f"Userbot sync completed. Joined {joined_count} channels.")
+        
+    finally:
+        _is_syncing_userbot = False
+
 async def _process_userbot_event(event, is_edit=False):
     """Common logic for userbot new and edited posts."""
     global dc_bot_instance, dc_accid
@@ -2488,6 +2558,7 @@ async def main():
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
+    tg_app.add_handler(CommandHandler("userbotsync", tg_userbotsync_command))
 
     # Handler for bot being added to / removed from chats (my_chat_member updates)
     tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)
@@ -2558,6 +2629,14 @@ async def main():
 
                 await userbot_client.start()
                 logger.info("Telethon Userbot client started successfully.")
+                
+                # Auto-sync detection
+                me = await userbot_client.get_me()
+                if me:
+                    last_id = database.get_config("userbot_last_user_id")
+                    if last_id != str(me.id):
+                        logger.info(f"New Userbot account detected ({me.id}). Triggering auto-sync...")
+                        asyncio.create_task(sync_userbot_channels())
             except Exception as e:
                 logger.error(f"Failed to start Userbot client: {e}")
                 userbot_client = None
