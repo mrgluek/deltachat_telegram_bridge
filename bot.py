@@ -1239,6 +1239,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
     if not context.args or len(context.args) < 1:
         await update.message.reply_text(
             "Usage: <code>/channeladd @channel_username</code>\n"
+            "or: <code>/channeladd https://t.me/channel_username</code>\n"
             "or: <code>/channeladd -1001234567890</code>\n\n"
             "Example: <code>/channeladd @ia_panorama</code>\n"
             "For private channels, use the numeric ID.",
@@ -1247,6 +1248,14 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     raw_arg = context.args[0].strip()
+    # Support t.me links by extracting the username part
+    if "t.me/" in raw_arg:
+        # Extract the part after the last slash
+        parts = raw_arg.split("/")
+        candidate = parts[-1].split("?")[0]
+        if not candidate and len(parts) > 1:
+            candidate = parts[-2].split("?")[0]
+        raw_arg = candidate
 
     # Determine if the argument is a numeric ID or a username
     is_numeric = False
@@ -1338,8 +1347,13 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
                     
                     # Also try to get avatar via userbot if needed (omitted for brevity, will leave avatar empty)
                 except Exception as userbot_e:
-                    logger.warning(f"Could not fetch TG channel info via bot or userbot for {display_name}: PTB: {e}, Telethon: {userbot_e}")
-                    await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code> or access denied.", parse_mode='HTML')
+                    err_msg = str(userbot_e)
+                    if "bot users is restricted" in err_msg:
+                        logger.error("Userbot is logged in as a BOT. It cannot join channels. Re-login with a phone number.")
+                        await update.message.reply_text("❌ <b>Userbot error:</b> Your Userbot module is logged in as a bot token, not a phone number. It lacks permissions to join channels. Please use <code>init userbot</code> with a phone number.", parse_mode='HTML')
+                    else:
+                        logger.warning(f"Could not fetch TG channel info via bot or userbot for {display_name}: PTB: {e}, Telethon: {userbot_e}")
+                        await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code> or access denied.", parse_mode='HTML')
                     return
             else:
                 logger.warning(f"Could not fetch TG channel info for {display_name}: {e}")
