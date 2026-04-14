@@ -2508,6 +2508,7 @@ async def sync_userbot_channels(force=False):
         for chan in channels:
             tg_id = chan.get('tg_channel_id')
             username = chan.get('tg_channel_username')
+            invite_link = chan.get('invite_link')
             
             # For a new account, we MUST use the @username if available, 
             # because numeric IDs are not resolvable until the account "sees" the channel.
@@ -2517,8 +2518,20 @@ async def sync_userbot_channels(force=False):
                 continue
 
             try:
-                # Check if we are already in the channel
-                entity = await userbot_client.get_entity(target)
+                # 1. Try to get entity normally
+                entity = None
+                try:
+                    entity = await userbot_client.get_entity(target)
+                except Exception:
+                    # 2. If it fails and we have an invite link, try to resolve/join via link
+                    if invite_link:
+                        logger.info(f"Userbot: Trying to resolve channel {target} via invite link...")
+                        # Telethon can handle join via link if it's a public link or hash
+                        entity = await userbot_client.get_entity(invite_link)
+                
+                if not entity:
+                    raise Exception("Could not resolve entity by ID, username or invite link.")
+
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
                     if JoinChannelRequest:
