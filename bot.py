@@ -2505,6 +2505,8 @@ async def sync_userbot_channels(force=False):
         channels = database.get_all_channels()
         
         joined_count = 0
+        failed_reports = []
+        
         for chan in channels:
             tg_id = chan.get('tg_channel_id')
             username = chan.get('tg_channel_username')
@@ -2518,20 +2520,9 @@ async def sync_userbot_channels(force=False):
                 continue
 
             try:
-                # 1. Try to get entity normally
-                entity = None
-                try:
-                    entity = await userbot_client.get_entity(target)
-                except Exception:
-                    # 2. If it fails and we have an invite link, try to resolve/join via link
-                    if invite_link:
-                        logger.info(f"Userbot: Trying to resolve channel {target} via invite link...")
-                        # Telethon can handle join via link if it's a public link or hash
-                        entity = await userbot_client.get_entity(invite_link)
+                # 1. Try to get entity normally (via @username or numeric ID if seen before)
+                entity = await userbot_client.get_entity(target)
                 
-                if not entity:
-                    raise Exception("Could not resolve entity by ID, username or invite link.")
-
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
                     if JoinChannelRequest:
@@ -2545,10 +2536,50 @@ async def sync_userbot_channels(force=False):
                     pass
             except Exception as e:
                 logger.warning(f"Userbot: Could not sync/join channel {target}: {e}")
+                chan_id = chan.get('id', '?')
+                tg_id = chan.get('tg_channel_id', '?')
+                username = chan.get('tg_channel_username')
+                # Try to get title from DB if we know it
+                title = "Unknown Channel"
+                try:
+                    # We might have stored the title in our DB previously
+                    # But if not, we just use the ID
+                    title = f"Channel #{chan_id}"
+                except Exception:
+                    pass
+                
+                report = f"• <b>{html.escape(title)}</b> (ID: <code>{tg_id}</code>)"
+                if username:
+                    report += f" (@{html.escape(username)})"
+                failed_reports.append(report)
         
         # Save last successful sync user ID
         database.set_config("userbot_last_user_id", str(me.id))
         logger.info(f"Userbot sync completed. Joined {joined_count} channels.")
+        
+        # Notify owner if there are failed channels
+        if failed_reports:
+            admin_tg_id = database.get_config("admin_tg_id")
+            if admin_tg_id:
+                try:
+                    from telegram import Bot
+                    token = database.get_config("tg_token")
+                    if token:
+                        bot_tmp = Bot(token)
+                        report_text = (
+                            f"⚠️ <b>Userbot Sync Summary</b>\n\n"
+                            f"Completed. Joined {joined_count} channels.\n"
+                            f"The following {len(failed_reports)} channels require <b>manual join</b> on your new technical account:\n\n"
+                            + "\n".join(failed_reports) +
+                            f"\n\n<i>Note: Use your regular Telegram app with the new account to join these channels.</i>"
+                        )
+                        # Chunk it if too long
+                        if len(report_text) > 4000:
+                            report_text = report_text[:3900] + "...\n(List too long)"
+                        
+                        await bot_tmp.send_message(chat_id=int(admin_tg_id), text=report_text, parse_mode='HTML')
+                except Exception as notify_e:
+                    logger.error(f"Failed to send sync report to owner: {notify_e}")
         
     finally:
         _is_syncing_userbot = False
