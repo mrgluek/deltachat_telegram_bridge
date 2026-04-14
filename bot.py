@@ -2548,9 +2548,13 @@ async def sync_userbot_channels(force=False):
                 except Exception:
                     pass
                 
+                # Make ID clickable/searchable
+                clean_id = str(tg_id).replace("-100", "")
                 report = f"• <b>{html.escape(title)}</b> (ID: <code>{tg_id}</code>)"
                 if username:
                     report += f" (@{html.escape(username)})"
+                else:
+                    report += f" — <a href='https://t.me/c/{clean_id}/1'>Search Link</a>"
                 failed_reports.append(report)
         
         # Save last successful sync user ID
@@ -2560,24 +2564,20 @@ async def sync_userbot_channels(force=False):
         # Notify owner if there are failed channels
         if failed_reports:
             admin_tg_id = database.get_config("admin_tg_id")
-            if admin_tg_id:
+            if admin_tg_id and tg_app:
                 try:
-                    from telegram import Bot
-                    token = database.get_config("tg_token")
-                    if token:
-                        bot_tmp = Bot(token)
-                        report_text = (
-                            f"⚠️ <b>Userbot Sync Summary</b>\n\n"
-                            f"Completed. Joined {joined_count} channels.\n"
-                            f"The following {len(failed_reports)} channels require <b>manual join</b> on your new technical account:\n\n"
-                            + "\n".join(failed_reports) +
-                            f"\n\n<i>Note: Use your regular Telegram app with the new account to join these channels.</i>"
-                        )
-                        # Chunk it if too long
-                        if len(report_text) > 4000:
-                            report_text = report_text[:3900] + "...\n(List too long)"
-                        
-                        await bot_tmp.send_message(chat_id=int(admin_tg_id), text=report_text, parse_mode='HTML')
+                    report_text = (
+                        f"⚠️ <b>Userbot Sync Summary</b>\n\n"
+                        f"Completed. Joined {joined_count} channels.\n"
+                        f"The following {len(failed_reports)} channels require <b>manual join</b> on your new technical account:\n\n"
+                        + "\n".join(failed_reports) +
+                        f"\n\n<i>Note: Click the ID links to find the group if you are already a member, or search for these IDs in your Telegram history.</i>"
+                    )
+                    # Chunk it if too long
+                    if len(report_text) > 4000:
+                        report_text = report_text[:3900] + "...\n(List too long)"
+                    
+                    await tg_app.bot.send_message(chat_id=int(admin_tg_id), text=report_text, parse_mode='HTML')
                 except Exception as notify_e:
                     logger.error(f"Failed to send sync report to owner: {notify_e}")
         
