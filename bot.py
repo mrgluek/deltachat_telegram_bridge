@@ -866,10 +866,15 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
             m_count = database.get_bridge_message_count(dc_cid, tg_cid)
             try:
-                title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Group")
+                chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
+                title = chat_info.get("name", "Unknown Group")
+                # Get member count (minus the bot itself)
+                contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
+                sub_count = len(contacts) - 1 if contacts else 0
             except Exception:
                 title = "Unknown Group"
-            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
+                sub_count = "?"
+            lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {sub_count} 👤 {m_count} 💬 {r_count} 🙂")
         
         
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
@@ -1562,12 +1567,17 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         m_count = database.get_bridge_message_count(dc_cid, tg_id)
         
         try:
-            title = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid).get("name", "Unknown Channel")
+            chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
+            title = chat_info.get("name", "Unknown Channel")
+            # Get subscriber count (minus the bot itself)
+            contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
+            sub_count = len(contacts) - 1 if contacts else 0
         except Exception:
             title = "Unknown Channel"
+            sub_count = "?"
 
         tg_ref = f"@{html.escape(ch['tg_channel_username'])}" if ch['tg_channel_username'] else f"ID: <code>{ch['tg_channel_id']}</code>"
-        lines.append(f"#{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {m_count} 💬 {r_count} 🙂")
+        lines.append(f"#{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {sub_count} 👤 {m_count} 💬 {r_count} 🙂")
     lines.append(f"\nUse <code>/channel N</code> for invite link")
     await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
