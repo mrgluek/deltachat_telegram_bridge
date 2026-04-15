@@ -2646,7 +2646,12 @@ async def _process_userbot_event(event, is_edit=False):
         try:
             # We save it to a temporary location
             # Note: handle max file size (e.g. 50MB)
-            if hasattr(msg, 'document') and msg.document and msg.document.size > 50 * 1024 * 1024:
+            media_size = 0
+            if hasattr(msg, 'file') and msg.file:
+                media_size = msg.file.size or 0
+                
+            if media_size > 50 * 1024 * 1024:
+                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > 50MB")
                 formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
             else:
                 # Attempt to preserve file extension
