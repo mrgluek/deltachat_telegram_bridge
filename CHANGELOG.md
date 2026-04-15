@@ -14,8 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enhanced `/channeladd`:** The command now automatically falls back to userbot mode if the core bot lacks the necessary permissions to read a channel. **Now supports regular groups** in read-only broadcast mode (Stealth Bridging).
 - **Security & Permissions:** Restricted all channel management commands (`/channeladd`, `/channels`, etc.) to the **Bot Owner only** to protect the Userbot account.
 - **Auto-Sync / Migration:** Added automatic Userbot subscription synchronization. When switching to a new Telegram account, the bot will automatically re-join all previously bridged channels with a randomized, human-like delay (5-20s).
-- **Stealth Bridging:** Enabled bridging of regular groups via Userbot in a one-way (read-only) fashion. Messages from groups will include the original sender's name in Delta Chat.
-- **Easy Group Discovery:** Added `/groups` command (Owner only) to list all groups the Userbot is currently in, with ready-to-use `/channeladd` commands.
+- **Stealth mode:** bridge any Telegram group as a read-only Delta Chat broadcast channel.
+- Added `/groups` command to discover joinable Telegram groups for the technical account.
+- Significant latency improvements for Userbot mode (enabled concurrent update processing).
+- Fixed "Ghost Edits" in Userbot mode by implementing content-based change detection.
+- Fixed media filename preservation and 50MB size detection for Userbot events.
 
 ## [2026-04-12]
 

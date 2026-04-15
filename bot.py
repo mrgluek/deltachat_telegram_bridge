@@ -2795,18 +2795,23 @@ async def main():
         api_hash = database.get_config("api_hash")
         if api_id and api_hash:
             try:
-                userbot_client = TelegramClient('userbot_session', int(api_id), api_hash)
+                userbot_client = TelegramClient('userbot_session', int(api_id), api_hash, sequential_updates=False)
                 
                 @userbot_client.on(tg_events.NewMessage())
                 async def on_new_userbot_msg(event):
-                    await _process_userbot_event(event, is_edit=False)
+                    asyncio.create_task(_process_userbot_event(event, is_edit=False))
                     
                 @userbot_client.on(tg_events.MessageEdited())
                 async def on_edited_userbot_msg(event):
-                    await _process_userbot_event(event, is_edit=True)
+                    asyncio.create_task(_process_userbot_event(event, is_edit=True))
+
+                @userbot_client.on(tg_events.Raw)
+                async def on_raw_userbot(event):
+                    # For debugging connection drops in logs
+                    pass
 
                 await userbot_client.start()
-                logger.info("Telethon Userbot client started successfully.")
+                logger.info("Telethon Userbot client started successfully (Concurrency enabled).")
                 
                 # Auto-sync detection
                 me = await userbot_client.get_me()
