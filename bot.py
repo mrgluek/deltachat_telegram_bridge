@@ -2614,8 +2614,16 @@ async def _process_userbot_event(event, is_edit=False):
 
     # Check database
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
-    # Note: userbot won't automatically link by username because it subscribes by entity,
-    # but theoretically we already did that via /channeladd.
+
+    # Fallback: if not found by ID, try finding by username (useful if added via Bot API without ID)
+    if not dc_chat_id:
+        chat_username = getattr(msg.chat, 'username', None)
+        if chat_username:
+            chan_data = database.get_channel_by_tg_username(chat_username)
+            if chan_data:
+                dc_chat_id = chan_data['dc_chat_id']
+                logger.info(f"USERBOT: Found matching channel by username @{chat_username}. Updating numeric ID to {tg_channel_id}...")
+                database.update_channel_tg_id(chat_username, tg_channel_id)
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
         return
