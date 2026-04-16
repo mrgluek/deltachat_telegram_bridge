@@ -378,10 +378,14 @@ def get_dc_help_text(sender_email: str) -> str:
         f"I'm the TG Bridge bot. Current mode: {mode}\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
         f"Commands:\n"
-        f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
-        f"/unbridge — Remove the bridge from the group\n"
-        f"/stats — Show bridge statistics\n"
+        f"/channels — List public Telegram channels to subscribe to\n"
+        f"/channelN — Get invite link for channel #N\n"
+        f"/channelNqr — Get QR code invite for channel #N\n"
+        f"/stats — Show bridge statistics for current chat\n"
         f"/help — Show this help message\n\n"
+        f"Management (Admins only):\n"
+        f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
+        f"/unbridge — Remove the bridge from the group\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
@@ -622,7 +626,7 @@ def channels_command_dc(bot, accid, event):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="📺 No public channels are currently available."))
         return
 
-    lines = ["📺 <b>Public Channels</b>\n"]
+    lines = ["📺 *Public Channels*\n"]
     for ch in public_channels:
         dc_cid = ch['dc_chat_id']
         tg_username = ch['tg_channel_username']
@@ -639,10 +643,10 @@ def channels_command_dc(bot, accid, event):
             sub_count = "?"
 
         # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 7 👤 1 💬
-        lines.append(f"/channel{ch['id']} — {html.escape(title)} (t.me/{tg_username}) — {sub_count} 👤 {m_count} 💬")
+        lines.append(f"/channel{ch['id']} — {title} (t.me/{tg_username}) — {sub_count} 👤 {m_count} 💬")
     
-    lines.append(f"\nClick <code>/channelN</code> for link or <code>/channelNqr</code> for QR code.")
-    bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines), parse_mode='html'))
+    lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
+    bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(is_info=False))
@@ -697,9 +701,8 @@ def handle_dc_message(bot, accid, event):
                         img.save(tmp_path)
                     
                     bot.rpc.send_msg(accid, dc_chat_id, MsgData(
-                        text=f"📷 QR Code for <b>{html.escape(ch.get('tg_channel_username', 'channel'))}</b>", 
-                        file=tmp_path, 
-                        parse_mode='html'
+                        text=f"📷 QR Code for *{ch.get('tg_channel_username', 'channel')}*", 
+                        file=tmp_path
                     ))
                     
                     try:
@@ -707,7 +710,7 @@ def handle_dc_message(bot, accid, event):
                     except Exception:
                         pass
                 else:
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel <b>{html.escape(ch.get('tg_channel_username', ''))}</b>:\n\n{invite_link}", parse_mode='html'))
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel *{ch.get('tg_channel_username', '')}*:\n\n{invite_link}"))
                 return
             else:
                 bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
