@@ -1765,15 +1765,24 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await _check_channel_admin(update):
         return
 
-    if not context.args or len(context.args) < 1:
-        await update.message.reply_text("Usage: <code>/channel N</code> (use /channels to see numbers)", parse_mode='HTML')
-        return
-
-    try:
-        channel_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Please provide a valid channel number.")
-        return
+    channel_id = None
+    # Support both "/channel 1" and "/channel1"
+    cmd = update.message.text.split()[0].lower()
+    if len(cmd) > 8 and cmd.startswith("/channel"):
+        try:
+            channel_id = int(cmd[8:])
+        except ValueError:
+            pass
+            
+    if channel_id is None:
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("Usage: <code>/channel N</code> (use /channels to see numbers)", parse_mode='HTML')
+            return
+        try:
+            channel_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Please provide a valid channel number.")
+            return
 
     ch = database.get_channel_by_id(channel_id)
     if not ch:
@@ -1803,7 +1812,7 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate QR code for a specific channel's invite link."""
+    """Show QR invite for a specific channel by number."""
     if not await _check_channel_admin(update):
         return
 
@@ -1811,15 +1820,29 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
         return
 
-    if not context.args or len(context.args) < 1:
-        await update.message.reply_text("Usage: <code>/channelqr N</code> (use /channels to see numbers)", parse_mode='HTML')
-        return
 
-    try:
-        channel_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Please provide a valid channel number.")
-        return
+    channel_id = None
+    # Support both "/channelqr 1" and "/channel1qr" and "/channelqr1"
+    cmd = update.message.text.split()[0].lower()
+    if "qr" in cmd:
+        # Extract digits
+        import re
+        digits = re.findall(r'\d+', cmd)
+        if digits:
+            try:
+                channel_id = int(digits[0])
+            except ValueError:
+                pass
+            
+    if channel_id is None:
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("Usage: <code>/channelqr N</code>", parse_mode='HTML')
+            return
+        try:
+            channel_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Please provide a valid channel number.")
+            return
 
     ch = database.get_channel_by_id(channel_id)
     if not ch:
@@ -2959,7 +2982,10 @@ async def main():
     tg_app.add_handler(CommandHandler("channels", tg_channels_command))
     tg_app.add_handler(CommandHandler("groups", tg_groups_command))
     tg_app.add_handler(CommandHandler("channel", tg_channel_command))
+    tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channel\d+$'), tg_channel_command))
     tg_app.add_handler(CommandHandler("channelqr", tg_channelqr_command))
+    tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channel\d+qr$'), tg_channelqr_command))
+    tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channelqr\d+$'), tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
     tg_app.add_handler(CommandHandler("userbotsync", tg_userbotsync_command))
 
