@@ -1606,9 +1606,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             return f"⚠️ Channel {html.escape(channel_title)} is already bridged to DC Chat ID {existing}."
 
         # 3. Create DC Broadcast Group
-        # Many RPC versions require 3 args for create_group_chat
-        dc_chat_id = dc_bot_instance.rpc.create_group_chat(dc_accid, channel_title, False)
-        dc_bot_instance.rpc.set_chat_type(dc_accid, dc_chat_id, 2) # 2 = Broadcast
+        dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
         
         # Avatar copying
         try:
