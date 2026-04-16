@@ -355,7 +355,7 @@ def on_init(bot, args):
     
     for accid in bot.rpc.get_all_account_ids():
         bot.rpc.set_config(accid, "displayname", "TG Bridge")
-        bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups")
+        bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups. Send /help for commands.")
         # Auto-delete messages after 7 days to save disk space
         # (shorter values cause 'message does not exist' errors for reactions/replies)
         bot.rpc.set_config(accid, "delete_device_after", "604800")
@@ -741,6 +741,19 @@ def handle_dc_message(bot, accid, event):
 
     msg = event.msg
     dc_chat_id = msg.chat_id
+    from_id = msg.from_id
+
+    # Detect new users in private chats and send help
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, dc_chat_id)
+        if chat_info.get("type") == 1: # Private chat
+            # Check if we already greeted this contact
+            if not bot.rpc.get_contact_config(accid, from_id, "greeted"):
+                help_text = get_dc_help_text(bot.rpc.get_contact(accid, from_id).address)
+                bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"👋 Welcome!\n\n{help_text}"))
+                bot.rpc.set_contact_config(accid, from_id, "greeted", "1")
+    except Exception as e:
+        logger.warning(f"Greeting check failed: {e}")
 
     if bot.has_command(event.command):
         return  # Ignore standard commands
