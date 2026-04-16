@@ -681,6 +681,29 @@ def handle_dc_message(bot, accid, event):
                 
             ch = database.get_channel_by_id(channel_id)
             if ch:
+                # Security Check:
+                # 1. If public, everyone can join. 
+                # 2. If private, only admin/creator can join.
+                is_public = bool(ch.get('tg_channel_username'))
+                
+                if not is_public:
+                    # Check if sender is admin or sub-admin
+                    admin_dc_email = database.get_config("admin_dc_email")
+                    contact = bot.rpc.get_contact(accid, msg.from_id)
+                    sender_email = contact.address
+                    
+                    is_admin = False
+                    if admin_dc_email and sender_email.lower() == admin_dc_email.lower():
+                        is_admin = True
+                    
+                    # Also check if they are the creator of this bridge (optional but good)
+                    # Note: sub-admins are identified by TG ID in the DB, so for DC we mostly rely on admin_dc_email
+                    
+                    if not is_admin:
+                        # Deny access to private channels for regular users
+                        bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+                        return
+
                 invite_link = ch.get('invite_link', '')
                 if not invite_link:
                     bot.rpc.send_msg(accid, dc_chat_id, MsgData(text="❌ No invite link available for this channel."))
