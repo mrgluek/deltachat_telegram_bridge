@@ -2181,8 +2181,8 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
 
     text = msg.text or msg.caption or ""
     
-    # Filter out commands in edits
-    if text.startswith('/'):
+    # Filter out commands in edits ONLY if no media
+    if text.startswith('/') and not msg.photo and not msg.video and not msg.document:
         return
 
     entities = msg.entities or msg.caption_entities or []
@@ -2238,8 +2238,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text or update.message.caption or ""
     
-    # Filter out commands
-    if text.startswith('/'):
+    # Filter out commands ONLY if it's likely a bot command and not a post with media
+    if text.startswith('/') and not update.message.photo and not update.message.video and not update.message.document:
         return
 
     # Inline hidden links so they are not lost in DC
@@ -2790,8 +2790,9 @@ async def _process_userbot_event(event, is_edit=False):
 
     text = msg.text or ""
     
-    # Filter out commands in Userbot mode
-    if text.startswith('/'):
+    # Filter out commands in Userbot mode ONLY if they look like actual commands and not channel posts with media
+    # For channels, commands are very rare, so we can be more selective.
+    if text.startswith('/') and not msg.media:
         return
 
     # Add link to original post
