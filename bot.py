@@ -455,15 +455,18 @@ def dc_channeladd_command(bot, accid, event):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /channeladd @username or t.me link"))
         return
 
-    # Use a task since _add_channel_bridge is async
+    # Use run_coroutine_threadsafe since dc_cli hooks might run in a separate thread
     async def run_add():
         status_id = bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
         result = await _add_channel_bridge(payload)
         # Convert HTML response to Markdown for DC
-        result_md = result.replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`")
+        result_md = result.replace("**", "^").replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`").replace("^", "**")
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=result_md))
     
-    asyncio.create_task(run_add())
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(run_add(), main_loop)
+    else:
+        logger.error("Main loop not found, cannot run channeladd")
 
 @dc_cli.on(events.NewMessage(command="/channelremove"))
 def dc_channelremove_command(bot, accid, event):
@@ -610,6 +613,26 @@ def locupdate_command(bot, accid, event):
         # We don't track channel reverse mapping in memory easily here, so we just return not found.
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ No active live location found for this message. It may have expired or not be a live location.", quoted_message_id=msg.id))
 
+
+@dc_cli.on(events.NewMessage(command="/userbotsync"))
+def dc_userbotsync_command(bot, accid, event):
+    """Force Userbot sync from Delta Chat. Admin only."""
+    msg = event.msg
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can trigger synchronization."))
+        return
+
+    async def run_sync():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Starting Userbot synchronization..."))
+        await sync_userbot_channels(force=True)
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ Userbot synchronization completed (subscriber counts updated)."))
+    
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(run_sync(), main_loop)
+    else:
+        logger.error("Main loop not found, cannot run userbotsync")
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
