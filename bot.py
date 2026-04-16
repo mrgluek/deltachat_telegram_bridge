@@ -3095,7 +3095,7 @@ async def main():
 
                 @userbot_client.on(tg_events.Raw)
                 async def on_raw_userbot(event):
-                    # For debugging connection drops in logs
+                    # For debugging or future extensions
                     pass
 
                 await userbot_client.start()
@@ -3114,7 +3114,23 @@ async def main():
 
     # 2. Start DC Bot in a background thread
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, start_dc_bot)
+    dc_task = loop.run_in_executor(None, start_dc_bot)
+
+    # Main heart-beat and sync loop
+    import time
+    last_sync = time.time()
+    
+    logger.info("Bridge is now fully running. Waiting for events...")
+    try:
+        while True:
+            await asyncio.sleep(10)
+            now = time.time()
+            if (now - last_sync) > 3600: # 1 hour interval
+                if userbot_client and userbot_client.is_connected():
+                    asyncio.create_task(sync_userbot_channels())
+                last_sync = now
+    except asyncio.CancelledError:
+        pass
 
     # Cleanup when DC bot exits
     logger.info("Shutting down Telegram bot...")
