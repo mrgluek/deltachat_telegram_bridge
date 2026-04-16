@@ -2779,6 +2779,11 @@ async def _process_userbot_event(event, is_edit=False):
         return
 
     text = msg.text or ""
+    
+    # Filter out commands in Userbot mode
+    if text.startswith('/'):
+        return
+
     # Add link to original post
     sender_name = "✏️ [Edited]" if is_edit else ""
     if msg.chat and getattr(msg.chat, 'username', None):
