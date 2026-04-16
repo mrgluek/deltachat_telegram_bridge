@@ -1606,7 +1606,9 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             return f"⚠️ Channel {html.escape(channel_title)} is already bridged to DC Chat ID {existing}."
 
         # 3. Create DC Broadcast Group
-        dc_chat_id = dc_bot_instance.rpc.create_group_chat(dc_accid, channel_title, True)
+        # Many RPC versions require 3 args for create_group_chat
+        dc_chat_id = dc_bot_instance.rpc.create_group_chat(dc_accid, channel_title, False)
+        dc_bot_instance.rpc.set_chat_type(dc_accid, dc_chat_id, 2) # 2 = Broadcast
         
         # Avatar copying
         try:
@@ -1650,7 +1652,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 f"✅ Channel {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
-                f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}"
+                f"🔗 Subscribe in Delta Chat:\n{invite_link}"
             )
         else:
             return "❌ Failed to save channel to database (may already exist)."
