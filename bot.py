@@ -438,6 +438,63 @@ def help_command(bot, accid, event):
     help_msg = get_dc_help_text(sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
 
+@dc_cli.on(events.NewMessage(command="/channeladd"))
+def dc_channeladd_command(bot, accid, event):
+    """Add a channel bridge from Delta Chat. Admin only."""
+    msg = event.msg
+    payload = event.payload.strip()
+    
+    # Simple email-based admin check
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
+        return
+
+    if not payload:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /channeladd @username or t.me link"))
+        return
+
+    # Use a task since _add_channel_bridge is async
+    async def run_add():
+        status_id = bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
+        result = await _add_channel_bridge(payload)
+        # Convert HTML response to Markdown for DC
+        result_md = result.replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`")
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=result_md))
+    
+    asyncio.create_task(run_add())
+
+@dc_cli.on(events.NewMessage(command="/channelremove"))
+def dc_channelremove_command(bot, accid, event):
+    """Remove a channel bridge from Delta Chat. Admin only."""
+    msg = event.msg
+    payload = event.payload.strip()
+    
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
+        return
+
+    if not payload:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /channelremove N (channel number)"))
+        return
+
+    try:
+        channel_id = int(payload)
+        ch = database.get_channel_by_id(channel_id)
+        if not ch:
+             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+             return
+             
+        if database.remove_channel(channel_id):
+             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
+        else:
+             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
+    except ValueError:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Invalid channel number."))
+
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
     """Bridge a Delta Chat group to a Telegram group. Admin only."""
@@ -632,18 +689,23 @@ def channels_command_dc(bot, accid, event):
         tg_username = ch['tg_channel_username']
         tg_id = ch.get('tg_channel_id', 0)
         
+        # Get counts
+        r_count = ch.get('reactions_count', 0)
         m_count = database.get_bridge_message_count(dc_cid, tg_id)
+        tg_sub_count = ch.get('tg_participants_count', 0)
+        
         try:
             chat_info = bot.rpc.get_basic_chat_info(accid, dc_cid)
             title = chat_info.get("name", "Unknown Channel")
             contacts = bot.rpc.get_chat_contacts(accid, dc_cid)
-            sub_count = len(contacts) - 1 if contacts else 0
+            dc_sub_count = len(contacts) - 1 if contacts else 0
         except Exception:
             title = "Unknown Channel"
-            sub_count = "?"
+            dc_sub_count = "?"
 
-        # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 7 👤 1 💬
-        lines.append(f"/channel{ch['id']} — {title} (t.me/{tg_username}) — {sub_count} 👤 {m_count} 💬")
+        # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 👤 150k TG / 7 DC — 💬 1
+        stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
+        lines.append(f"/channel{ch['id']} — {title} (t.me/{tg_username}) — {stats_str}")
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
     bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
@@ -1438,6 +1500,130 @@ async def _check_channel_admin(update: Update) -> bool:
     return True
 
 
+async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> str:
+    """Core logic to bridge a TG channel/group. Shared between TG and DC commands."""
+    global dc_bot_instance, dc_accid, userbot_client
+    
+    if not dc_bot_instance or not dc_accid:
+        return "❌ Error: Delta Chat bot not initialized."
+
+    username = target.strip()
+    is_numeric = False
+    numeric_id = 0
+    
+    # Support t.me links
+    if "t.me/" in username:
+        username = username.split('/')[-1]
+    
+    if username.startswith('@'):
+        username = username[1:]
+    
+    try:
+        numeric_id = int(username)
+        is_numeric = True
+    except ValueError:
+        pass
+    
+    display_name = f"@{username}" if not is_numeric else f"ID {numeric_id}"
+    
+    try:
+        # 1. Resolve entity
+        channel_title = ""
+        tg_channel_id = None
+        resolved_username = username
+        avatar_file = None
+        
+        # Try Bot API first (if it's a public channel or bot is member)
+        try:
+            chat_arg = numeric_id if is_numeric else f"@{username}"
+            tg_chat_info = await tg_app.bot.get_chat(chat_arg)
+            if tg_chat_info.type not in ("channel", "group", "supergroup"):
+                 return f"❌ <code>{html.escape(display_name)}</code> is not a channel or group."
+            
+            channel_title = tg_chat_info.title or display_name
+            tg_channel_id = tg_chat_info.id
+            resolved_username = tg_chat_info.username
+            if tg_chat_info.photo:
+                avatar_file = await tg_chat_info.photo.get_big_file()
+        except Exception:
+            # Fallback to userbot
+            if not userbot_client or not userbot_client.is_connected():
+                 return f"❌ Could not resolve <code>{html.escape(display_name)}</code> (Bot API failed and Userbot not connected)."
+            
+            try:
+                chat_arg = numeric_id if is_numeric else username
+                entity = await userbot_client.get_entity(chat_arg)
+                if getattr(entity, 'left', True):
+                    if JoinChannelRequest:
+                        await userbot_client(JoinChannelRequest(entity))
+                
+                from telethon.utils import get_peer_id
+                tg_channel_id = get_peer_id(entity)
+                channel_title = getattr(entity, 'title', display_name)
+                resolved_username = getattr(entity, 'username', username)
+            except Exception as e:
+                return f"❌ Failed to resolve chat (Userbot error): {html.escape(str(e))}"
+
+        # 2. Check if already bridged
+        existing = database.get_dc_channel_chat_id(tg_channel_id)
+        if existing:
+            return f"⚠️ Channel {html.escape(channel_title)} is already bridged to DC Chat ID {existing}."
+
+        # 3. Create DC Broadcast Group
+        dc_chat_id = dc_bot_instance.rpc.create_group_chat(dc_accid, channel_title)
+        dc_bot_instance.rpc.set_chat_type(dc_accid, dc_chat_id, 2) # Broadcast
+        
+        # Avatar copying
+        try:
+            if avatar_file:
+                avatar_path = f"tmp_avatar_{tg_channel_id}.jpg"
+                await avatar_file.download_to_drive(custom_path=avatar_path)
+                dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
+                try: os.unlink(avatar_path)
+                except: pass
+            elif userbot_client:
+                photo = await userbot_client.download_profile_photo(tg_channel_id)
+                if photo:
+                    dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, photo)
+                    try: os.unlink(photo)
+                    except: pass
+        except Exception as e:
+            logger.warning(f"Could not copy avatar for {channel_title}: {e}")
+
+        # 4. Generate invite link
+        invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
+        if invite_link.startswith("OPEN-CHAT:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[10:]
+        elif invite_link.startswith("OPEN:"):
+            invite_link = "https://i.delta.chat/#" + invite_link[5:]
+
+        # 5. Save to DB
+        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id)
+
+        if row_id:
+            # Sync subscriber stats immediately
+            try:
+                entity = await userbot_client.get_entity(tg_channel_id)
+                await update_tg_channel_stats(row_id, entity)
+            except: pass
+                
+            title_display = f"<b>{html.escape(channel_title)}</b>"
+            if resolved_username:
+                title_display += f" (@{html.escape(resolved_username)})"
+            
+            return (
+                f"✅ Channel {title_display} bridged!\n\n"
+                f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
+                f"🆔 Channel #{row_id}\n\n"
+                f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}"
+            )
+        else:
+            return "❌ Failed to save channel to database (may already exist)."
+
+    except Exception as e:
+        logger.error(f"Failed to bridge channel: {e}")
+        return f"❌ Internal Error: {html.escape(str(e))}"
+
 async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bridge a Telegram channel to a new DC broadcast channel."""
     if not await _check_channel_admin(update):
@@ -1455,172 +1641,11 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     raw_arg = context.args[0].strip()
-    # Support t.me links by extracting the username part
-    if "t.me/" in raw_arg:
-        # Extract the part after the last slash
-        parts = raw_arg.split("/")
-        candidate = parts[-1].split("?")[0]
-        if not candidate and len(parts) > 1:
-            candidate = parts[-2].split("?")[0]
-        raw_arg = candidate
-
-    # Determine if the argument is a numeric ID or a username
-    is_numeric = False
-    try:
-        numeric_id = int(raw_arg)
-        is_numeric = True
-    except ValueError:
-        numeric_id = None
-
-    if is_numeric:
-        # --- Numeric ID path (private channels) ---
-        if database.get_channel_by_tg_id(numeric_id):
-            await update.message.reply_text(f"❌ Channel <code>{numeric_id}</code> is already bridged.", parse_mode='HTML')
-            return
-    else:
-        # --- Username path ---
-        username = raw_arg.lstrip("@").strip()
-        if not username:
-            await update.message.reply_text("❌ Please provide a valid channel username or numeric ID.")
-            return
-        if database.get_channel_by_tg_username(username):
-            await update.message.reply_text(f"❌ Channel <code>@{html.escape(username)}</code> is already bridged.", parse_mode='HTML')
-            return
-
-    if not dc_bot_instance or not dc_accid:
-        await update.message.reply_text("❌ Delta Chat bot is not ready yet.")
-        return
-
-    display_name = str(numeric_id) if is_numeric else f"@{username}"
-    await update.message.reply_text(f"⏳ Setting up channel bridge for <code>{html.escape(display_name)}</code>...", parse_mode='HTML')
-
-    try:
-        # Fetch TG channel info
-        channel_title = display_name
-        tg_channel_id = None
-        resolved_username = username
-        avatar_file = None
-        
-        try:
-            chat_arg = numeric_id if is_numeric else f"@{username}"
-            tg_chat_info = await context.bot.get_chat(chat_arg)
-            if tg_chat_info.type not in ("channel", "group", "supergroup"):
-                await update.message.reply_text(f"❌ <code>{html.escape(display_name)}</code> is not a channel or group.", parse_mode='HTML')
-                return
-
-            # Check if the bot is admin in that channel
-            try:
-                bot_member = await tg_chat_info.get_member(context.bot.id)
-                if bot_member.status != "administrator":
-                    raise Exception("Bot is not an administrator")
-            except Exception as e:
-                # Bot is not admin or not in channel, throw to trigger fallback
-                raise Exception(f"Validation failed: {e}")
-
-            # Check if the user is admin in that channel (unless global admin)
-            admin_tg_id = database.get_config("admin_tg_id")
-            if not admin_tg_id or str(update.effective_user.id) != str(admin_tg_id):
-                try:
-                    user_member = await tg_chat_info.get_member(update.effective_user.id)
-                    if user_member.status not in ("administrator", "creator"):
-                        await update.message.reply_text(f"❌ Only administrators of <code>{html.escape(display_name)}</code> can bridge it.", parse_mode='HTML')
-                        return
-                except Exception:
-                    await update.message.reply_text(f"❌ Could not verify your permissions in {html.escape(display_name)}. Are you an administrator there?", parse_mode='HTML')
-                    return
-
-            channel_title = tg_chat_info.title or display_name
-            tg_channel_id = tg_chat_info.id
-            resolved_username = tg_chat_info.username
-            if tg_chat_info.photo:
-                avatar_file = await tg_chat_info.photo.get_big_file()
-                
-        except Exception as e:
-            # Fallback to userbot
-            if userbot_client:
-                try:
-                    chat_arg = numeric_id if is_numeric else username
-                    entity = await userbot_client.get_entity(chat_arg)
-                    if getattr(entity, 'left', True):
-                        if JoinChannelRequest:
-                            await userbot_client(JoinChannelRequest(entity))
-                            
-                    from telethon.utils import get_peer_id
-                    raw_id = get_peer_id(entity)
-                    # Telethon returns -100 prefix for channels in get_peer_id
-                    tg_channel_id = raw_id
-                    channel_title = getattr(entity, 'title', display_name)
-                    resolved_username = getattr(entity, 'username', username)
-                    
-                    # Also try to get avatar via userbot if needed (omitted for brevity, will leave avatar empty)
-                except Exception as userbot_e:
-                    err_msg = str(userbot_e)
-                    if "bot users is restricted" in err_msg:
-                        logger.error("Userbot is logged in as a BOT. It cannot join channels. Re-login with a phone number.")
-                        await update.message.reply_text("❌ <b>Userbot error:</b> Your Userbot module is logged in as a bot token, not a phone number. It lacks permissions to join channels. Please use <code>init userbot</code> with a phone number.", parse_mode='HTML')
-                    else:
-                        logger.warning(f"Could not fetch TG channel info via bot or userbot for {display_name}: PTB: {e}, Telethon: {userbot_e}")
-                        await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code> or access denied.", parse_mode='HTML')
-                    return
-            else:
-                logger.warning(f"Could not fetch TG channel info for {display_name}: {e}")
-                await update.message.reply_text(f"❌ Could not find channel <code>{html.escape(display_name)}</code>. Is the bot added as admin? (Userbot not configured)", parse_mode='HTML')
-                return
-
-        # Create DC broadcast channel
-        dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
-
-        # Copy TG channel avatar to DC broadcast
-        try:
-            if avatar_file:
-                tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
-                os.close(tmp_fd)
-                await avatar_file.download_to_drive(custom_path=avatar_path)
-                dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, avatar_path)
-                try:
-                    os.unlink(avatar_path)
-                except Exception:
-                    pass
-                logger.info(f"Copied avatar from {display_name} to DC broadcast {dc_chat_id}")
-            elif userbot_client and tg_channel_id:
-                # Userbot fallback to download profile photo
-                photo = await userbot_client.download_profile_photo(tg_channel_id)
-                if photo:
-                    dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, photo)
-                    try:
-                        os.unlink(photo)
-                    except Exception:
-                        pass
-                    logger.info(f"Copied avatar (via userbot) from {display_name} to DC broadcast {dc_chat_id}")
-        except Exception as e:
-            logger.warning(f"Could not copy avatar for {display_name}: {e}")
-        # Generate invite link
-        invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
-        if invite_link.startswith("OPEN-CHAT:"):
-            invite_link = "https://i.delta.chat/#" + invite_link[10:]
-        elif invite_link.startswith("OPEN:"):
-            invite_link = "https://i.delta.chat/#" + invite_link[5:]
-
-        # Save to DB
-        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=update.effective_user.id)
-
-        if row_id:
-            title_display = f"<b>{html.escape(channel_title)}</b>"
-            if resolved_username:
-                title_display += f" (@{html.escape(resolved_username)})"
-            await update.message.reply_text(
-                f"✅ Channel {title_display} bridged!\n\n"
-                f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
-                f"🆔 Channel #{row_id}\n\n"
-                f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
-                parse_mode='HTML',
-                disable_web_page_preview=True
-            )
-        else:
-            await update.message.reply_text("❌ Failed to save channel to database (may already exist).")
-    except Exception as e:
-        logger.error(f"Failed to add channel {display_name}: {e}")
-        await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
+    status_msg = await update.message.reply_text("⏳ Processing bridge request...")
+    
+    result = await _add_channel_bridge(raw_arg, creator_tg_id=update.effective_user.id)
+    await status_msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
+    return
 
 async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually trigger a Userbot subscription sync."""
@@ -1714,20 +1739,23 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         dc_cid = ch['dc_chat_id']
         tg_id = ch.get('tg_channel_id', 0)
         r_count = ch.get('reactions_count', 0)
+        r_count = ch.get('reactions_count', 0)
         m_count = database.get_bridge_message_count(dc_cid, tg_id)
+        tg_sub_count = ch.get('tg_participants_count', 0)
         
         try:
             chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
             title = chat_info.get("name", "Unknown Channel")
             # Get subscriber count (minus the bot itself)
             contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
-            sub_count = len(contacts) - 1 if contacts else 0
+            dc_sub_count = len(contacts) - 1 if contacts else 0
         except Exception:
             title = "Unknown Channel"
-            sub_count = "?"
+            dc_sub_count = "?"
 
         tg_ref = f"t.me/{ch['tg_channel_username']}" if ch['tg_channel_username'] else f"ID: {ch['tg_channel_id']}"
-        lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {sub_count} 👤 {m_count} 💬")
+        stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
+        lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {stats_str}")
     lines.append(f"\nUse <code>/channel N</code> for invite link")
     await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
@@ -2642,6 +2670,31 @@ async def db_cleanup_loop():
 
 _is_syncing_userbot = False
 
+async def update_tg_channel_stats(channel_id: int, tg_peer):
+    """Fetch real participant count from TG and save to DB."""
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+    
+    try:
+        from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.tl.functions.messages import GetFullChatRequest
+        from telethon.tl.types import Channel, Chat
+        
+        full = None
+        if isinstance(tg_peer, Channel):
+             full = await userbot_client(GetFullChannelRequest(tg_peer))
+        elif isinstance(tg_peer, Chat):
+             full = await userbot_client(GetFullChatRequest(tg_peer.id))
+        
+        if full and hasattr(full, 'full_chat'):
+            count = getattr(full.full_chat, 'participants_count', 0)
+            if count:
+                database.update_channel_stats(channel_id, count)
+                return count
+    except Exception as e:
+        logger.warning(f"Failed to fetch stats for TG peer: {e}")
+    return 0
+
 async def sync_userbot_channels(force=False):
     """
     Ensures the userbot is a member of all bridged channels.
@@ -2688,12 +2741,18 @@ async def sync_userbot_channels(force=False):
                     if JoinChannelRequest:
                         await userbot_client(JoinChannelRequest(entity))
                         joined_count += 1
+                        # Update stats after joining
+                        chan_id = chan.get('id')
+                        if chan_id:
+                            await update_tg_channel_stats(chan_id, entity)
                         # Human-like delay
                         delay = random.uniform(5, 20)
                         await asyncio.sleep(delay)
                 else:
-                    # Already a member
-                    pass
+                    # Already a member, update stats
+                    chan_id = chan.get('id')
+                    if chan_id:
+                        await update_tg_channel_stats(chan_id, entity)
             except Exception as e:
                 logger.warning(f"Userbot: Could not sync/join channel {target}: {e}")
                 chan_id = chan.get('id', '?')

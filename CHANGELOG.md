@@ -1,4 +1,9 @@
-# Changelog
+## [Unreleased]
+### Added
+- **Real Telegram Stats**: The bridge now fetches real subscriber counts from Telegram via Userbot.
+- **Improved `/channels` list**: Shows both Telegram and Delta Chat subscriber/member counts.
+- **DC Admin Commands**: Added `/channeladd` and `/channelremove` to Delta Chat (restricted to `admin_dc_email`).
+- **Code Refactoring**: Unified channel bridging logic for better maintainability.
 
 All notable changes to this project will be documented in this file.
 

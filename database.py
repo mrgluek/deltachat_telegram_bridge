@@ -113,11 +113,11 @@ def init_db():
                 cursor.execute("ALTER TABLE bridges ADD COLUMN reactions_count INTEGER DEFAULT 0")
         except Exception:
             pass
-        # Migration: add reactions_count to channels
+        # Migration: add tg_participants_count to channels
         try:
             col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
-            if 'reactions_count' not in col_names:
-                cursor.execute("ALTER TABLE channels ADD COLUMN reactions_count INTEGER DEFAULT 0")
+            if 'tg_participants_count' not in col_names:
+                cursor.execute("ALTER TABLE channels ADD COLUMN tg_participants_count INTEGER DEFAULT 0")
         except Exception:
             pass
         conn.commit()
@@ -463,6 +463,18 @@ def get_channel_by_tg_id(tg_channel_id: int) -> dict | None:
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
+
+def update_channel_stats(channel_id: int, participants_count: int):
+    """Update subscription statistics for a channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channels SET tg_participants_count = ? WHERE id = ?",
+            (participants_count, channel_id)
+        )
+        conn.commit()
+        conn.close()
 
 def get_all_channels() -> list[dict]:
     """Return all channel rows."""

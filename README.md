@@ -261,8 +261,13 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 Any Delta Chat user (not just admins) can use these commands in a private chat with the bot or in a group:
 
-- `/channels` — List all available **public** Telegram channels.
+- `/channels` — List all available **public** Telegram channels (shows TG and DC stats).
 - `/channelN` — Get the text invite link for channel #N (e.g., `/channel5`).
+- `/channelNqr` — Get the QR code invite for channel #N.
+
+#### Management (Admin only)
+- `/channeladd @username` — Bridge a new channel (admin email check).
+- `/channelremove N` — Remove bridge for channel #N.
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/stats` — Show bridge statistics for the current chat.
 - `/help` — Show Delta Chat bot help.
