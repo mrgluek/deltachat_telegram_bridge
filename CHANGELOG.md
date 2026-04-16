@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-04-16]
+### Added
+- **Delta Chat Channel Discovery:** Added `/channels` command to the Delta Chat bot for browsing public Telegram channels.
+- **Easy Subscriptions:** Added support for `/channelN` (link) and `/channelNqr` (QR code) commands in Delta Chat.
+- **Improved Statistics:** Removed reaction counts (🙂) from channel stats as they are not currently relevant for broadcast bridges.
+- **Better Formatting:** Switched to `t.me/username` format in channel lists.
+- **QR Code Support:** Integrated `qrcode` library to generate invite link images.
+
+## [2026-04-15]
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -70,8 +80,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Telegram channel → Delta Chat broadcast bridging (one-way relay of posts with media/avatar sync).
-- `/invite` and `/inviteqr` commands on Telegram side for generating DC join links/QRs.
-- `/stats` command for bridge statistics (group-specific in groups, summary in private chat).
+- These commands are available for use in Delta Chat by any user interacting with the bot.
+
+- `/channels` - List all available public Telegram channels.
+- `/channelN` - Get the text invite link for channel number N (e.g., `/channel5`).
+- `/channelNqr` - Get the QR code image for channel number N.
+- `/help` - Show Delta Chat bot help.
+- `/stats` - Show bridge statistics for the current chat.
+- `/locupdate` - (Reply only) Fetch latest coordinates for a live location message.
+
+### Telegram Management Commands (Owner Only)
 
 ## [2026-03-18]
 

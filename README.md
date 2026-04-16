@@ -248,14 +248,24 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 ### Commands (private chat, admin/sub-admin)
 
 | Command | Description |
-| --------- | ------------- |
-| `/channeladd @name or ID` | Bridge a TG channel/group to a new DC broadcast (Owner only) |
-| `/channels` | List all bridged channels (Owner only) |
-| `/channel N` | Show invite link for channel #N (Owner only) |
-| `/channelqr N` | Show QR code invite for channel #N (Owner only) |
-| `/channelremove N` | Remove channel bridge #N (Owner only) |
-| `/userbotsync` | Force re-sync Userbot subscriptions (Owner only) |
-| `/groups` | List technical account's groups for easy bridging (Owner only) |
+|---------|-------------|
+| `/channeladd <target>` | Create a bridge for a Telegram channel or group |
+| `/channelremove <target>` | Remove a channel bridge |
+| `/channels` | List bridged channels (as admin, private chat) |
+| `/channel N` | Get invite link for channel by its internal number |
+| `/channelqr N` | Get QR code image for channel by its internal number |
+| `/userbotsync` | Force re-sync Userbot subscriptions |
+| `/groups` | List technical account's groups for easy bridging |
+
+## Delta Chat User Commands
+
+Any Delta Chat user (not just admins) can use these commands in a private chat with the bot or in a group:
+
+- `/channels` — List all available **public** Telegram channels.
+- `/channelN` — Get the text invite link for channel #N (e.g., `/channel5`).
+- `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
+- `/stats` — Show bridge statistics for the current chat.
+- `/help` — Show Delta Chat bot help.
 
 ## Userbot Mode (Bridging without Admin permissions)
 

@@ -594,13 +594,55 @@ def stats_command(bot, accid, event):
         lines = ["📊 Bridge Statistics\n"]
         for tg_cid in tg_chats:
             m_count = database.get_bridge_message_count(chat_id, tg_cid)
-            r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
             try:
                 title = bot.rpc.get_basic_chat_info(accid, chat_id).get("name", "this group")
             except Exception:
                 title = "this group"
-            lines.append(f"• TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+            
+            # Reactions are not relevant for broadcast channels, only show for groups if we have them
+            # But the request says remove for channels. In group bridge, we keep it if it's a 2-way group.
+            r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
+            lines.append(f"• TG {tg_cid} ({title}) — {m_count} 💬")
+            if r_count > 0:
+                lines.append(f" {r_count} 🙂")
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="".join(lines)))
+
+
+@dc_cli.on(events.NewMessage(command="/channels"))
+def channels_command_dc(bot, accid, event):
+    """List public bridged channels to Delta Chat users."""
+    msg = event.msg
+    chat_id = msg.chat_id
+
+    channels = database.get_all_channels()
+    # Filter only public channels (those with a username)
+    public_channels = [c for c in channels if c.get('tg_channel_username')]
+
+    if not public_channels:
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="📺 No public channels are currently available."))
+        return
+
+    lines = ["📺 <b>Public Channels</b>\n"]
+    for ch in public_channels:
+        dc_cid = ch['dc_chat_id']
+        tg_username = ch['tg_channel_username']
+        tg_id = ch.get('tg_channel_id', 0)
+        
+        m_count = database.get_bridge_message_count(dc_cid, tg_id)
+        try:
+            chat_info = bot.rpc.get_basic_chat_info(accid, dc_cid)
+            title = chat_info.get("name", "Unknown Channel")
+            contacts = bot.rpc.get_chat_contacts(accid, dc_cid)
+            sub_count = len(contacts) - 1 if contacts else 0
+        except Exception:
+            title = "Unknown Channel"
+            sub_count = "?"
+
+        # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 7 👤 1 💬
+        lines.append(f"/channel{ch['id']} — {html.escape(title)} (t.me/{tg_username}) — {sub_count} 👤 {m_count} 💬")
+    
+    lines.append(f"\nClick <code>/channelN</code> for link or <code>/channelNqr</code> for QR code.")
+    bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines), parse_mode='html'))
 
 
 @dc_cli.on(events.NewMessage(is_info=False))
@@ -608,11 +650,71 @@ def handle_dc_message(bot, accid, event):
     """Relay Delta Chat messages to Telegram."""
     global tg_app
 
-    if bot.has_command(event.command):
-        return  # Ignore commands
-
     msg = event.msg
     dc_chat_id = msg.chat_id
+
+    if bot.has_command(event.command):
+        return  # Ignore standard commands
+    
+    # Handle /channelN and /channelNqr commands for subscriptions
+    text = msg.text or ""
+    cmd = text.split()[0] if text else ""
+    
+    if cmd.startswith("/channel") and any(c.isdigit() for c in cmd):
+        try:
+            is_qr = cmd.endswith("qr")
+            id_str = cmd[8:-2] if is_qr else cmd[8:]
+            if not id_str.isdigit():
+                 # Handle cases like /channel123qr where id_str is "123"
+                 import re
+                 match = re.search(r'(\d+)', cmd[8:])
+                 if match:
+                     channel_id = int(match.group(1))
+                 else:
+                     return # Not a valid command
+            else:
+                channel_id = int(id_str)
+                
+            ch = database.get_channel_by_id(channel_id)
+            if ch:
+                invite_link = ch.get('invite_link', '')
+                if not invite_link:
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text="❌ No invite link available for this channel."))
+                    return
+                
+                if is_qr:
+                    import qrcode
+                    import tempfile
+                    import os
+                    
+                    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                    qr.add_data(invite_link)
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="black", back_color="white")
+                    
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = tmp.name
+                        img.save(tmp_path)
+                    
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(
+                        text=f"📷 QR Code for <b>{html.escape(ch.get('tg_channel_username', 'channel'))}</b>", 
+                        file=tmp_path, 
+                        parse_mode='html'
+                    ))
+                    
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                else:
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel <b>{html.escape(ch.get('tg_channel_username', ''))}</b>:\n\n{invite_link}", parse_mode='html'))
+                return
+            else:
+                bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+                return
+        except Exception as e:
+            logger.error(f"Error handling /channelN(qr): {e}")
+            return
 
     # Skip bot's own messages to prevent echo loops
     if bot_contact_id and msg.from_id == bot_contact_id:
@@ -1576,8 +1678,8 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             title = "Unknown Channel"
             sub_count = "?"
 
-        tg_ref = f"@{html.escape(ch['tg_channel_username'])}" if ch['tg_channel_username'] else f"ID: <code>{ch['tg_channel_id']}</code>"
-        lines.append(f"#{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {sub_count} 👤 {m_count} 💬 {r_count} 🙂")
+        tg_ref = f"t.me/{ch['tg_channel_username']}" if ch['tg_channel_username'] else f"ID: {ch['tg_channel_id']}"
+        lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {sub_count} 👤 {m_count} 💬")
     lines.append(f"\nUse <code>/channel N</code> for invite link")
     await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
