@@ -2180,6 +2180,11 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         sender_name += f" {sender.last_name}"
 
     text = msg.text or msg.caption or ""
+    
+    # Filter out commands in edits
+    if text.startswith('/'):
+        return
+
     entities = msg.entities or msg.caption_entities or []
     text = _inline_links(text, entities)
 
@@ -2232,6 +2237,11 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_name += f" {sender.last_name}"
 
     text = update.message.text or update.message.caption or ""
+    
+    # Filter out commands
+    if text.startswith('/'):
+        return
+
     # Inline hidden links so they are not lost in DC
     entities = update.message.entities or update.message.caption_entities or []
     text = _inline_links(text, entities)
