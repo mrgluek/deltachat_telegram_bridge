@@ -2838,8 +2838,8 @@ async def sync_userbot_channels(force=False):
         database.set_config("userbot_last_user_id", str(me.id))
         logger.info(f"Userbot sync completed. Joined {joined_count} channels.")
         
-        # Notify owner if there are failed channels
-        if failed_reports:
+        # Notify owner if there are failed channels (skip repeating warnings on periodic syncs)
+        if failed_reports and (force or joined_count > 0):
             admin_tg_id = database.get_config("admin_tg_id")
             if admin_tg_id and tg_app:
                 try:
