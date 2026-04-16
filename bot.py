@@ -626,7 +626,7 @@ def channels_command_dc(bot, accid, event):
         bot.rpc.send_msg(accid, chat_id, MsgData(text="📺 No public channels are currently available."))
         return
 
-    lines = ["📺 *Public Channels*\n"]
+    lines = ["📺 **Public Channels:**\n"]
     for ch in public_channels:
         dc_cid = ch['dc_chat_id']
         tg_username = ch['tg_channel_username']
@@ -700,8 +700,16 @@ def handle_dc_message(bot, accid, event):
                         tmp_path = tmp.name
                         img.save(tmp_path)
                     
+                    title = ch.get('title')
+                    if not title:
+                         try:
+                             chat_info = bot.rpc.get_basic_chat_info(accid, ch['dc_chat_id'])
+                             title = chat_info.get("name", "channel")
+                         except Exception:
+                             title = "channel"
+                    
                     bot.rpc.send_msg(accid, dc_chat_id, MsgData(
-                        text=f"📷 QR Code for *{ch.get('tg_channel_username', 'channel')}*", 
+                        text=f"📷 QR Code for **{title}** (t.me/{ch.get('tg_channel_username', '')})", 
                         file=tmp_path
                     ))
                     
@@ -710,7 +718,15 @@ def handle_dc_message(bot, accid, event):
                     except Exception:
                         pass
                 else:
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel *{ch.get('tg_channel_username', '')}*:\n\n{invite_link}"))
+                    title = ch.get('title')
+                    if not title:
+                         try:
+                             chat_info = bot.rpc.get_basic_chat_info(accid, ch['dc_chat_id'])
+                             title = chat_info.get("name", "channel")
+                         except Exception:
+                             title = "channel"
+                    
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}** (t.me/{ch.get('tg_channel_username', '')}):\n\n{invite_link}"))
                 return
             else:
                 bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
