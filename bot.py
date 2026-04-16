@@ -731,8 +731,12 @@ def handle_dc_message(bot, accid, event):
                          except Exception:
                              title = "channel"
                     
+                    # Format caption: Only include t.me link if it exists
+                    tg_username = ch.get('tg_channel_username')
+                    link_part = f" (t.me/{tg_username})" if tg_username else ""
+                    
                     bot.rpc.send_msg(accid, dc_chat_id, MsgData(
-                        text=f"📷 QR Code for **{title}** (t.me/{ch.get('tg_channel_username', '')})", 
+                        text=f"📷 QR Code for **{title}**{link_part}", 
                         file=tmp_path
                     ))
                     
@@ -749,7 +753,9 @@ def handle_dc_message(bot, accid, event):
                          except Exception:
                              title = "channel"
                     
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}** (t.me/{ch.get('tg_channel_username', '')}):\n\n{invite_link}"))
+                    tg_username = ch.get('tg_channel_username')
+                    link_part = f" (t.me/{tg_username})" if tg_username else ""
+                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}**{link_part}:\n\n{invite_link}"))
                 return
             else:
                 bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
