@@ -29,6 +29,7 @@ def init_db():
                 dc_chat_id INTEGER,
                 tg_msg_id INTEGER,
                 tg_chat_id INTEGER,
+                content_hash TEXT,
                 PRIMARY KEY (dc_msg_id, dc_chat_id, tg_chat_id)
             )
         ''')
@@ -113,11 +114,11 @@ def init_db():
                 cursor.execute("ALTER TABLE bridges ADD COLUMN reactions_count INTEGER DEFAULT 0")
         except Exception:
             pass
-        # Migration: add tg_participants_count to channels
+        # Migration: add content_hash to message_map
         try:
-            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
-            if 'tg_participants_count' not in col_names:
-                cursor.execute("ALTER TABLE channels ADD COLUMN tg_participants_count INTEGER DEFAULT 0")
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(message_map)").fetchall()]
+            if 'content_hash' not in col_names:
+                cursor.execute("ALTER TABLE message_map ADD COLUMN content_hash TEXT")
         except Exception:
             pass
         conn.commit()
@@ -196,15 +197,15 @@ def get_dc_chats(tg_chat_id: int) -> list[int]:
         conn.close()
         return [row[0] for row in rows]
 
-def save_message_map(dc_msg_id: int, dc_chat_id: int, tg_msg_id: int, tg_chat_id: int):
+def save_message_map(dc_msg_id: int, dc_chat_id: int, tg_msg_id: int, tg_chat_id: int, content_hash: str | None = None):
     """Save a mapping between a DC message and a TG message."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT OR REPLACE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id) VALUES (?, ?, ?, ?)",
-                (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id)
+                "INSERT OR REPLACE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash) VALUES (?, ?, ?, ?, ?)",
+                (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash)
             )
             conn.commit()
         except Exception:
@@ -245,6 +246,19 @@ def get_dc_msg_id(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> int | Non
         cursor = conn.cursor()
         cursor.execute(
             "SELECT dc_msg_id FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ? AND dc_chat_id = ?",
+            (tg_msg_id, tg_chat_id, dc_chat_id)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+def get_message_content_hash(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> str | None:
+    """Look up the stored content hash for a TG message."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT content_hash FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ? AND dc_chat_id = ?",
             (tg_msg_id, tg_chat_id, dc_chat_id)
         )
         row = cursor.fetchone()

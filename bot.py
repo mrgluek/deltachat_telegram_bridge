@@ -8,6 +8,7 @@ import threading
 import random
 from collections import defaultdict
 from typing import Optional
+import hashlib
 
 from deltachat2 import EventType, MsgData, events
 from deltabot_cli import BotCli
@@ -231,22 +232,11 @@ def _is_edit_debounced(chat_id: int, msg_id: int) -> bool:
         _edit_timestamps.clear()  # Simple cleanup
     return False
 
-# Content hash cache to prevent "Ghost Edits" (silent metadata updates like view counts)
-# Key: (tg_chat_id, tg_msg_id) -> hash(text + media_id)
-_msg_content_hashes: dict[tuple[int, int], int] = {}
+def _get_content_hash(msg) -> str:
+    """Return a SHA-256 hash of the message content (text or caption)."""
+    content = msg.text or msg.caption or ""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-def _has_content_changed(chat_id: int, msg_id: int, text: str, media_id: str = None) -> bool:
-    """Returns True if the message content (text or media) has actually changed."""
-    content_str = f"{text}|{media_id or ''}"
-    new_hash = hash(content_str)
-    old_hash = _msg_content_hashes.get((chat_id, msg_id))
-    if old_hash == new_hash:
-        return False
-    _msg_content_hashes[(chat_id, msg_id)] = new_hash
-    # Simple cleanup
-    if len(_msg_content_hashes) > 1000:
-        _msg_content_hashes.clear()
-    return True
 
 def _truncate(text: str, max_len: int) -> str:
     """Truncate text to max_len, appending '…' if truncated."""
@@ -2127,7 +2117,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             msg_data.file = local_file_path
         dc_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if dc_msg_id:
-            database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id)
+            c_hash = _get_content_hash(post)
+            database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=c_hash)
         # Register in edit debounce so link-preview "edits" within 60s are suppressed
         _edit_timestamps[(tg_channel_id, post.message_id)] = time.time()
         
@@ -2196,6 +2187,13 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
         return
 
+    # Filter out updates where content (text/caption) hasn't changed (e.g. reactions or view count updates)
+    new_hash = _get_content_hash(post)
+    old_hash = database.get_message_content_hash(post.message_id, tg_channel_id, dc_chat_id)
+    if old_hash and old_hash == new_hash:
+        # Content hasn't changed, ignore this "edit"
+        return
+
     # Debounce: max 1 edit relay per message per minute
     if _is_edit_debounced(tg_channel_id, post.message_id):
         return
@@ -2223,7 +2221,10 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
             msg_data.override_sender_name = f"✏️ [Edited] {author}"
         else:
             msg_data.override_sender_name = "✏️ [Edited]"
-        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        if dc_sent_id:
+            # Update hash mapping (keep the same mapping but with new hash)
+            database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
         logger.info(f"Relayed edited channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay edited channel post to DC: {e}")
@@ -2280,6 +2281,13 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     if not dc_chats or not dc_bot_instance or not dc_accid:
         return
 
+    # Filter out updates where content (text/caption) hasn't changed
+    new_hash = _get_content_hash(msg)
+    # We check against the first bridged DC chat; usually hashes are sync'd.
+    old_hash = database.get_message_content_hash(msg.message_id, tg_chat_id, dc_chats[0])
+    if old_hash and old_hash == new_hash:
+        return
+
     # Debounce: max 1 edit relay per message per minute
     if _is_edit_debounced(tg_chat_id, msg.message_id):
         return
@@ -2308,7 +2316,9 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         try:
             msg_data = MsgData(text=formatted_msg)
             msg_data.override_sender_name = sender_name
-            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+            dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+            if dc_sent_id:
+                database.save_message_map(dc_sent_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
             logger.info(f"Relayed edited TG msg to DC chat {dc_chat_id}")
         except Exception as e:
             logger.error(f"Failed to relay edited msg to DC chat {dc_chat_id}: {e}")
@@ -2519,7 +2529,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         raise  # Re-raise other exceptions
                 
                 if sent_msg_id:
-                    database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id)
+                    c_hash = _get_content_hash(update.message)
+                    database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id, content_hash=c_hash)
                 # Register in edit debounce so link-preview "edits" within 60s are suppressed
                 _edit_timestamps[(tg_chat_id, update.message.message_id)] = time.time()
                 logger.info(f"Relayed TG msg to DC chat {dc_chat_id}")
