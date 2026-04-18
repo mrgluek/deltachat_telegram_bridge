@@ -1,14 +1,21 @@
 ## [Unreleased]
+
+## [2026-04-18]
+
 ### Added
+
 - **Real Telegram Stats**: The bridge now fetches real subscriber counts from Telegram via Userbot.
 - **Improved `/channels` list**: Shows both Telegram and Delta Chat subscriber/member counts.
 - **DC Admin Commands**: Added `/channeladd` and `/channelremove` to Delta Chat (restricted to `admin_dc_email`).
+- **Donate Command**: Added `/donate` command to get links for supporting the project development.
 - **Code Refactoring**: Unified channel bridging logic for better maintainability.
 
 All notable changes to this project will be documented in this file.
 
 ## [2026-04-16]
+
 ### Added
+
 - **Delta Chat Channel Discovery:** Added `/channels` command to the Delta Chat bot for browsing public Telegram channels.
 - **Easy Subscriptions:** Added support for `/channelN` (link) and `/channelNqr` (QR code) commands in Delta Chat.
 - **Improved Statistics:** Removed reaction counts (🙂) from channel stats as they are not currently relevant for broadcast bridges.
@@ -90,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/channels` - List all available public Telegram channels.
 - `/channelN` - Get the text invite link for channel number N (e.g., `/channel5`).
 - `/channelNqr` - Get the QR code image for channel number N.
+- `/donate` - Get links to support bot development.
 - `/help` - Show Delta Chat bot help.
 - `/stats` - Show bridge statistics for the current chat.
 - `/locupdate` - (Reply only) Fetch latest coordinates for a live location message.

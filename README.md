@@ -81,6 +81,7 @@ Instead of using a local virtual environment, you can run the bot using Docker C
 ## Automatic Updates
 
 The repository includes an `update.sh` script that automates the update process. It performs the following steps:
+
 1. Runs `git fetch` to check for new commits on the remote repository.
 2. Compares the local version with the remote version.
 3. If new changes are found, it runs `git pull`, rebuilds the Docker container (`--build`), and cleans up old images.
@@ -90,10 +91,13 @@ The repository includes an `update.sh` script that automates the update process.
 To have the bot automatically check for updates every 15 minutes, you can set up a cron job:
 
 1. Open your crontab:
+
    ```bash
    crontab -e
    ```
+
 2. Add the following line (replace `/path/to/` with the actual absolute path to the project directory):
+
    ```cron
    */15 * * * * /path/to/deltachat_telegram_bridge/update.sh >> /path/to/deltachat_telegram_bridge/update.log 2>&1
    ```
@@ -101,8 +105,7 @@ To have the bot automatically check for updates every 15 minutes, you can set up
 > [!TIP]
 > You can find the absolute path by running `realpath update.sh` inside the directory.
 
-
-4. **Maintenance and Cleanup**:
+1. **Maintenance and Cleanup**:
 
    To stop the bot and remove containers:
 
@@ -256,6 +259,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/channelqr N` | Get QR code image for channel by its internal number |
 | `/userbotsync` | Force re-sync Userbot subscriptions |
 | `/groups` | List technical account's groups for easy bridging |
+| `/donate` | Support bot development ❤️ |
 
 ## Delta Chat User Commands
 
@@ -264,8 +268,10 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/channels` — List all available **public** Telegram channels (shows TG and DC stats).
 - `/channelN` — Get the text invite link for channel #N (e.g., `/channel5`).
 - `/channelNqr` — Get the QR code invite for channel #N.
+- `/donate` — Support bot development ❤️
 
 #### Management (Admin only)
+
 - `/channeladd @username` — Bridge a new channel (admin email check).
 - `/channelremove N` — Remove bridge for channel #N.
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
@@ -277,12 +283,14 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 If you want to bridge channels where you cannot add the bot as an administrator, you can configure **Userbot Mode**. This allows the bot daemon to act as a regular Telegram client using your personal account.
 
 ### 1. Obtain API Credentials
+
 1. Go to [my.telegram.org](https://my.telegram.org) and log in.
 2. Go to **API development tools**.
 3. Create a new application (e.g., "DC-TG-Bridge").
 4. Copy your **App api_id** and **App api_hash**.
 
 ### 2. Configure Credentials
+
 Run these commands inside your environment (or via `docker-compose exec bridge python bot.py ...`):
 
 ```bash
@@ -291,6 +299,7 @@ python bot.py init api_hash YOUR_API_HASH
 ```
 
 ### 3. Initialize Interactive Login
+
 This step requires entering your phone number and the SMS/Telegram validation code. If using Docker, you must run it interactively:
 
 ```bash
@@ -298,8 +307,10 @@ docker-compose exec bridge python bot.py init userbot
 ```
 
 ### 4. Security Risks
+>
 > [!CAUTION]
 > Using your personal account for Userbot Mode comes with risks:
+>
 > - **Session Security:** A file named `userbot_session.session` will be created. This file is essentially a "master key" to your Telegram account. **Never share it.** Ensure your server has strict file permissions.
 > - **Account Activity:** The bot will join channels on your behalf to read posts.
 > - **API Limits:** While safe for moderate use, intensive API operations can theoretically lead to temporary rate limits or account flags from Telegram's anti-spam systems. It is recommended to use a dedicated "feeder" account if you plan to bridge a very large number of channels.
@@ -307,6 +318,7 @@ docker-compose exec bridge python bot.py init userbot
 ---
 
 ## Double Bridge Protection
+
 If a channel is bridged via both the core bot (as admin) and Userbot Mode, the bridge will automatically deduplicate messages, ensuring Delta Chat users receive only one copy of each post.
 
 ## Changelog

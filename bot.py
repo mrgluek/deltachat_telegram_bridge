@@ -382,7 +382,8 @@ def get_dc_help_text(sender_email: str) -> str:
         f"/channelN — Get invite link for channel #N\n"
         f"/channelNqr — Get QR code invite for channel #N\n"
         f"/stats — Show bridge statistics for current chat\n"
-        f"/help — Show this help message\n\n"
+        f"/help — Show this help message\n"
+        f"/donate — Support bot development ❤️\n\n"
         f"Management (Admins only):\n"
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from the group\n\n"
@@ -405,6 +406,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/stats — Show bridge statistics",
         f"/invite — Get Delta Chat bot/group invite link",
         f"/inviteqr — Get Delta Chat bot/group invite QR code",
+        f"/donate — Support bot development ❤️",
     ]
     if database.is_owner(user_id):
         lines.append(f"\n<b>⚙️ Channel & Userbot (Owner):</b>")
@@ -437,6 +439,18 @@ def help_command(bot, accid, event):
     
     help_msg = get_dc_help_text(sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
+
+@dc_cli.on(events.NewMessage(command="/donate"))
+def dc_donate_command(bot, accid, event):
+    """Reply with donate link."""
+    msg = event.msg
+    support_msg = (
+        "❤️ <b>Support Bot Development</b>\n\n"
+        "If you find this bridge useful, you can support its development and server costs here:\n\n"
+        "🔗 <a href='https://web.tribute.tg/d/IWb'>Support via Tribute</a>\n\n"
+        "Thank you! 🙏"
+    )
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
 
 @dc_cli.on(events.NewMessage(command="/channeladd"))
 def dc_channeladd_command(bot, accid, event):
@@ -1063,6 +1077,16 @@ async def tg_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = html.escape(user.first_name)
     help_msg = get_tg_help_text(name, user.id)
     await update.message.reply_text(help_msg, parse_mode='HTML')
+
+async def tg_donate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply with donate link."""
+    support_msg = (
+        "❤️ <b>Support Bot Development</b>\n\n"
+        "If you find this bridge useful, you can support its development and server costs here:\n\n"
+        "🔗 <a href='https://t.me/tribute/app?startapp=dIWb'>Support via Tribute</a>\n\n"
+        "Thank you! 🙏"
+    )
+    await update.message.reply_html(support_msg, disable_web_page_preview=True)
 
 async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send the Telegram chat ID. Only responds to group admins."""
@@ -3001,6 +3025,7 @@ async def main():
     tg_app.add_error_handler(tg_error_handler)
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
+    tg_app.add_handler(CommandHandler("donate", tg_donate_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
     tg_app.add_handler(CommandHandler("stats", tg_stats_command))
     tg_app.add_handler(CommandHandler("invite", tg_invite_command))
