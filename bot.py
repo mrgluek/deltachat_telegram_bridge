@@ -234,7 +234,10 @@ def _is_edit_debounced(chat_id: int, msg_id: int) -> bool:
 
 def _get_content_hash(msg) -> str:
     """Return a SHA-256 hash of the message content (text or caption)."""
-    content = msg.text or msg.caption or ""
+    # Safe access for both PTB and Telethon objects
+    text = getattr(msg, 'text', "") or ""
+    caption = getattr(msg, 'caption', "") or ""
+    content = text or caption or ""
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
