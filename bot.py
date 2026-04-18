@@ -2910,20 +2910,6 @@ async def _process_userbot_event(event, is_edit=False):
     if is_edit and _is_edit_debounced(tg_channel_id, msg.id):
         return
 
-    text = msg.text or ""
-    # Use msg.file.id or document.id as media key for content comparison
-    media_key = ""
-    if hasattr(msg, 'file') and msg.file:
-        media_key = str(getattr(msg.file, 'id', ''))
-    
-    if is_edit and not _has_content_changed(tg_channel_id, msg.id, text, media_key):
-        # Silent metadata update (views, etc.), skip
-        return
-    
-    # Store/Update hash for the initial message too, so we can compare future edits
-    if not is_edit:
-        _has_content_changed(tg_channel_id, msg.id, text, media_key)
-
     # Check database
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
 
@@ -2938,6 +2924,14 @@ async def _process_userbot_event(event, is_edit=False):
                 database.update_channel_tg_id(chat_username, tg_channel_id)
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
+        return
+
+    # Content-based change detection (prevent ghost edits from reactions/views)
+    new_hash = _get_content_hash(msg)
+    old_hash = database.get_message_content_hash(msg.id, tg_channel_id, dc_chat_id)
+    
+    if is_edit and old_hash and old_hash == new_hash:
+        # Content hasn't changed, ignore metadata update (reactions, views)
         return
 
     text = msg.text or ""
@@ -3002,7 +2996,9 @@ async def _process_userbot_event(event, is_edit=False):
         if file_path:
             msg_data.file = file_path
             
-        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        if sent_id:
+            database.save_message_map(sent_id, dc_chat_id, msg.id, tg_channel_id, content_hash=new_hash)
         logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay userbot post: {e}")
