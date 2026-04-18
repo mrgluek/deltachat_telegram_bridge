@@ -438,9 +438,9 @@ def dc_donate_command(bot, accid, event):
     """Reply with donate link."""
     msg = event.msg
     support_msg = (
-        "❤️ <b>Support Bot Development</b>\n\n"
+        "❤️ Support Bot Development\n\n"
         "If you find this bridge useful, you can support its development and server costs here:\n\n"
-        "🔗 <a href='https://web.tribute.tg/d/IWb'>Support via Tribute</a>\n\n"
+        "🔗 https://web.tribute.tg/d/IWb\n\n"
         "Thank you! 🙏"
     )
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
