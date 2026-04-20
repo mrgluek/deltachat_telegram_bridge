@@ -1653,6 +1653,20 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id)
 
         if row_id:
+            # Relay last 3 messages as history
+            if userbot_client and userbot_client.is_connected():
+                try:
+                    logger.info(f"Fetching history for new bridge: {channel_title}")
+                    history = await userbot_client.get_messages(tg_channel_id, limit=3)
+                    if history:
+                        # Reverse to send oldest first
+                        for msg in reversed(history):
+                            # Small delay to ensure order in DC and avoid rate limits
+                            await asyncio.sleep(0.5)
+                            await _relay_userbot_message(dc_chat_id, msg)
+                except Exception as e:
+                    logger.error(f"Failed to relay history for {channel_title}: {e}")
+
             # Sync subscriber stats immediately
             try:
                 entity = await userbot_client.get_entity(tg_channel_id)
@@ -1667,7 +1681,8 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 f"✅ Channel {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
-                f"🔗 Subscribe in Delta Chat:\n{invite_link}"
+                f"🔗 Subscribe in Delta Chat:\n{invite_link}\n\n"
+                f"<i>(The last 3 posts have been relayed as history)</i>"
             )
         else:
             return "❌ Failed to save channel to database (may already exist)."
@@ -2899,6 +2914,88 @@ async def sync_userbot_channels(force=False):
     finally:
         _is_syncing_userbot = False
 
+async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=None):
+    """Core logic to relay a Telethon message (from event or history) to Delta Chat."""
+    global dc_bot_instance, dc_accid, userbot_client
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+
+    tg_channel_id = msg.chat_id
+    text = msg.text or ""
+    
+    # Filter out commands in Userbot mode
+    if text.startswith('/') and not msg.media:
+        return
+
+    # Base formatted message
+    formatted_msg = text
+    
+    # Add link to original post
+    edit_prefix = "✏️ [Edited]" if is_edit else ""
+    if msg.chat and getattr(msg.chat, 'username', None):
+        formatted_msg = (formatted_msg + f"\n\n🔗 t.me/{msg.chat.username}/{msg.id}").strip()
+
+    if not formatted_msg and not msg.media:
+        return
+
+    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+
+    # Note: downloading media with Telethon if needed
+    file_path = None
+    if msg.media:
+        try:
+            media_size = 0
+            if hasattr(msg, 'file') and msg.file:
+                media_size = msg.file.size or 0
+                
+            if media_size > 50 * 1024 * 1024:
+                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > 50MB")
+                formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
+            else:
+                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
+                tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
+                os.close(tmp_fd)
+                file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
+        except Exception as e:
+            logger.error(f"Failed to download userbot media: {e}")
+
+    try:
+        msg_data = MsgData(text=formatted_msg)
+        
+        # Determine author if not provided
+        if not display_author:
+            if hasattr(msg, 'post_author') and msg.post_author:
+                display_author = msg.post_author
+            else:
+                sender = await msg.get_sender()
+                if sender:
+                    if hasattr(sender, 'first_name'):
+                        display_author = f"{sender.first_name} {getattr(sender, 'last_name', '') or ''}".strip()
+                    elif hasattr(sender, 'title'):
+                        display_author = sender.title
+
+        if display_author:
+            msg_data.override_sender_name = display_author if not is_edit else f"✏️ [Edited] {display_author}"
+        elif is_edit:
+            msg_data.override_sender_name = "✏️ [Edited]"
+        
+        if file_path:
+            msg_data.file = file_path
+            
+        sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        if sent_id:
+            c_hash = _get_content_hash(msg)
+            database.save_message_map(sent_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+        logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC chat {dc_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to relay userbot message: {e}")
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
+
 async def _process_userbot_event(event, is_edit=False):
     """Common logic for userbot new and edited posts."""
     global dc_bot_instance, dc_accid
@@ -2941,80 +3038,8 @@ async def _process_userbot_event(event, is_edit=False):
         # Content hasn't changed, ignore metadata update (reactions, views)
         return
 
-    text = msg.text or ""
-    
-    # Filter out commands in Userbot mode ONLY if they look like actual commands and not channel posts with media
-    # For channels, commands are very rare, so we can be more selective.
-    if text.startswith('/') and not msg.media:
-        return
-
-    # Add link to original post
-    sender_name = "✏️ [Edited]" if is_edit else ""
-    if msg.chat and getattr(msg.chat, 'username', None):
-        text = (text + f"\n\n🔗 t.me/{msg.chat.username}/{msg.id}").strip()
-
-    if not text and not msg.media:
-        return
-
-    formatted_msg = text
-    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
-
-    # Note: downloading media with Telethon if needed
-    file_path = None
-    if msg.media:
-        try:
-            # We save it to a temporary location
-            # Note: handle max file size (e.g. 50MB)
-            media_size = 0
-            if hasattr(msg, 'file') and msg.file:
-                media_size = msg.file.size or 0
-                
-            if media_size > 50 * 1024 * 1024:
-                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > 50MB")
-                formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
-            else:
-                # Attempt to preserve file extension
-                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
-                tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
-                os.close(tmp_fd)
-                file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
-        except Exception as e:
-            logger.error(f"Failed to download userbot media: {e}")
-
-    try:
-        msg_data = MsgData(text=formatted_msg)
-        display_author = None
-        if hasattr(msg, 'post_author') and msg.post_author:
-            display_author = msg.post_author
-        else:
-            # Try to get sender name (for groups)
-            sender = await event.get_sender()
-            if sender:
-                if hasattr(sender, 'first_name'):
-                    display_author = f"{sender.first_name} {getattr(sender, 'last_name', '') or ''}".strip()
-                elif hasattr(sender, 'title'):
-                    display_author = sender.title
-
-        if display_author:
-            msg_data.override_sender_name = display_author if not is_edit else f"✏️ [Edited] {display_author}"
-        elif is_edit:
-            msg_data.override_sender_name = sender_name
-        
-        if file_path:
-            msg_data.file = file_path
-            
-        sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
-        if sent_id:
-            database.save_message_map(sent_id, dc_chat_id, msg.id, tg_channel_id, content_hash=new_hash)
-        logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC broadcast {dc_chat_id}")
-    except Exception as e:
-        logger.error(f"Failed to relay userbot post: {e}")
-    finally:
-        if file_path and os.path.exists(file_path):
-            try:
-                os.unlink(file_path)
-            except Exception:
-                pass
+    # Relay the message using the shared helper
+    await _relay_userbot_message(dc_chat_id, msg, is_edit=is_edit)
 
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""

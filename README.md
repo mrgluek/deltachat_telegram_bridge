@@ -4,6 +4,16 @@ A bot that acts as a bridge between Delta Chat groups and Telegram groups. It re
 
 Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
+## Key Features
+
+- **Bidirectional Group Bridging**: Sync messages between Telegram groups and Delta Chat groups.
+- **Public Telegram Channels**: Bridge any public channel to a Delta Chat broadcast group.
+- **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
+- **Userbot Mode**: Bridge channels without needing administrator permissions.
+- **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
+- **Automatic Updates**: Self-updating via a simple script and cron job.
+- **Admin-Only Management**: Securely bridge channels and groups with restricted access.
+
 ## Prerequisites
 
 - **Python 3.9+** (for local/venv setup)
