@@ -2906,6 +2906,10 @@ async def _process_userbot_event(event, is_edit=False):
     if not msg:
         return
 
+    # Safety check: ensure client is still active
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+
     tg_channel_id = msg.chat_id
     if _mark_processed(tg_channel_id, msg.id):
         return
@@ -3012,6 +3016,51 @@ async def _process_userbot_event(event, is_edit=False):
             except Exception:
                 pass
 
+async def start_userbot():
+    """Initialize and start the Telethon Userbot client."""
+    global userbot_client
+    if not TelegramClient:
+        return
+    
+    api_id = database.get_config("api_id")
+    api_hash = database.get_config("api_hash")
+    if not (api_id and api_hash):
+        return
+
+    try:
+        # Disconnect existing client if it's in a bad state
+        if userbot_client:
+            try:
+                await userbot_client.disconnect()
+            except Exception:
+                pass
+        
+        logger.info("Starting Telethon Userbot client...")
+        userbot_client = TelegramClient('userbot_session', int(api_id), api_hash, sequential_updates=False)
+        
+        @userbot_client.on(tg_events.NewMessage())
+        async def on_new_userbot_msg(event):
+            asyncio.create_task(_process_userbot_event(event, is_edit=False))
+            
+        @userbot_client.on(tg_events.MessageEdited())
+        async def on_edited_userbot_msg(event):
+            asyncio.create_task(_process_userbot_event(event, is_edit=True))
+
+        await userbot_client.start()
+        logger.info("Telethon Userbot client started successfully.")
+        
+        # Auto-sync detection
+        me = await userbot_client.get_me()
+        if me:
+            last_id = database.get_config("userbot_last_user_id")
+            if last_id != str(me.id):
+                logger.info(f"New Userbot account detected ({me.id}). Triggering auto-sync...")
+                database.set_config("userbot_last_user_id", str(me.id))
+                asyncio.create_task(sync_userbot_channels())
+    except Exception as e:
+        logger.error(f"Failed to start Userbot client: {e}")
+        userbot_client = None
+
 async def main():
     global tg_app, main_loop
 
@@ -3110,40 +3159,7 @@ async def main():
     asyncio.create_task(db_cleanup_loop())
 
     # Start Userbot if configured
-    global userbot_client
-    if TelegramClient:
-        api_id = database.get_config("api_id")
-        api_hash = database.get_config("api_hash")
-        if api_id and api_hash:
-            try:
-                userbot_client = TelegramClient('userbot_session', int(api_id), api_hash, sequential_updates=False)
-                
-                @userbot_client.on(tg_events.NewMessage())
-                async def on_new_userbot_msg(event):
-                    asyncio.create_task(_process_userbot_event(event, is_edit=False))
-                    
-                @userbot_client.on(tg_events.MessageEdited())
-                async def on_edited_userbot_msg(event):
-                    asyncio.create_task(_process_userbot_event(event, is_edit=True))
-
-                @userbot_client.on(tg_events.Raw)
-                async def on_raw_userbot(event):
-                    # For debugging or future extensions
-                    pass
-
-                await userbot_client.start()
-                logger.info("Telethon Userbot client started successfully (Concurrency enabled).")
-                
-                # Auto-sync detection
-                me = await userbot_client.get_me()
-                if me:
-                    last_id = database.get_config("userbot_last_user_id")
-                    if last_id != str(me.id):
-                        logger.info(f"New Userbot account detected ({me.id}). Triggering auto-sync...")
-                        asyncio.create_task(sync_userbot_channels())
-            except Exception as e:
-                logger.error(f"Failed to start Userbot client: {e}")
-                userbot_client = None
+    await start_userbot()
 
     # 2. Start DC Bot in a background thread
     loop = asyncio.get_running_loop()
@@ -3152,12 +3168,32 @@ async def main():
     # Main heart-beat and sync loop
     import time
     last_sync = time.time()
+    last_userbot_check = time.time()
     
     logger.info("Bridge is now fully running. Waiting for events...")
     try:
         while True:
             await asyncio.sleep(10)
             now = time.time()
+            
+            # Watchdog for Userbot (check connectivity every 60 seconds)
+            if (now - last_userbot_check) > 60:
+                api_id = database.get_config("api_id")
+                api_hash = database.get_config("api_hash")
+                if api_id and api_hash:
+                    # If client is None OR disconnected OR in a bad state (AttributeError scenario)
+                    is_healthy = False
+                    try:
+                        if userbot_client and await userbot_client.is_user_authorized() and userbot_client.is_connected():
+                            is_healthy = True
+                    except Exception as e:
+                        logger.warning(f"Userbot health check failed: {e}. Attempting restart...")
+                    
+                    if not is_healthy:
+                        logger.info("Userbot client is offline or unhealthy. Restarting...")
+                        await start_userbot()
+                last_userbot_check = now
+
             if (now - last_sync) > 3600: # 1 hour interval
                 if userbot_client and userbot_client.is_connected():
                     asyncio.create_task(sync_userbot_channels())
