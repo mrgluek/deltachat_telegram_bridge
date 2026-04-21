@@ -42,11 +42,12 @@ except ImportError:
 DC_FALLBACK_PATTERN = re.compile(r'\s*\[(?:Image|Video|Voice|Audio|Document|File|Sticker|Gif)[ \-–]+[^\]]+\]', re.IGNORECASE)
 
 # Initialize logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("tg_dc_bridge")
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Global tracker for Userbot background tasks
+_userbot_tasks: set[asyncio.Task] = set()
 
 class PollingErrorFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -2998,6 +2999,21 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
 
 async def _process_userbot_event(event, is_edit=False):
     """Common logic for userbot new and edited posts."""
+    global dc_bot_instance, dc_accid, _userbot_tasks
+    
+    # Track this task to allow cancellation on restart
+    current_task = asyncio.current_task()
+    if current_task:
+        _userbot_tasks.add(current_task)
+    
+    try:
+        await _process_userbot_event_internal(event, is_edit)
+    finally:
+        if current_task:
+            _userbot_tasks.discard(current_task)
+
+async def _process_userbot_event_internal(event, is_edit=False):
+    """Internal logic for userbot events."""
     global dc_bot_instance, dc_accid
     msg = event.message
     if not msg:
@@ -3043,7 +3059,7 @@ async def _process_userbot_event(event, is_edit=False):
 
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""
-    global userbot_client
+    global userbot_client, _userbot_tasks
     if not TelegramClient:
         return
     
@@ -3053,14 +3069,28 @@ async def start_userbot():
         return
 
     try:
-        # Disconnect existing client if it's in a bad state
+        # 1. Stop and clear all pending tasks from the old client
+        if _userbot_tasks:
+            logger.info(f"Cancelling {len(_userbot_tasks)} pending Userbot tasks during restart...")
+            for task in _userbot_tasks:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for tasks to actually exit
+            await asyncio.gather(*_userbot_tasks, return_exceptions=True)
+            _userbot_tasks.clear()
+
+        # 2. Disconnect existing client
         if userbot_client:
             try:
-                await userbot_client.disconnect()
-            except Exception:
-                pass
+                # Use a timeout to ensure we don't hang during shutdown
+                await asyncio.wait_for(userbot_client.disconnect(), timeout=10)
+            except Exception as e:
+                logger.warning(f"Error disconnecting old Userbot client: {e}")
+            finally:
+                userbot_client = None
         
-        logger.info("Starting Telethon Userbot client...")
+        logger.info("Initializing new Telethon Userbot client...")
         userbot_client = TelegramClient('userbot_session', int(api_id), api_hash, sequential_updates=False)
         
         @userbot_client.on(tg_events.NewMessage())
@@ -3209,14 +3239,18 @@ async def main():
                     # If client is None OR disconnected OR in a bad state (AttributeError scenario)
                     is_healthy = False
                     try:
-                        if userbot_client and await userbot_client.is_user_authorized() and userbot_client.is_connected():
+                        # Improved health check: also ensure we can call an API method
+                        if userbot_client and userbot_client.is_connected() and await userbot_client.is_user_authorized():
+                            # Trigger a very cheap request to ensure connection is actually responding
+                            await userbot_client.get_me() 
                             is_healthy = True
-                    except Exception as e:
+                    except (AttributeError, Exception) as e:
                         logger.warning(f"Userbot health check failed: {e}. Attempting restart...")
                     
                     if not is_healthy:
                         logger.info("Userbot client is offline or unhealthy. Restarting...")
-                        await start_userbot()
+                        # Run restart in background to not block the main heartbeat
+                        asyncio.create_task(start_userbot())
                 last_userbot_check = now
 
             if (now - last_sync) > 3600: # 1 hour interval
