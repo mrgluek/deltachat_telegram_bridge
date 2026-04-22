@@ -297,7 +297,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                     pass
             if not file_path:
                 logger.warning(f"Timeout waiting for media to download for DC msg {msg_id}")
-                formatted_msg += "\n\n<i>[Failed to relay media: timeout waiting for DC download]</i>"
+                formatted_msg += "\n\n*[Failed to relay media: timeout waiting for DC download]*"
 
         if file_path and os.path.exists(file_path):
             filename = os.path.basename(file_path)
@@ -322,7 +322,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                 # using retry_async with a longer overall timeout
                 tg_msg = await retry_async(func, **kwargs)
             except (TimeoutError, asyncio.TimeoutError):
-                fallback_text = formatted_msg + f"\n\n<i>[Failed to relay media: {html.escape(filename)} - timeout exceeded after retries]</i>"
+                fallback_text = formatted_msg + f"\n\n*[Failed to relay media: {html.escape(filename)} - timeout exceeded after retries]*"
                 tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id)
             except Exception as e:
                 logger.error(f"Error uploading media to TG: {e}")
@@ -446,6 +446,16 @@ def dc_donate_command(bot, accid, event):
     )
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
 
+def to_dc_markdown(text: str) -> str:
+    """Convert limited HTML tags (b, i, code) to Markdown for Delta Chat."""
+    if not text:
+        return ""
+    # Note: Using * for italic as requested by user
+    return (text.replace("<b>", "**").replace("</b>", "**")
+            .replace("<i>", "*").replace("</i>", "*")
+            .replace("<code>", "`").replace("</code>", "`")
+            .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+
 @dc_cli.on(events.NewMessage(command="/channeladd"))
 def dc_channeladd_command(bot, accid, event):
     """Add a channel bridge from Delta Chat. Admin only."""
@@ -468,7 +478,7 @@ def dc_channeladd_command(bot, accid, event):
         status_id = bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
         result = await _add_channel_bridge(payload)
         # Convert HTML response to Markdown for DC
-        result_md = result.replace("**", "^").replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`").replace("^", "**")
+        result_md = to_dc_markdown(result)
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=result_md))
     
     if main_loop:
@@ -882,7 +892,7 @@ def handle_dc_message(bot, accid, event):
     except Exception:
         return
 
-    # Check if this chat is bridged
+    # Check if this is chat is bridged
     tg_chats = database.get_tg_chats(dc_chat_id)
     if not tg_chats or not tg_app:
         return
@@ -1524,7 +1534,7 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 img.save(bio, 'PNG')
                 bio.seek(0)
                 await update.message.reply_photo(
-                    photo=bio, 
+                    photo=bio,
                     caption=f"Scan to join bridged DC Group {chat_name}"
                 )
             except Exception as e:
@@ -1691,7 +1701,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
                 f"🔗 Subscribe in Delta Chat:\n{invite_link}\n\n"
-                f"<i>(The last 3 posts have been relayed as history)</i>"
+                f"*(The last 3 posts have been relayed as history)*"
             )
         else:
             return "❌ Failed to save channel to database (may already exist)."
@@ -2496,7 +2506,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except (TimeoutError, asyncio.TimeoutError):
                 logger.error(f"Timeout downloading file {file_name} after retries")
                 local_file_path = None
-                timeout_error_text = f"\n\n<i>[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]</i>"
+                timeout_error_text = f"\n\n*[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]*"
             except Exception as e:
                 # If it's the "File is too big" error from Telegram
                 if "File is too big" in str(e) and not local_file_path:
@@ -2594,7 +2604,7 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Format final results
     total_voter_count = poll.total_voter_count
     
-    text = f"🏁 <b>Poll closed:</b> {html.escape(poll.question)}\n\n"
+    text = f"🏁 **Poll closed:** {html.escape(poll.question)}\n\n"
     
     # Sort options by voter count descending
     sorted_options = sorted(poll.options, key=lambda x: x.voter_count, reverse=True)
@@ -2603,7 +2613,7 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         percentage = (option.voter_count / total_voter_count * 100) if total_voter_count > 0 else 0
         text += f"▫️ {html.escape(option.text)} — {option.voter_count} votes ({percentage:.1f}%)\n"
         
-    text += f"\n<i>Total votes: {total_voter_count}</i>"
+    text += f"\n*Total votes: {total_voter_count}*"
     
     try:
         msg_data = MsgData(text=text)
