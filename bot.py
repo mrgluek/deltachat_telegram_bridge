@@ -1658,7 +1658,12 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             if userbot_client and userbot_client.is_connected():
                 try:
                     logger.info(f"Fetching history for new bridge: {channel_title}")
-                    history = await userbot_client.get_messages(tg_channel_id, limit=3)
+                    # Ensure we have an entity Telethon can work with
+                    # Using username if available, otherwise numeric ID
+                    ub_target = resolved_username if resolved_username else tg_channel_id
+                    ub_entity = await userbot_client.get_entity(ub_target)
+                    
+                    history = await userbot_client.get_messages(ub_entity, limit=3)
                     if history:
                         # Reverse to send oldest first
                         for msg in reversed(history):
@@ -1670,9 +1675,12 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
 
             # Sync subscriber stats immediately
             try:
-                entity = await userbot_client.get_entity(tg_channel_id)
-                await update_tg_channel_stats(row_id, entity)
-            except: pass
+                # Use cached username or ID to resolve entity correctly
+                ub_target = resolved_username if resolved_username else tg_channel_id
+                ub_entity = await userbot_client.get_entity(ub_target)
+                await update_tg_channel_stats(row_id, ub_entity)
+            except Exception as e:
+                logger.debug(f"Failed to sync immediate stats for {channel_title}: {e}")
                 
             title_display = f"<b>{html.escape(channel_title)}</b>"
             if resolved_username:

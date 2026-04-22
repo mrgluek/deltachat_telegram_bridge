@@ -2,7 +2,7 @@
 
 ## [2026-04-20]
 - **Userbot Watchdog**: Implemented a background health check that automatically restarts the Userbot client if it faces fatal connection errors or internal failures.
-- **Historical Message Bridging**: When a new channel or group is bridged, the bot now automatically relays the last 3 posts from Telegram to the new Delta Chat chat to provide immediate context.
+- **Historical Message Bridging**: When a new channel or group is bridged, the bot now automatically relays the last 3 posts from Telegram to the new Delta Chat chat to provide immediate context. Fixed "Could not find input entity" error during history fetch.
 - **Improved Relay Logic**: Refactored the core Userbot message relayer for better consistency and maintainability.
 
 ## [2026-04-18]
