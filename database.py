@@ -478,15 +478,18 @@ def get_channel_by_tg_id(tg_channel_id: int) -> dict | None:
         conn.close()
         return dict(row) if row else None
 
-def update_channel_stats(channel_id: int, participants_count: int):
-    """Update subscription statistics for a channel."""
+def update_channel_info(channel_id: int, participants_count: int = None, username: str = None, title: str = None):
+    """Update metadata for a channel."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE channels SET tg_participants_count = ? WHERE id = ?",
-            (participants_count, channel_id)
-        )
+        if participants_count is not None:
+            cursor.execute("UPDATE channels SET tg_participants_count = ? WHERE id = ?", (participants_count, channel_id))
+        if username is not None:
+            cursor.execute("UPDATE channels SET tg_channel_username = ? WHERE id = ?", (username.lower(), channel_id))
+        # Note: we don't store title in the DB currently, it's fetched from DC.
+        # But if we want to store it, we'd need to add a column.
+        # However, we can use the username to make it "public".
         conn.commit()
         conn.close()
 

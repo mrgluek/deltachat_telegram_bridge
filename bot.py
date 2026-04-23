@@ -815,18 +815,27 @@ def channels_command_dc(bot, accid, event):
     msg = event.msg
     chat_id = msg.chat_id
 
-    channels = database.get_all_channels()
-    # Filter only public channels (those with a username)
-    public_channels = [c for c in channels if c.get('tg_channel_username')]
+    # Check if requester is admin
+    admin_dc_email = database.get_config("admin_dc_email")
+    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
+    is_admin = admin_dc_email and sender_email.lower() == admin_dc_email.lower()
 
-    if not public_channels:
+    channels = database.get_all_channels()
+    if is_admin:
+        # Admin sees everything
+        display_channels = channels
+    else:
+        # Others only see public channels (those with a username)
+        display_channels = [c for c in channels if c.get('tg_channel_username')]
+
+    if not display_channels:
         bot.rpc.send_msg(accid, chat_id, MsgData(text="📺 No public channels are currently available."))
         return
 
-    lines = ["📺 **Public Channels:**\n"]
-    for ch in public_channels:
+    lines = [f"📺 **{'All' if is_admin else 'Public'} Channels:**\n"]
+    for ch in display_channels:
         dc_cid = ch['dc_chat_id']
-        tg_username = ch['tg_channel_username']
+        tg_username = ch.get('tg_channel_username')
         tg_id = ch.get('tg_channel_id', 0)
         
         # Get counts
@@ -844,8 +853,9 @@ def channels_command_dc(bot, accid, event):
             dc_sub_count = "?"
 
         # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 👤 150k TG / 7 DC — 💬 1
+        tg_ref = f"(t.me/{tg_username})" if tg_username else f"(ID: {tg_id})"
         stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
-        lines.append(f"/channel{ch['id']} — {title} (t.me/{tg_username}) — {stats_str}")
+        lines.append(f"/channel{ch['id']} — {title} {tg_ref} — {stats_str}")
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
     bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
@@ -2956,7 +2966,7 @@ async def db_cleanup_loop():
 _is_syncing_userbot = False
 
 async def update_tg_channel_stats(channel_id: int, tg_peer):
-    """Fetch real participant count from TG and save to DB."""
+    """Fetch real participant count and username from TG and save to DB."""
     if not (userbot_client and userbot_client.is_connected()):
         return
     
@@ -2966,16 +2976,20 @@ async def update_tg_channel_stats(channel_id: int, tg_peer):
         from telethon.tl.types import Channel, Chat
         
         full = None
+        username = getattr(tg_peer, 'username', None)
+        
         if isinstance(tg_peer, Channel):
              full = await userbot_client(GetFullChannelRequest(tg_peer))
         elif isinstance(tg_peer, Chat):
              full = await userbot_client(GetFullChatRequest(tg_peer.id))
         
+        count = 0
         if full and hasattr(full, 'full_chat'):
             count = getattr(full.full_chat, 'participants_count', 0)
-            if count:
-                database.update_channel_stats(channel_id, count)
-                return count
+        
+        # Update both count and username (if we found one now)
+        database.update_channel_info(channel_id, participants_count=count, username=username)
+        return count
     except Exception as e:
         logger.warning(f"Failed to fetch stats for TG peer: {e}")
     return 0
