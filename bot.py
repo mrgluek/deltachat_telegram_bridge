@@ -21,11 +21,14 @@ from telegram.error import NetworkError, TimedOut
 try:
     from telethon import TelegramClient, events as tg_events
     from telethon.tl.functions.channels import JoinChannelRequest
+    from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
     from telethon.errors import ChannelPrivateError
 except ImportError:
     TelegramClient = None
     tg_events = None
     JoinChannelRequest = None
+    ImportChatInviteRequest = None
+    CheckChatInviteRequest = None
     ChannelPrivateError = None
 
 
@@ -799,8 +802,9 @@ def handle_dc_info_message(bot, accid, event):
                 # Instead, the _relay_channel_history function uses a cache to avoid Telegram load,
                 # but it STILL sends the messages to the group so the new member sees them.
                 logger.info(f"New member joined bridged DC channel {dc_chat_id}. Relaying history...")
+                invite_link = ch.get('invite_link')
                 asyncio.run_coroutine_threadsafe(
-                    _relay_channel_history(dc_chat_id, tg_channel_id, ub_target),
+                    _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=invite_link),
                     main_loop
                 )
 
@@ -1659,7 +1663,7 @@ async def _check_channel_admin(update: Update) -> bool:
     return True
 
 
-async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target: any, limit: int = 3):
+async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target: any, limit: int = 3, invite_link: str = None):
     """Fetch and relay the last N messages from a TG channel as history, with caching."""
     global userbot_client
     if not (userbot_client and userbot_client.is_connected()):
@@ -1675,7 +1679,22 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
             history = cached['messages']
         else:
             # Ensure we have an entity Telethon can work with
-            ub_entity = await userbot_client.get_entity(ub_target)
+            ub_entity = None
+            try:
+                ub_entity = await userbot_client.get_entity(ub_target)
+            except Exception as e:
+                if invite_link:
+                    logger.debug(f"Could not resolve {ub_target} by ID, trying invite link: {e}")
+                    try:
+                        ub_entity = await userbot_client.get_entity(invite_link)
+                    except Exception as e2:
+                        logger.error(f"Could not resolve via link either: {e2}")
+                else:
+                    raise e
+            
+            if not ub_entity:
+                return
+
             logger.info(f"Fetching fresh history for TG {ub_target}...")
             history = await userbot_client.get_messages(ub_entity, limit=limit)
             if history:
@@ -1813,7 +1832,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             
             # Relay last 3 messages as history
             ub_target = resolved_username if resolved_username else tg_channel_id
-            await _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3)
+            await _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=invite_link)
 
             # Sync subscriber stats immediately
             try:
@@ -3000,7 +3019,21 @@ async def sync_userbot_channels(force=False):
 
             try:
                 # 1. Try to get entity normally (via @username or numeric ID if seen before)
-                entity = await userbot_client.get_entity(target)
+                entity = None
+                try:
+                    entity = await userbot_client.get_entity(target)
+                except Exception as e:
+                    # 2. Fallback to invite link if available
+                    if invite_link:
+                        logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
+                        try:
+                            entity = await userbot_client.get_entity(invite_link)
+                        except Exception as e2:
+                            logger.error(f"Sync: Could not resolve via link either: {e2}")
+                    
+                if not entity:
+                    # Reraise original exception if both failed
+                    raise Exception(f"Could not resolve {target} (and no working invite link)")
                 
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
