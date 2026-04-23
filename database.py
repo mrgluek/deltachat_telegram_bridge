@@ -534,6 +534,17 @@ def get_dc_channel_chat_id(tg_channel_id: int) -> int | None:
         conn.close()
         return row[0] if row else None
 
+def get_channel_by_dc_chat_id(dc_chat_id: int) -> dict | None:
+    """Get a channel row by its Delta Chat chat ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM channels WHERE dc_chat_id = ?", (dc_chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
 
 # ---------------------------------------------------------
 # ADMIN MANAGEMENT

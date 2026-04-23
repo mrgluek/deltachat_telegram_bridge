@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Optional
 import hashlib
 
-from deltachat2 import EventType, MsgData, events
+from deltachat2 import EventType, MsgData, SystemMessageType, events
 from deltabot_cli import BotCli
 
 from telegram import Update
@@ -127,6 +127,8 @@ LIVE_LOCATIONS = {}
 db_lock = threading.Lock()
 
 # Initialize DeltaBot CLI
+import collections
+
 dc_cli = BotCli("tgbridge")
 
 # Global references
@@ -137,8 +139,75 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 
+# Global rate limiting for Delta Chat (e.g. chatmail limits)
+GLOBAL_DC_RATE_LIMIT = 60    # messages
+GLOBAL_DC_RATE_WINDOW = 60   # seconds
+_global_dc_send_times = collections.deque()
+_global_dc_rate_limit_lock = asyncio.Lock()
+_global_wait_counter = 0
+_last_owner_notification_time = 0
+
+async def _wait_for_global_dc_rate_limit():
+    """Ensures we don't exceed the global Delta Chat message rate limit."""
+    global _global_dc_send_times, _global_wait_counter, _last_owner_notification_time
+    
+    _global_wait_counter += 1
+    try:
+        async with _global_dc_rate_limit_lock:
+            now = time.time()
+            # Remove timestamps older than the window
+            while _global_dc_send_times and now - _global_dc_send_times[0] > GLOBAL_DC_RATE_WINDOW:
+                _global_dc_send_times.popleft()
+            
+            if len(_global_dc_send_times) >= GLOBAL_DC_RATE_LIMIT:
+                # We hit the limit, wait until the oldest one expires
+                wait_time = GLOBAL_DC_RATE_WINDOW - (now - _global_dc_send_times[0])
+                if wait_time > 0:
+                    # Notify owner on Telegram (debounced to once per minute)
+                    admin_tg_id = database.get_config("admin_tg_id")
+                    if admin_tg_id and tg_app and (now - _last_owner_notification_time > 60):
+                        _last_owner_notification_time = now
+                        queue_size = _global_wait_counter - 1 # Current task is waiting on the lock
+                        notification = (
+                            f"⏳ **Global DC Rate Limit Enforced**\n"
+                            f"The bot is waiting {wait_time:.1f}s before sending next message.\n"
+                            f"Current queue: {queue_size} messages waiting."
+                        )
+                        # Send notification in background to not block the relay
+                        asyncio.create_task(tg_app.bot.send_message(chat_id=admin_tg_id, text=notification, parse_mode='Markdown'))
+                    
+                    logger.info(f"Global DC rate limit reached. Waiting {wait_time:.2f}s (Queue: {_global_wait_counter-1})...")
+                    await asyncio.sleep(wait_time + 0.1)
+                    # Re-clean after sleep
+                    now = time.time()
+                    while _global_dc_send_times and now - _global_dc_send_times[0] > GLOBAL_DC_RATE_WINDOW:
+                        _global_dc_send_times.popleft()
+            
+            _global_dc_send_times.append(time.time())
+    finally:
+        _global_wait_counter -= 1
+
+
 # Double bridging protection
 _processed_tg_msgs: dict[tuple[int, int], float] = {}
+
+# Cooldown for channel history relay (per DC chat_id)
+HISTORY_RELAY_COOLDOWN = 300  # 5 minutes
+_history_cooldowns: dict[int, float] = {}
+
+# Cache for channel history messages (per DC chat_id)
+# Stores: {dc_chat_id: {"timestamp": float, "messages": list[TelethonMessage]}}
+_history_cache: dict[int, dict] = {}
+
+def _is_history_on_cooldown(dc_chat_id: int) -> bool:
+    """Returns True if history relay for this chat is on cooldown."""
+    now = time.time()
+    last = _history_cooldowns.get(dc_chat_id, 0)
+    if now - last < HISTORY_RELAY_COOLDOWN:
+        return True
+    _history_cooldowns[dc_chat_id] = now
+    return False
+
 
 def _mark_processed(chat_id: int, msg_id: int) -> bool:
     """Returns True if this message was already processed in the last 120 seconds."""
@@ -702,12 +771,38 @@ def stats_command(bot, accid, event):
                 title = "this group"
             
             # Reactions are not relevant for broadcast channels, only show for groups if we have them
-            # But the request says remove for channels. In group bridge, we keep it if it's a 2-way group.
             r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
-            lines.append(f"• TG {tg_cid} ({title}) — {m_count} 💬")
-            if r_count > 0:
-                lines.append(f" {r_count} 🙂")
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="".join(lines)))
+            lines.append(f"• TG Group {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
+                
+        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+
+
+@dc_cli.on(events.NewMessage(is_info=True))
+def handle_dc_info_message(bot, accid, event):
+    """Handle Delta Chat system/info messages (like member additions)."""
+    global main_loop
+    
+    msg = event.msg
+    dc_chat_id = msg.chat_id
+    
+    # Detect member additions to groups
+    if msg.system_message_type == SystemMessageType.MEMBER_ADDED_TO_GROUP:
+        # Check if this is a bridged channel
+        ch = database.get_channel_by_dc_chat_id(dc_chat_id)
+        if ch and main_loop:
+            tg_channel_id = ch['tg_channel_id']
+            # ub_target is username if available, else numeric ID
+            ub_target = ch['tg_channel_username'] if ch['tg_channel_username'] else tg_channel_id
+            
+            if ub_target:
+                # Note: We NO LONGER skip the relay here based on cooldown.
+                # Instead, the _relay_channel_history function uses a cache to avoid Telegram load,
+                # but it STILL sends the messages to the group so the new member sees them.
+                logger.info(f"New member joined bridged DC channel {dc_chat_id}. Relaying history...")
+                asyncio.run_coroutine_threadsafe(
+                    _relay_channel_history(dc_chat_id, tg_channel_id, ub_target),
+                    main_loop
+                )
 
 
 @dc_cli.on(events.NewMessage(command="/channels"))
@@ -1564,6 +1659,43 @@ async def _check_channel_admin(update: Update) -> bool:
     return True
 
 
+async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target: any, limit: int = 3):
+    """Fetch and relay the last N messages from a TG channel as history, with caching."""
+    global userbot_client
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+
+    try:
+        now = time.time()
+        cached = _history_cache.get(dc_chat_id)
+        
+        # Check if we have a fresh cache (under 5 minutes old)
+        if cached and (now - cached['timestamp'] < HISTORY_RELAY_COOLDOWN):
+            logger.debug(f"Using cached history for DC channel {dc_chat_id}")
+            history = cached['messages']
+        else:
+            # Ensure we have an entity Telethon can work with
+            ub_entity = await userbot_client.get_entity(ub_target)
+            logger.info(f"Fetching fresh history for TG {ub_target}...")
+            history = await userbot_client.get_messages(ub_entity, limit=limit)
+            if history:
+                _history_cache[dc_chat_id] = {
+                    'timestamp': now,
+                    'messages': history
+                }
+        
+        if history:
+            # Reverse to send oldest first
+            for msg in reversed(history):
+                # Mark as processed to avoid duplicate relay if an event for this message comes in
+                _mark_processed(tg_channel_id, msg.id)
+                # Small delay to ensure order in DC and avoid rate limits
+                await asyncio.sleep(0.5)
+                await _relay_userbot_message(dc_chat_id, msg)
+    except Exception as e:
+        logger.error(f"Failed to relay history for TG {ub_target} to DC {dc_chat_id}: {e}")
+
+
 async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> str:
     """Core logic to bridge a TG channel/group. Shared between TG and DC commands."""
     global dc_bot_instance, dc_accid, userbot_client
@@ -1676,25 +1808,12 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id)
 
         if row_id:
+            # Register in cooldown so subsequent joins immediately after creation don't trigger history relay again
+            _history_cooldowns[dc_chat_id] = time.time()
+            
             # Relay last 3 messages as history
-            if userbot_client and userbot_client.is_connected():
-                try:
-                    logger.info(f"Fetching history for new bridge: {channel_title}")
-                    # Ensure we have an entity Telethon can work with
-                    ub_target = resolved_username if resolved_username else tg_channel_id
-                    ub_entity = await userbot_client.get_entity(ub_target)
-                    
-                    history = await userbot_client.get_messages(ub_entity, limit=3)
-                    if history:
-                        # Reverse to send oldest first
-                        for msg in reversed(history):
-                            # Mark as processed to avoid duplicate relay if an event for this message comes in
-                            _mark_processed(tg_channel_id, msg.id)
-                            # Small delay to ensure order in DC and avoid rate limits
-                            await asyncio.sleep(0.5)
-                            await _relay_userbot_message(dc_chat_id, msg)
-                except Exception as e:
-                    logger.error(f"Failed to relay history for {channel_title}: {e}")
+            ub_target = resolved_username if resolved_username else tg_channel_id
+            await _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3)
 
             # Sync subscriber stats immediately
             try:
@@ -2311,6 +2430,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
                         if dc_reply_id:
                             msg_data.quoted_message_id = dc_reply_id
                         try:
+                            await _wait_for_global_dc_rate_limit()
                             dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
                         except Exception as e:
                             logger.error(f"Failed to send final location edit: {e}")
@@ -2366,6 +2486,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         try:
             msg_data = MsgData(text=formatted_msg)
             msg_data.override_sender_name = sender_name
+            await _wait_for_global_dc_rate_limit()
             dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
             if dc_sent_id:
                 database.save_message_map(dc_sent_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
@@ -2553,6 +2674,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
                 try:
+                    await _wait_for_global_dc_rate_limit()
                     sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
                 except Exception as e:
                     # If quoting failed because the message was deleted in DC, retry without the quote
@@ -2574,6 +2696,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 chat_reply_prefix = f"↩ {short_quote}\n"
                                 msg_data.text = _truncate(f"{chat_reply_prefix}{text}" if text else "", DC_MAX_MSG_LEN)
                         
+                        await _wait_for_global_dc_rate_limit()
                         sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
                     else:
                         raise  # Re-raise other exceptions
@@ -3014,6 +3137,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if file_path:
             msg_data.file = file_path
             
+        await _wait_for_global_dc_rate_limit()
         sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if sent_id:
             c_hash = _get_content_hash(msg)
