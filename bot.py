@@ -1596,6 +1596,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         tg_channel_id = None
         resolved_username = username
         avatar_file = None
+        bot_api_ok = False
         
         # Try Bot API first (if it's a public channel or bot is member)
         try:
@@ -1609,24 +1610,35 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             resolved_username = tg_chat_info.username
             if tg_chat_info.photo:
                 avatar_file = await tg_chat_info.photo.get_big_file()
+            bot_api_ok = True
         except Exception:
-            # Fallback to userbot
-            if not userbot_client or not userbot_client.is_connected():
-                 return f"❌ Could not resolve <code>{html.escape(display_name)}</code> (Bot API failed and Userbot not connected)."
-            
+            pass
+
+        # Ensure Userbot also "sees" and joins the channel if possible (needed for history)
+        if userbot_client and userbot_client.is_connected():
             try:
-                chat_arg = numeric_id if is_numeric else username
-                entity = await userbot_client.get_entity(chat_arg)
+                # Use resolved username if available, fallback to original input
+                ub_arg = numeric_id if is_numeric else (resolved_username or username)
+                entity = await userbot_client.get_entity(ub_arg)
                 if getattr(entity, 'left', True):
                     if JoinChannelRequest:
+                        logger.info(f"Userbot: Joining {channel_title or display_name} for history/relay...")
                         await userbot_client(JoinChannelRequest(entity))
                 
-                from telethon.utils import get_peer_id
-                tg_channel_id = get_peer_id(entity)
-                channel_title = getattr(entity, 'title', display_name)
-                resolved_username = getattr(entity, 'username', username)
+                # If Bot API failed, use Userbot info
+                if not bot_api_ok:
+                    from telethon.utils import get_peer_id
+                    tg_channel_id = get_peer_id(entity)
+                    channel_title = getattr(entity, 'title', display_name)
+                    resolved_username = getattr(entity, 'username', username)
+                    bot_api_ok = True
             except Exception as e:
-                return f"❌ Failed to resolve chat (Userbot error): {html.escape(str(e))}"
+                if not bot_api_ok:
+                    return f"❌ Failed to resolve chat (Userbot error): {html.escape(str(e))}"
+                logger.debug(f"Userbot could not resolve/join channel (already resolved by Bot API): {e}")
+
+        if not bot_api_ok:
+             return f"❌ Could not resolve <code>{html.escape(display_name)}</code> (Bot API failed and Userbot not connected)."
 
         # 2. Check if already bridged
         existing = database.get_dc_channel_chat_id(tg_channel_id)
@@ -1669,7 +1681,6 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 try:
                     logger.info(f"Fetching history for new bridge: {channel_title}")
                     # Ensure we have an entity Telethon can work with
-                    # Using username if available, otherwise numeric ID
                     ub_target = resolved_username if resolved_username else tg_channel_id
                     ub_entity = await userbot_client.get_entity(ub_target)
                     
@@ -1677,6 +1688,8 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                     if history:
                         # Reverse to send oldest first
                         for msg in reversed(history):
+                            # Mark as processed to avoid duplicate relay if an event for this message comes in
+                            _mark_processed(tg_channel_id, msg.id)
                             # Small delay to ensure order in DC and avoid rate limits
                             await asyncio.sleep(0.5)
                             await _relay_userbot_message(dc_chat_id, msg)
