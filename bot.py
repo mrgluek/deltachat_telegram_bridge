@@ -1693,14 +1693,19 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
             try:
                 ub_entity = await userbot_client.get_entity(ub_target)
             except Exception as e:
-                if invite_link:
+                if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                     logger.debug(f"Could not resolve {ub_target} by ID, trying invite link: {e}")
                     try:
                         ub_entity = await userbot_client.get_entity(invite_link)
                     except Exception as e2:
-                        logger.error(f"Could not resolve via link either: {e2}")
+                        logger.debug(f"Could not resolve via link either: {e2}")
                 else:
-                    raise e
+                    # If it's not a TG link or no link at all, we can't do more
+                    if not invite_link:
+                        raise e
+                    else:
+                        logger.debug(f"Skipping invite link resolution: {invite_link} is not a TG link.")
+                        raise e
             
             if not ub_entity:
                 return
@@ -1862,7 +1867,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
                 f"🔗 Subscribe in Delta Chat:\n{invite_link}\n\n"
-                f"*(The last 3 posts have been relayed as history)*"
+                f"<i>(The last 3 posts have been relayed as history)</i>"
             )
         else:
             return "❌ Failed to save channel to database (may already exist)."
@@ -3038,12 +3043,12 @@ async def sync_userbot_channels(force=False):
                     entity = await userbot_client.get_entity(target)
                 except Exception as e:
                     # 2. Fallback to invite link if available
-                    if invite_link:
+                    if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                         logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
                         try:
                             entity = await userbot_client.get_entity(invite_link)
                         except Exception as e2:
-                            logger.error(f"Sync: Could not resolve via link either: {e2}")
+                            logger.debug(f"Sync: Could not resolve via link either: {e2}")
                     
                 if not entity:
                     # Reraise original exception if both failed
