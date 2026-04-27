@@ -226,21 +226,27 @@ def get_dc_msgs_by_tg_msg_id(tg_msg_id: int, tg_chat_id: int) -> list[tuple[int,
         conn.close()
         return rows
 
-def delete_message_map_entry_by_dc(dc_msg_id: int, dc_chat_id: int) -> None:
+def delete_message_map_entry_by_dc(dc_msg_id: int, dc_chat_id: int | None = None) -> None:
     """Remove a message map entry by DC message ID."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM message_map WHERE dc_msg_id = ? AND dc_chat_id = ?", (dc_msg_id, dc_chat_id))
+        if dc_chat_id is not None:
+            cursor.execute("DELETE FROM message_map WHERE dc_msg_id = ? AND dc_chat_id = ?", (dc_msg_id, dc_chat_id))
+        else:
+            cursor.execute("DELETE FROM message_map WHERE dc_msg_id = ?", (dc_msg_id,))
         conn.commit()
         conn.close()
 
-def delete_message_map_entry_by_tg(tg_msg_id: int, tg_chat_id: int) -> None:
+def delete_message_map_entry_by_tg(tg_msg_id: int, tg_chat_id: int | None = None) -> None:
     """Remove message map entries by TG message ID."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ?", (tg_msg_id, tg_chat_id))
+        if tg_chat_id is not None:
+            cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ?", (tg_msg_id, tg_chat_id))
+        else:
+            cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ?", (tg_msg_id,))
         conn.commit()
         conn.close()
 

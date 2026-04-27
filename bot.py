@@ -1179,15 +1179,31 @@ def handle_dc_msg_deleted(bot, accid, event):
 
 
 async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int):
-    """Delete a message in Telegram via the Bot API."""
-    global tg_app
-    if not tg_app:
-        return
-    try:
-        await tg_app.bot.delete_message(chat_id=tg_chat_id, message_id=tg_msg_id)
-        logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}")
-    except Exception as e:
-        logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}: {e}")
+    """Delete a message in Telegram via the Bot API, with Userbot fallback."""
+    global tg_app, userbot_client
+    
+    deleted = False
+    if tg_app:
+        try:
+            await tg_app.bot.delete_message(chat_id=tg_chat_id, message_id=tg_msg_id)
+            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}")
+            deleted = True
+        except Exception as e:
+            if "not a member" in str(e) or "chat not found" in str(e):
+                logger.debug(f"DC→TG: Bot API failed to delete msg {tg_msg_id} in {tg_chat_id}, falling back to Userbot: {e}")
+            else:
+                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Bot API: {e}")
+
+    if not deleted and userbot_client and userbot_client.is_connected():
+        try:
+            entity = await userbot_client.get_entity(tg_chat_id)
+            await userbot_client.delete_messages(entity, [tg_msg_id])
+            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id} via Userbot")
+        except Exception as e:
+            if "not a member" in str(e) or "chat not found" in str(e) or "can't be deleted" in str(e).lower():
+                logger.debug(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Userbot (no permission/not found): {e}")
+            else:
+                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Userbot either: {e}")
 
 
 @dc_cli.on(events.RawEvent(events.EventType.REACTIONS_CHANGED))
