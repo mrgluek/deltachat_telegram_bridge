@@ -1006,6 +1006,19 @@ def handle_dc_message(bot, accid, event):
                     tg_username = ch.get('tg_channel_username')
                     link_part = f" (t.me/{tg_username})" if tg_username else ""
                     bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}**{link_part}:\n\n{invite_link}"))
+                    
+                    # Relay last 3 channel posts to user's private chat as a preview
+                    if main_loop and userbot_client:
+                        tg_channel_id = ch.get('tg_channel_id')
+                        dc_channel_chat_id = ch.get('dc_chat_id')
+                        ub_target = ch.get('tg_channel_username') or tg_channel_id
+                        ch_invite = ch.get('invite_link')
+                        if tg_channel_id and ub_target:
+                            logger.info(f"Sending channel history preview to private chat {dc_chat_id} for channel {tg_channel_id}")
+                            asyncio.run_coroutine_threadsafe(
+                                _relay_channel_history_to_chat(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=ch_invite, bot_ref=bot, accid=accid),
+                                main_loop
+                            )
                 return
             else:
                 bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
@@ -1753,6 +1766,53 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
                 await _relay_userbot_message(dc_chat_id, msg)
     except Exception as e:
         logger.error(f"Failed to relay history for TG {ub_target} to DC {dc_chat_id}: {e}")
+
+
+async def _relay_channel_history_to_chat(target_dc_chat_id: int, tg_channel_id: int, ub_target: any, limit: int = 3, invite_link: str = None, bot_ref=None, accid=None):
+    """
+    Fetch and relay the last N TG channel messages to a specific DC chat (e.g. a private chat).
+    Uses the same 5-minute cache as _relay_channel_history.
+    """
+    global userbot_client
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+
+    try:
+        now = time.time()
+        # Use dc_chat_id of the channel itself as the cache key
+        # ub_target is unique per channel, so we use a string key
+        cache_key = f"preview_{tg_channel_id}"
+        cached = _history_cache.get(cache_key)
+
+        if cached and (now - cached['timestamp'] < HISTORY_RELAY_COOLDOWN):
+            history = cached['messages']
+        else:
+            ub_entity = None
+            try:
+                ub_entity = await userbot_client.get_entity(ub_target)
+            except Exception as e:
+                if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
+                    try:
+                        ub_entity = await userbot_client.get_entity(invite_link)
+                    except Exception as e2:
+                        logger.debug(f"History preview: could not resolve entity: {e2}")
+                if not ub_entity:
+                    return
+
+            logger.info(f"Fetching fresh history preview for TG {ub_target}...")
+            history = await userbot_client.get_messages(ub_entity, limit=limit)
+            if history:
+                _history_cache[cache_key] = {'timestamp': now, 'messages': history}
+
+        if history:
+            if bot_ref and accid:
+                bot_ref.rpc.send_msg(accid, target_dc_chat_id, MsgData(text="📜 *Recent posts from this channel:*"))
+            for msg in reversed(history):
+                _mark_processed(tg_channel_id, msg.id)
+                await asyncio.sleep(0.5)
+                await _relay_userbot_message(target_dc_chat_id, msg)
+    except Exception as e:
+        logger.error(f"Failed to relay history preview to DC chat {target_dc_chat_id}: {e}")
 
 
 async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> str:
