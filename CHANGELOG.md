@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [2026-04-27]
+- **Bidirectional Deletion Sync**: Messages deleted in Telegram are now removed from Delta Chat, and vice versa.
+- **Deletion Safety Guard**: Implemented a safety limit (5 deletions per 60 seconds) to prevent accidental bulk-deletions. The bot notifies the admin when the limit is reached.
+- **Improved History Relay**: Resolved an issue where join events were not detected for Delta Chat broadcast channels. The bot now proactively sends a history preview (last 3 posts) directly to the user's private chat when they request the invite link.
+- **Enhanced Admin Visibility**: The `/channels` command in Delta Chat now displays all bridged channels to the bot owner, including private ones or those without a public username.
+- **Global Rate Limiting**: Added a global outgoing message limit for Delta Chat (60 messages per minute) to ensure compatibility with chatmail server limits, including automated admin warnings.
+- **Formatting Fixes**: Improved HTML/Markdown compatibility for history relay notifications.
+
 ## [2026-04-20]
 - **Userbot Watchdog**: Implemented a background health check that automatically restarts the Userbot client if it faces fatal connection errors or internal failures.
 - **Historical Message Bridging**: When a new channel or group is bridged, the bot now automatically relays the last 3 posts from Telegram to the new Delta Chat chat to provide immediate context. Fixed "Could not find input entity" error during history fetch.

@@ -7,10 +7,12 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 ## Key Features
 
 - **Bidirectional Group Bridging**: Sync messages between Telegram groups and Delta Chat groups.
+- **Bidirectional Deletion Sync**: Sync message deletions between both platforms with built-in safety guards.
 - **Public Telegram Channels**: Bridge any public channel to a Delta Chat broadcast group.
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 - **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
+- **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
 - **Automatic Updates**: Self-updating via a simple script and cron job.
 - **Admin-Only Management**: Securely bridge channels and groups with restricted access.
 
@@ -165,6 +167,8 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
 - The `bridge.db` file contains your **Telegram bot token** in plaintext. Protect it with appropriate file permissions (e.g. `chmod 600 bridge.db`).
 - Management commands (`/bridge`, `/unbridge`, `/id`) are restricted to group admins or bot owner (see below).
 - Messages are rate-limited to **30 messages per minute per chat** to prevent flooding.
+- **Global outgoing limit**: The bot enforces a global limit of **60 messages per minute** across all Delta Chat interactions to stay within chatmail server limits.
+- **Deletion Safety**: To prevent accidental data loss, the bot limits automatic deletion sync to **5 messages per 60 seconds**. Bulk deletions are blocked and reported to the admin.
 - Sender names are HTML-escaped before being sent to Telegram to prevent injection.
 - Bot messages from both sides are filtered out to prevent echo loops.
 

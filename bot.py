@@ -202,6 +202,22 @@ _history_cooldowns: dict[int, float] = {}
 # Stores: {dc_chat_id: {"timestamp": float, "messages": list[TelethonMessage]}}
 _history_cache: dict[int, dict] = {}
 
+# Deletion sync safety: max deletions per window to avoid accidental bulk-delete
+DELETE_SYNC_MAX = 5           # max messages to auto-delete
+DELETE_SYNC_WINDOW = 60       # seconds
+_deletion_sync_times: list[float] = []
+_deletion_sync_lock = threading.Lock()
+
+def _is_deletion_rate_limited() -> bool:
+    """Returns True if too many deletions have been synced recently (safety guard)."""
+    with _deletion_sync_lock:
+        now = time.time()
+        _deletion_sync_times[:] = [t for t in _deletion_sync_times if now - t < DELETE_SYNC_WINDOW]
+        if len(_deletion_sync_times) >= DELETE_SYNC_MAX:
+            return True
+        _deletion_sync_times.append(now)
+        return False
+
 def _is_history_on_cooldown(dc_chat_id: int) -> bool:
     """Returns True if history relay for this chat is on cooldown."""
     now = time.time()
@@ -1115,6 +1131,64 @@ def handle_dc_message(bot, accid, event):
             bot.logger.info(f"Relayed DC msg {msg.id} to TG chat {tg_chat_id}")
         except Exception as e:
             bot.logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
+
+@dc_cli.on(events.RawEvent(EventType.MSG_DELETED))
+def handle_dc_msg_deleted(bot, accid, event):
+    """Sync DC message deletion to Telegram."""
+    global tg_app, main_loop
+    if not tg_app or not main_loop:
+        return
+
+    try:
+        msg_id = getattr(event, 'msg_id', None)
+        if not msg_id:
+            return
+
+        # Look up all TG messages mapped to this DC message
+        tg_mappings = database.get_tg_mappings_by_dc_msg_id(msg_id)
+        if not tg_mappings:
+            return
+
+        for tg_msg_id, tg_chat_id in tg_mappings:
+            if _is_deletion_rate_limited():
+                logger.warning(
+                    f"DC→TG deletion sync rate limit hit ({DELETE_SYNC_MAX}/{DELETE_SYNC_WINDOW}s). "
+                    f"Skipping deletion of TG msg {tg_msg_id} in {tg_chat_id}."
+                )
+                # Notify admin
+                admin_tg_id = database.get_config("admin_tg_id")
+                if admin_tg_id and tg_app and main_loop:
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.send_message(
+                            chat_id=int(admin_tg_id),
+                            text=f"⚠️ <b>Bulk deletion blocked</b>\nMore than {DELETE_SYNC_MAX} messages deleted in {DELETE_SYNC_WINDOW}s.\nDC msg {msg_id} → TG msg {tg_msg_id} in chat {tg_chat_id} was <b>NOT</b> deleted on Telegram.",
+                            parse_mode='HTML'
+                        ),
+                        main_loop
+                    )
+                return
+
+            asyncio.run_coroutine_threadsafe(
+                _delete_tg_message(tg_chat_id, tg_msg_id),
+                main_loop
+            )
+            database.delete_message_map_entry_by_dc(msg_id, None)  # cleanup is best-effort
+
+    except Exception as e:
+        logger.error(f"Error in DC msg deletion handler: {e}")
+
+
+async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int):
+    """Delete a message in Telegram via the Bot API."""
+    global tg_app
+    if not tg_app:
+        return
+    try:
+        await tg_app.bot.delete_message(chat_id=tg_chat_id, message_id=tg_msg_id)
+        logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}")
+    except Exception as e:
+        logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}: {e}")
+
 
 @dc_cli.on(events.RawEvent(events.EventType.REACTIONS_CHANGED))
 def handle_dc_reaction(bot, accid, event):
@@ -3289,6 +3363,53 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             except Exception:
                 pass
 
+async def _process_userbot_deletion(event):
+    """Handle Telethon MessageDeleted events and sync deletions to Delta Chat."""
+    global dc_bot_instance, dc_accid
+
+    if not dc_bot_instance or not dc_accid:
+        return
+
+    # event.deleted_ids: list of deleted TG message IDs
+    # event.chat_id: the chat where messages were deleted (may be None for private chats)
+    chat_id = getattr(event, 'chat_id', None)
+    deleted_ids = getattr(event, 'deleted_ids', []) or []
+
+    if not deleted_ids or not chat_id:
+        return
+
+    for tg_msg_id in deleted_ids:
+        # Look up all DC messages that mirror this TG message
+        dc_pairs = database.get_dc_msgs_by_tg_msg_id(tg_msg_id, chat_id)
+        if not dc_pairs:
+            continue
+
+        for dc_msg_id, dc_chat_id in dc_pairs:
+            if _is_deletion_rate_limited():
+                logger.warning(
+                    f"TG→DC deletion sync rate limit hit ({DELETE_SYNC_MAX}/{DELETE_SYNC_WINDOW}s). "
+                    f"Skipping deletion of DC msg {dc_msg_id}."
+                )
+                admin_tg_id = database.get_config("admin_tg_id")
+                if admin_tg_id and tg_app:
+                    try:
+                        await tg_app.bot.send_message(
+                            chat_id=int(admin_tg_id),
+                            text=f"⚠️ <b>Bulk TG→DC deletion blocked</b>\nMore than {DELETE_SYNC_MAX} messages deleted in {DELETE_SYNC_WINDOW}s.\nTG msg {tg_msg_id} → DC msg {dc_msg_id} was <b>NOT</b> removed from Delta Chat.",
+                            parse_mode='HTML'
+                        )
+                    except Exception:
+                        pass
+                return
+
+            try:
+                dc_bot_instance.rpc.delete_messages(dc_accid, [dc_msg_id])
+                database.delete_message_map_entry_by_tg(tg_msg_id, chat_id)
+                logger.info(f"TG→DC: Deleted DC msg {dc_msg_id} (mirrored TG msg {tg_msg_id} in {chat_id})")
+            except Exception as e:
+                logger.warning(f"TG→DC: Could not delete DC msg {dc_msg_id}: {e}")
+
+
 async def _process_userbot_event(event, is_edit=False):
     """Common logic for userbot new and edited posts."""
     global dc_bot_instance, dc_accid, _userbot_tasks
@@ -3392,6 +3513,10 @@ async def start_userbot():
         @userbot_client.on(tg_events.MessageEdited())
         async def on_edited_userbot_msg(event):
             asyncio.create_task(_process_userbot_event(event, is_edit=True))
+
+        @userbot_client.on(tg_events.MessageDeleted())
+        async def on_deleted_userbot_msg(event):
+            asyncio.create_task(_process_userbot_deletion(event))
 
         await userbot_client.start()
         logger.info("Telethon Userbot client started successfully.")
