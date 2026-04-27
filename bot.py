@@ -788,9 +788,34 @@ def handle_dc_info_message(bot, accid, event):
     msg = event.msg
     dc_chat_id = msg.chat_id
     
-    # Detect member additions/joins to groups
-    # 10 = MEMBER_ADDED_TO_GROUP, 12 = MEMBER_JOINED_GROUP (joining via link)
-    if msg.system_message_type in (10, 12):
+    # Get the system_message_type in a robust way - it can be an int, enum, or string
+    smt = msg.system_message_type
+    smt_str = str(smt).lower() if smt is not None else ""
+    
+    # Log every info message to help debug - only at debug level to avoid noise
+    logger.debug(f"DC info msg in chat {dc_chat_id}: system_message_type={smt!r} ({smt_str!r})")
+    
+    # Match member-added/joined events regardless of how the library represents them:
+    # - As enum: SystemMessageType.MEMBER_ADDED_TO_GROUP / .MEMBER_JOINED_GROUP
+    # - As string: "MemberAddedToGroup", "member_added_to_group", etc.
+    # - As int: whatever the underlying value happens to be
+    is_member_event = False
+    try:
+        if smt == SystemMessageType.MEMBER_ADDED_TO_GROUP:
+            is_member_event = True
+        elif hasattr(SystemMessageType, 'MEMBER_JOINED_GROUP') and smt == SystemMessageType.MEMBER_JOINED_GROUP:
+            is_member_event = True
+    except Exception:
+        pass
+    
+    # Also match by string representation as a fallback
+    if not is_member_event:
+        member_keywords = ("memberadded", "member_added", "memberjoined", "member_joined")
+        is_member_event = any(kw in smt_str.replace(" ", "").replace("_", "") for kw in
+                              ("memberadded", "memberjoined"))
+    
+    if is_member_event:
+        logger.info(f"Member event detected in DC chat {dc_chat_id} (type={smt!r})")
         # Check if this is a bridged channel
         ch = database.get_channel_by_dc_chat_id(dc_chat_id)
         if ch and main_loop:
@@ -799,15 +824,14 @@ def handle_dc_info_message(bot, accid, event):
             ub_target = ch['tg_channel_username'] if ch['tg_channel_username'] else tg_channel_id
             
             if ub_target:
-                # Note: We NO LONGER skip the relay here based on cooldown.
-                # Instead, the _relay_channel_history function uses a cache to avoid Telegram load,
-                # but it STILL sends the messages to the group so the new member sees them.
                 logger.info(f"New member joined bridged DC channel {dc_chat_id}. Relaying history...")
                 invite_link = ch.get('invite_link')
                 asyncio.run_coroutine_threadsafe(
                     _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=invite_link),
                     main_loop
                 )
+        elif not ch:
+            logger.debug(f"DC chat {dc_chat_id} is not a bridged channel, skipping history relay.")
 
 
 @dc_cli.on(events.NewMessage(command="/channels"))
