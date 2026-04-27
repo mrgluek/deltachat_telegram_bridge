@@ -788,8 +788,9 @@ def handle_dc_info_message(bot, accid, event):
     msg = event.msg
     dc_chat_id = msg.chat_id
     
-    # Detect member additions to groups
-    if msg.system_message_type == SystemMessageType.MEMBER_ADDED_TO_GROUP:
+    # Detect member additions/joins to groups
+    # 10 = MEMBER_ADDED_TO_GROUP, 12 = MEMBER_JOINED_GROUP (joining via link)
+    if msg.system_message_type in (10, 12):
         # Check if this is a bridged channel
         ch = database.get_channel_by_dc_chat_id(dc_chat_id)
         if ch and main_loop:
