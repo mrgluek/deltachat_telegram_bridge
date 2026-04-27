@@ -530,7 +530,7 @@ def dc_donate_command(bot, accid, event):
         "❤️ Support Bot Development\n\n"
         "If you find this bridge useful, you can support its development and server costs here:\n\n"
         "☕️ Ko-fi: https://ko-fi.com/gluek (🌍 world cards, paypal, no commissions)\n"
-        "💳 Tribute: https://web.tribute.tg/d/IWb (🇷🇺 russian cards, SBP, high commissions)\n\n"
+        "🚀 Tribute: https://web.tribute.tg/d/IWb (🇷🇺 russian cards, SBP, high commissions)\n\n"
         "Thank you! 🙏"
     )
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
