@@ -1150,6 +1150,9 @@ def handle_dc_msg_deleted(bot, accid, event):
             return
 
         for tg_msg_id, tg_chat_id in tg_mappings:
+            # Clean up the mapping immediately to prevent echo loops
+            database.delete_message_map_entry_by_dc(msg_id, None)
+
             if _is_deletion_rate_limited():
                 logger.warning(
                     f"DC→TG deletion sync rate limit hit ({DELETE_SYNC_MAX}/{DELETE_SYNC_WINDOW}s). "
@@ -1172,7 +1175,6 @@ def handle_dc_msg_deleted(bot, accid, event):
                 _delete_tg_message(tg_chat_id, tg_msg_id),
                 main_loop
             )
-            database.delete_message_map_entry_by_dc(msg_id, None)  # cleanup is best-effort
 
     except Exception as e:
         logger.error(f"Error in DC msg deletion handler: {e}")
@@ -3401,6 +3403,9 @@ async def _process_userbot_deletion(event):
             continue
 
         for dc_msg_id, dc_chat_id in dc_pairs:
+            # Clean up the mapping immediately to prevent echo loops
+            database.delete_message_map_entry_by_tg(tg_msg_id, chat_id)
+
             if _is_deletion_rate_limited():
                 logger.warning(
                     f"TG→DC deletion sync rate limit hit ({DELETE_SYNC_MAX}/{DELETE_SYNC_WINDOW}s). "
@@ -3420,7 +3425,6 @@ async def _process_userbot_deletion(event):
 
             try:
                 dc_bot_instance.rpc.delete_messages(dc_accid, [dc_msg_id])
-                database.delete_message_map_entry_by_tg(tg_msg_id, chat_id)
                 logger.info(f"TG→DC: Deleted DC msg {dc_msg_id} (mirrored TG msg {tg_msg_id} in {chat_id})")
             except Exception as e:
                 logger.warning(f"TG→DC: Could not delete DC msg {dc_msg_id}: {e}")
