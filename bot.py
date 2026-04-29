@@ -1174,14 +1174,34 @@ def handle_dc_msg_deleted(bot, accid, event):
         if not tg_mappings:
             return
 
-        for tg_msg_id, tg_chat_id in tg_mappings:
+        for tg_msg_id, tg_chat_id, dc_chat_id in tg_mappings:
             # Clean up the mapping immediately to prevent echo loops
             database.delete_message_map_entry_by_dc(msg_id, None)
+
+            # Try to get chat title, author and text for better debugging
+            chat_title = f"Chat {dc_chat_id}"
+            extra_info = ""
+            try:
+                chat = bot.rpc.get_chat(accid, dc_chat_id)
+                if chat and chat.get('name'):
+                    chat_title = chat['name']
+                
+                # Try to fetch message info (might be gone already)
+                msg = bot.rpc.get_msg_info(accid, msg_id)
+                if msg:
+                    author = msg.get('from_id', 'Unknown')
+                    text = msg.get('text', '')
+                    if text:
+                        extra_info = f" | Author: {author} | Text: '{_truncate(text, 50)}'"
+                    else:
+                        extra_info = f" | Author: {author} (Media/Other)"
+            except Exception:
+                pass
 
             if _is_deletion_rate_limited():
                 logger.warning(
                     f"DC→TG deletion sync rate limit hit ({DELETE_SYNC_MAX}/{DELETE_SYNC_WINDOW}s). "
-                    f"Skipping deletion of TG msg {tg_msg_id} in {tg_chat_id}."
+                    f"Skipping deletion of TG msg {tg_msg_id} in {tg_chat_id} (DC: '{chat_title}', msg {msg_id}{extra_info})."
                 )
                 # Notify admin
                 admin_tg_id = database.get_config("admin_tg_id")
@@ -1189,7 +1209,13 @@ def handle_dc_msg_deleted(bot, accid, event):
                     asyncio.run_coroutine_threadsafe(
                         tg_app.bot.send_message(
                             chat_id=int(admin_tg_id),
-                            text=f"⚠️ <b>Bulk deletion blocked</b>\nMore than {DELETE_SYNC_MAX} messages deleted in {DELETE_SYNC_WINDOW}s.\nDC msg {msg_id} → TG msg {tg_msg_id} in chat {tg_chat_id} was <b>NOT</b> deleted on Telegram.",
+                            text=(
+                                f"⚠️ <b>Bulk deletion blocked</b>\n"
+                                f"More than {DELETE_SYNC_MAX} messages deleted in {DELETE_SYNC_WINDOW}s.\n"
+                                f"<b>Chat:</b> {html.escape(chat_title)}\n"
+                                f"<b>Message Info:</b> {html.escape(extra_info.strip(' | ') or 'Not available')}\n"
+                                f"DC msg {msg_id} → TG msg {tg_msg_id} in chat {tg_chat_id} was <b>NOT</b> deleted on Telegram."
+                            ),
                             parse_mode='HTML'
                         ),
                         main_loop
@@ -1197,7 +1223,7 @@ def handle_dc_msg_deleted(bot, accid, event):
                 return
 
             asyncio.run_coroutine_threadsafe(
-                _delete_tg_message(tg_chat_id, tg_msg_id),
+                _delete_tg_message(tg_chat_id, tg_msg_id, f" (DC: '{chat_title}'{extra_info})"),
                 main_loop
             )
 
@@ -1205,7 +1231,7 @@ def handle_dc_msg_deleted(bot, accid, event):
         logger.error(f"Error in DC msg deletion handler: {e}")
 
 
-async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int):
+async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int, info_text: str = ""):
     """Delete a message in Telegram via the Bot API, with Userbot fallback."""
     global tg_app, userbot_client
     
@@ -1213,24 +1239,24 @@ async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int):
     if tg_app:
         try:
             await tg_app.bot.delete_message(chat_id=tg_chat_id, message_id=tg_msg_id)
-            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}")
+            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}{info_text}")
             deleted = True
         except Exception as e:
             if "not a member" in str(e) or "chat not found" in str(e):
-                logger.debug(f"DC→TG: Bot API failed to delete msg {tg_msg_id} in {tg_chat_id}, falling back to Userbot: {e}")
+                logger.debug(f"DC→TG: Bot API failed to delete msg {tg_msg_id} in {tg_chat_id}{info_text}, falling back to Userbot: {e}")
             else:
-                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Bot API: {e}")
+                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Bot API: {e}")
 
     if not deleted and userbot_client and userbot_client.is_connected():
         try:
             entity = await userbot_client.get_entity(tg_chat_id)
             await userbot_client.delete_messages(entity, [tg_msg_id])
-            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id} via Userbot")
+            logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot")
         except Exception as e:
             if "not a member" in str(e) or "chat not found" in str(e) or "can't be deleted" in str(e).lower():
-                logger.debug(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Userbot (no permission/not found): {e}")
+                logger.debug(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot (no permission/not found): {e}")
             else:
-                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id} via Userbot either: {e}")
+                logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot either: {e}")
 
 
 @dc_cli.on(events.RawEvent(events.EventType.REACTIONS_CHANGED))
