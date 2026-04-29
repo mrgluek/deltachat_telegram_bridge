@@ -208,6 +208,24 @@ DELETE_SYNC_WINDOW = 60       # seconds
 _deletion_sync_times: list[float] = []
 _deletion_sync_lock = threading.Lock()
 
+# Set of DC message IDs deleted by the bot itself (e.g. old version replaced by edit).
+# These are exempt from the rate limit so that edit-replacements never block real deletions.
+_bot_initiated_dc_deletes: set[int] = set()
+_bot_initiated_dc_deletes_lock = threading.Lock()
+
+def _register_bot_initiated_delete(dc_msg_id: int):
+    """Mark a DC message as being deleted by the bot (e.g. edit replacement). Thread-safe."""
+    with _bot_initiated_dc_deletes_lock:
+        _bot_initiated_dc_deletes.add(dc_msg_id)
+
+def _consume_bot_initiated_delete(dc_msg_id: int) -> bool:
+    """Returns True (and removes the mark) if this deletion was bot-initiated."""
+    with _bot_initiated_dc_deletes_lock:
+        if dc_msg_id in _bot_initiated_dc_deletes:
+            _bot_initiated_dc_deletes.discard(dc_msg_id)
+            return True
+        return False
+
 def _is_deletion_rate_limited() -> bool:
     """Returns True if too many deletions have been synced recently (safety guard)."""
     with _deletion_sync_lock:
@@ -1143,6 +1161,12 @@ def handle_dc_msg_deleted(bot, accid, event):
     try:
         msg_id = getattr(event, 'msg_id', None)
         if not msg_id:
+            return
+
+        # If the bot itself initiated this deletion (e.g. replacing an old edit copy)
+        # skip it entirely — no need to sync back to TG, no rate-limit charge.
+        if _consume_bot_initiated_delete(msg_id):
+            database.delete_message_map_entry_by_dc(msg_id, None)
             return
 
         # Look up all TG messages mapped to this DC message
@@ -2597,6 +2621,16 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     try:
+        # Delete the old DC message before sending the updated version.
+        old_dc_msg_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
+        if old_dc_msg_id:
+            try:
+                _register_bot_initiated_delete(old_dc_msg_id)
+                dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
+            except Exception as del_e:
+                logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
+                _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+
         msg_data = MsgData(text=formatted_msg)
         if author:
             msg_data.override_sender_name = f"✏️ [Edited] {author}"
@@ -2604,7 +2638,6 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
             msg_data.override_sender_name = "✏️ [Edited]"
         dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if dc_sent_id:
-            # Update hash mapping (keep the same mapping but with new hash)
             database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
         logger.info(f"Relayed edited channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
@@ -2696,6 +2729,16 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
 
     for dc_chat_id in dc_chats:
         try:
+            # Delete the old DC message before sending the updated version.
+            old_dc_msg_id = database.get_dc_msg_id(msg.message_id, tg_chat_id, dc_chat_id)
+            if old_dc_msg_id:
+                try:
+                    _register_bot_initiated_delete(old_dc_msg_id)
+                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
+                except Exception as del_e:
+                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
+                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+
             msg_data = MsgData(text=formatted_msg)
             msg_data.override_sender_name = sender_name
             await _wait_for_global_dc_rate_limit()
@@ -3366,7 +3409,18 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         
         if file_path:
             msg_data.file = file_path
-            
+
+        # For edits: delete old DC message before sending the updated version.
+        if is_edit:
+            old_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id)
+            if old_dc_msg_id:
+                try:
+                    _register_bot_initiated_delete(old_dc_msg_id)
+                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
+                except Exception as del_e:
+                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before userbot edit relay: {del_e}")
+                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+
         await _wait_for_global_dc_rate_limit()
         sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if sent_id:

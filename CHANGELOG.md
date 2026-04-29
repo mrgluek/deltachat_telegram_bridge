@@ -1,4 +1,6 @@
-## [Unreleased]
+## [2026-04-29]
+- **Improved Edit Handling**: When a Telegram message is edited, the bot now deletes the previous version in Delta Chat before sending the updated one (with the `✏️ [Edited]` prefix), preventing message duplication and clutter.
+- **Smarter Deletion Rate Limiting**: Technical deletions (like replacing an old message with an edit) are now exempt from the deletion safety limit, ensuring they don't block legitimate user-initiated deletions.
 
 ## [2026-04-27]
 - **Bidirectional Deletion Sync**: Messages deleted in Telegram are now removed from Delta Chat, and vice versa.
