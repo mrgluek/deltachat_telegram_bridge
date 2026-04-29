@@ -1298,7 +1298,7 @@ def handle_dc_reaction(bot, accid, event):
         else:
             bot.logger.info(f"No reactions found for DC msg {msg_id}")
                 
-        for tg_msg_id, tg_chat_id in tg_mappings:
+        for tg_msg_id, tg_chat_id, _ in tg_mappings:
             try:
                 reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
                 asyncio.run_coroutine_threadsafe(
