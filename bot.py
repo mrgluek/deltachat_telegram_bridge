@@ -471,9 +471,12 @@ def on_init(bot, args):
             bot.logger.warning(f"Could not set avatar: {e}")
 
 def get_dc_help_text(sender_email: str) -> str:
-    admin_dc = database.get_config("admin_dc_email")
-    mode = "Private (bot owner only)" if admin_dc else "Public (group admins only)"
-    return (
+    admin_dc_pubkey = database.get_config("admin_dc_pubkey")
+    admin_dc_email = database.get_config("admin_dc_email")
+    
+    mode = "Private (bot owner only)" if (admin_dc_pubkey or admin_dc_email) else "Public (group admins only)"
+    
+    help_text = (
         f"👋 Hi {sender_email}!\n\n"
         f"I'm the TG Bridge bot. Current mode: {mode}\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
@@ -485,11 +488,18 @@ def get_dc_help_text(sender_email: str) -> str:
         f"/help — Show this help message\n"
         f"/donate — Support bot development ❤️\n\n"
         f"Management (Admins only):\n"
+    )
+    
+    if not admin_dc_pubkey:
+        help_text += "/initadmin — Claim bot ownership (securely link your pubkey)\n"
+    
+    help_text += (
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from the group\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
+    return help_text
 
 def get_tg_help_text(name: str, user_id: int) -> str:
     admin_tg = database.get_config("admin_tg_id")
@@ -528,6 +538,29 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     return "\n".join(lines)
 
 
+def _is_dc_admin(bot, accid, from_id):
+    """Checks if a Delta Chat user is the bot administrator."""
+    try:
+        # 1. Priority check: cryptographic public key (pubkey)
+        stored_pubkey = database.get_config("admin_dc_pubkey")
+        if stored_pubkey:
+            # Note: get_contact_public_key returns the key if available
+            current_pubkey = bot.rpc.get_contact_public_key(accid, from_id)
+            if current_pubkey and current_pubkey == stored_pubkey:
+                return True
+            # If pubkey is set but doesn't match, we ignore email (closes spoofing window)
+            return False
+
+        # 2. Fallback check: email address (legacy/uninitialized)
+        stored_email = database.get_config("admin_dc_email")
+        if stored_email:
+            contact = bot.rpc.get_contact(accid, from_id)
+            if contact and contact.address.lower() == stored_email.lower():
+                return True
+    except Exception as e:
+        logger.error(f"Error during admin verification: {e}")
+    return False
+
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     """Reply with help text."""
@@ -539,6 +572,46 @@ def help_command(bot, accid, event):
     
     help_msg = get_dc_help_text(sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
+
+@dc_cli.on(events.NewMessage(command="/initadmin"))
+def initadmin_command(bot, accid, event):
+    """Claim bot ownership or update admin info."""
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+    sender_pubkey = bot.rpc.get_contact_public_key(accid, msg.from_id)
+    
+    stored_pubkey = database.get_config("admin_dc_pubkey")
+    stored_email = database.get_config("admin_dc_email")
+    
+    if stored_pubkey:
+        # If admin is already set via pubkey, only they can update it
+        if sender_pubkey == stored_pubkey:
+            database.set_config("admin_dc_email", sender_email)
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ Admin information updated."))
+        else:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set."))
+        return
+
+    if stored_email:
+        # Legacy transition: if email matches, "upgrade" to pubkey
+        if sender_email.lower() == stored_email.lower():
+            if sender_pubkey:
+                database.set_config("admin_dc_pubkey", sender_pubkey)
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded to cryptographic pubkey for {sender_email}."))
+            else:
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your public key. Please ensure you have sent an encrypted message to the bot."))
+        else:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set (via legacy email)."))
+        return
+
+    # No admin set at all: first come, first served
+    if sender_pubkey:
+        database.set_config("admin_dc_email", sender_email)
+        database.set_config("admin_dc_pubkey", sender_pubkey)
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email})."))
+    else:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your public key. Please ensure you have sent an encrypted message to the bot."))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
@@ -569,10 +642,8 @@ def dc_channeladd_command(bot, accid, event):
     msg = event.msg
     payload = event.payload.strip()
     
-    # Simple email-based admin check
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+    # Admin check
+    if not _is_dc_admin(bot, accid, msg.from_id):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
         return
 
@@ -599,9 +670,7 @@ def dc_channelremove_command(bot, accid, event):
     msg = event.msg
     payload = event.payload.strip()
     
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
         return
 
@@ -636,11 +705,8 @@ def bridge_command(bot, accid, event):
         return
 
     # Admin check: if a global admin is set, only they can manage bridges
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    
-    if admin_dc_email:
-        if sender_email.lower() != admin_dc_email.lower():
+    if database.get_config("admin_dc_pubkey") or database.get_config("admin_dc_email"):
+        if not _is_dc_admin(bot, accid, msg.from_id):
             bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /bridge."))
             return
     else:
@@ -650,7 +716,7 @@ def bridge_command(bot, accid, event):
             # In Delta Chat, the first contact in the list is the group creator/admin
             # Also check if the sender is the bot owner (contact ID 1 = self)
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
-                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via `init admin_dc`)"))
+                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via /initadmin)"))
                 return
         except Exception:
             pass  # If we can't check, allow it (backward compat)
@@ -682,18 +748,15 @@ def unbridge_command(bot, accid, event):
         return
 
     # Admin check
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    
-    if admin_dc_email:
-        if sender_email.lower() != admin_dc_email.lower():
+    if database.get_config("admin_dc_pubkey") or database.get_config("admin_dc_email"):
+        if not _is_dc_admin(bot, accid, msg.from_id):
             bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /unbridge."))
             return
     else:
         try:
             contacts = bot.rpc.get_chat_contacts(accid, chat_id)
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
-                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via `init admin_dc`)"))
+                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via /initadmin)"))
                 return
         except Exception:
             pass
@@ -743,9 +806,7 @@ def locupdate_command(bot, accid, event):
 def dc_userbotsync_command(bot, accid, event):
     """Force Userbot sync from Delta Chat. Admin only."""
     msg = event.msg
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    if not admin_dc_email or sender_email.lower() != admin_dc_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can trigger synchronization."))
         return
 
@@ -770,9 +831,7 @@ def stats_command(bot, accid, event):
 
     if is_private:
         # In private chat: show all bridges (admin only)
-        admin_dc_email = database.get_config("admin_dc_email")
-        sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-        if admin_dc_email and sender_email.lower() != admin_dc_email.lower():
+        if not _is_dc_admin(bot, accid, msg.from_id):
             bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
             return
 
@@ -876,9 +935,7 @@ def channels_command_dc(bot, accid, event):
     chat_id = msg.chat_id
 
     # Check if requester is admin
-    admin_dc_email = database.get_config("admin_dc_email")
-    sender_email = bot.rpc.get_contact(accid, msg.from_id).address
-    is_admin = admin_dc_email and sender_email.lower() == admin_dc_email.lower()
+    is_admin = _is_dc_admin(bot, accid, msg.from_id)
 
     channels = database.get_all_channels()
     if is_admin:
@@ -973,13 +1030,7 @@ def handle_dc_message(bot, accid, event):
                 
                 if not is_public:
                     # Check if sender is admin or sub-admin
-                    admin_dc_email = database.get_config("admin_dc_email")
-                    contact = bot.rpc.get_contact(accid, msg.from_id)
-                    sender_email = contact.address
-                    
-                    is_admin = False
-                    if admin_dc_email and sender_email.lower() == admin_dc_email.lower():
-                        is_admin = True
+                    is_admin = _is_dc_admin(bot, accid, msg.from_id)
                     
                     # Also check if they are the creator of this bridge (optional but good)
                     # Note: sub-admins are identified by TG ID in the DB, so for DC we mostly rely on admin_dc_email
@@ -3818,7 +3869,9 @@ if __name__ == "__main__":
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "admin_dc":
             if len(sys.argv) > init_idx + 2:
                 database.set_config("admin_dc_email", sys.argv[init_idx + 2])
-                print("Admin Delta Chat email saved in bridge.db.")
+                # Clear pubkey to allow "reset" if admin lost their key
+                database.set_config("admin_dc_pubkey", "")
+                print("Admin Delta Chat email saved. (Public key verification reset, use /initadmin in the bot to re-link securely).")
             else:
                 print("Usage: python bot.py init admin_dc <deltachat_account_email>")
             sys.exit(0)
@@ -3857,7 +3910,7 @@ if __name__ == "__main__":
             print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account")
             print("  python bot.py init tg [token]             - Initialize Telegram bot token")
             print("  python bot.py init admin_tg <tg_id>       - Set Admin Telegram ID for error logs")
-            print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email for error logs")
+            print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email (resets pubkey)")
             print("  python bot.py init api_id <id>            - Set MTProto API ID for userbot")
             print("  python bot.py init api_hash <hash>        - Set MTProto API HASH for userbot")
             print("  python bot.py init userbot                - Interactive sign-in for userbot channels")
