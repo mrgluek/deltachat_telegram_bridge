@@ -1178,6 +1178,10 @@ def handle_dc_msg_deleted(bot, accid, event):
             # Clean up the mapping immediately to prevent echo loops
             database.delete_message_map_entry_by_dc(msg_id, None)
 
+            # Do not sync deletions from DC to TG for channels (users are just subscribers)
+            if database.get_channel_by_dc_chat_id(dc_chat_id):
+                continue
+
             # Try to get chat title, author and text for better debugging
             chat_title = f"Chat {dc_chat_id}"
             extra_info = ""
