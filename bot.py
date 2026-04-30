@@ -1182,15 +1182,18 @@ def handle_dc_msg_deleted(bot, accid, event):
             chat_title = f"Chat {dc_chat_id}"
             extra_info = ""
             try:
-                chat = bot.rpc.get_chat(accid, dc_chat_id)
-                if chat and chat.get('name'):
-                    chat_title = chat['name']
+                chat_info = bot.rpc.get_basic_chat_info(accid, dc_chat_id)
+                if chat_info and chat_info.get('name'):
+                    chat_title = chat_info['name']
+            except Exception:
+                pass
                 
+            try:
                 # Try to fetch message info (might be gone already)
-                msg = bot.rpc.get_msg_info(accid, msg_id)
-                if msg:
-                    author = msg.get('from_id', 'Unknown')
-                    text = msg.get('text', '')
+                msg_obj = bot.rpc.get_message(accid, msg_id)
+                if msg_obj:
+                    author = getattr(msg_obj, 'from_id', 'Unknown')
+                    text = getattr(msg_obj, 'text', '')
                     if text:
                         extra_info = f" | Author: {author} | Text: '{_truncate(text, 50)}'"
                     else:
@@ -1242,7 +1245,8 @@ async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int, info_text: str = "
             logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}{info_text}")
             deleted = True
         except Exception as e:
-            if "not a member" in str(e) or "chat not found" in str(e):
+            e_str = str(e).lower()
+            if "not a member" in e_str or "chat not found" in e_str or "message to delete not found" in e_str or "can't be deleted" in e_str:
                 logger.debug(f"DC→TG: Bot API failed to delete msg {tg_msg_id} in {tg_chat_id}{info_text}, falling back to Userbot: {e}")
             else:
                 logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Bot API: {e}")
@@ -1253,7 +1257,8 @@ async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int, info_text: str = "
             await userbot_client.delete_messages(entity, [tg_msg_id])
             logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot")
         except Exception as e:
-            if "not a member" in str(e) or "chat not found" in str(e) or "can't be deleted" in str(e).lower():
+            e_str = str(e).lower()
+            if "not a member" in e_str or "chat not found" in e_str or "can't be deleted" in e_str or "invalid object id" in e_str or "message to delete not found" in e_str:
                 logger.debug(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot (no permission/not found): {e}")
             else:
                 logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot either: {e}")
