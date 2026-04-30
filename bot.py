@@ -203,7 +203,7 @@ _history_cooldowns: dict[int, float] = {}
 _history_cache: dict[int, dict] = {}
 
 # Deletion sync safety: max deletions per window to avoid accidental bulk-delete
-DELETE_SYNC_MAX = 5           # max messages to auto-delete
+DELETE_SYNC_MAX = 10          # max messages to auto-delete
 DELETE_SYNC_WINDOW = 60       # seconds
 _deletion_sync_times: list[float] = []
 _deletion_sync_lock = threading.Lock()
