@@ -538,14 +538,40 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     return "\n".join(lines)
 
 
+def _get_contact_fingerprint(bot, accid, contact_id):
+    """Extract the encryption fingerprint for a contact.
+    
+    Uses get_contact_encryption_info which returns a human-readable string
+    containing the fingerprint. We extract it by looking for hex-like lines.
+    Returns the raw fingerprint string, or None if unavailable.
+    """
+    try:
+        enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
+        if not enc_info:
+            return None
+        # The encryption info is a multi-line string; fingerprint lines
+        # are groups of hex characters separated by spaces.
+        # Example: "Fingerprint (verified):\n1234 ABCD ...\nEF01 2345 ..."
+        # We extract all hex-like tokens and join them.
+        fingerprint_chars = []
+        for line in enc_info.splitlines():
+            stripped = line.strip()
+            # A fingerprint line consists of groups of hex chars separated by spaces
+            if stripped and all(c in '0123456789abcdefABCDEF ' for c in stripped) and len(stripped) > 8:
+                fingerprint_chars.append(stripped.replace(' ', ''))
+        if fingerprint_chars:
+            return ''.join(fingerprint_chars).upper()
+    except Exception as e:
+        logger.warning(f"Could not get encryption info for contact {contact_id}: {e}")
+    return None
+
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:
         # 1. Priority check: cryptographic fingerprint
         stored_fingerprint = database.get_config("admin_dc_fingerprint")
         if stored_fingerprint:
-            contact = bot.rpc.get_contact(accid, from_id)
-            current_fingerprint = contact.get('fingerprint')
+            current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
             if current_fingerprint and current_fingerprint == stored_fingerprint:
                 return True
             # If fingerprint is set but doesn't match, we ignore email (closes spoofing window)
@@ -579,14 +605,14 @@ def initadmin_command(bot, accid, event):
     msg = event.msg
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
-    sender_fingerprint = contact.get('fingerprint')
+    sender_fingerprint = _get_contact_fingerprint(bot, accid, msg.from_id)
     
     stored_fingerprint = database.get_config("admin_dc_fingerprint")
     stored_email = database.get_config("admin_dc_email")
     
     if stored_fingerprint:
         # If admin is already set via fingerprint, only they can update it
-        if sender_fingerprint == stored_fingerprint:
+        if sender_fingerprint and sender_fingerprint == stored_fingerprint:
             database.set_config("admin_dc_email", sender_email)
             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ Admin information updated."))
         else:
@@ -598,9 +624,12 @@ def initadmin_command(bot, accid, event):
         if sender_email.lower() == stored_email.lower():
             if sender_fingerprint:
                 database.set_config("admin_dc_fingerprint", sender_fingerprint)
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded to cryptographic fingerprint for {sender_email}."))
+                short_fp = ' '.join(sender_fingerprint[i:i+4] for i in range(0, min(16, len(sender_fingerprint)), 4)) + '…'
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
             else:
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. Please ensure you have sent an encrypted message to the bot."))
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
+                                                                "The encryption key exchange may not be complete yet. "
+                                                                "Try sending another message and then run /initadmin again."))
         else:
             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set (via legacy email)."))
         return
@@ -609,9 +638,12 @@ def initadmin_command(bot, accid, event):
     if sender_fingerprint:
         database.set_config("admin_dc_email", sender_email)
         database.set_config("admin_dc_fingerprint", sender_fingerprint)
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email})."))
+        short_fp = ' '.join(sender_fingerprint[i:i+4] for i in range(0, min(16, len(sender_fingerprint)), 4)) + '…'
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\nFingerprint: {short_fp}"))
     else:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. Please ensure you have sent an encrypted message to the bot."))
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
+                                                        "The encryption key exchange may not be complete yet. "
+                                                        "Try sending another message and then run /initadmin again."))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
