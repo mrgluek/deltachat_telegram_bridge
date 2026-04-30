@@ -1,0 +1,16 @@
+name: Notify TG Bridge Changelog
+on: [push]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    container:
+      image: curlimages/curl:latest
+    steps:
+      - name: Send notification
+        run: |
+          curl -H "Title: ${{ github.event.head_commit.message }}" \
+               -H "Tags: robot,bridge" \
+               -d "Автор: ${{ github.actor }}
+               Ссылка: ${{ github.event.head_commit.url }}" \
+               https://ntfy.gluek.info/telegram_bridge_changelog
