@@ -1857,8 +1857,8 @@ async def _check_channel_admin(update: Update) -> bool:
         await update.message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
         return False
     admin_tg_id = database.get_config("admin_tg_id")
-    if admin_tg_id and not database.is_owner(user.id):
-        await update.message.reply_text("❌ Only the bot owner can manage channels.")
+    if admin_tg_id and not database.is_owner_or_admin(user.id):
+        await update.message.reply_text("❌ Only the bot admin can manage channels.")
         return False
     return True
 
