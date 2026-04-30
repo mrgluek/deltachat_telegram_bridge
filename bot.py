@@ -551,9 +551,7 @@ def _get_contact_fingerprint(bot, accid, contact_id):
     try:
         enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
         if not enc_info:
-            logger.info(f"No encryption info for contact {contact_id}")
             return None
-        logger.info(f"Encryption info for contact {contact_id}:\n{enc_info}")
         # Collect all hex blocks (groups of consecutive hex-only lines).
         # The last block is the contact's fingerprint.
         all_blocks = []
@@ -576,12 +574,9 @@ def _get_contact_fingerprint(bot, accid, contact_id):
         
         if all_blocks:
             # Last block = contact's fingerprint
-            result = all_blocks[-1].upper()
-            logger.info(f"Extracted contact fingerprint for {contact_id}: {result[:16]}... (block {len(all_blocks)} of {len(all_blocks)})")
-            return result
-        logger.warning(f"Could not parse fingerprint from encryption info for contact {contact_id}")
-    except Exception as e:
-        logger.warning(f"Could not get encryption info for contact {contact_id}: {e}")
+            return all_blocks[-1].upper()
+    except Exception:
+        pass
     return None
 
 
@@ -592,7 +587,6 @@ def _is_dc_admin(bot, accid, from_id):
         stored_fingerprint = database.get_config("admin_dc_fingerprint")
         if stored_fingerprint:
             current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
-            logger.info(f"Admin check: stored={stored_fingerprint[:16]}... current={current_fingerprint[:16] if current_fingerprint else 'None'}...")
             if current_fingerprint and current_fingerprint == stored_fingerprint:
                 return True
             # If fingerprint is set but doesn't match, we ignore email (closes spoofing window)
@@ -665,40 +659,6 @@ def initadmin_command(bot, accid, event):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
                                                         "The encryption key exchange may not be complete yet. "
                                                         "Try sending another message and then run /initadmin again."))
-
-@dc_cli.on(events.NewMessage(command="/debugadmin"))
-def debugadmin_command(bot, accid, event):
-    """Show debug info for admin fingerprint comparison."""
-    msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    
-    stored_fp = database.get_config("admin_dc_fingerprint") or "(not set)"
-    stored_email = database.get_config("admin_dc_email") or "(not set)"
-    
-    current_fp = _get_contact_fingerprint(bot, accid, msg.from_id) or "(could not extract)"
-    
-    # Also get raw encryption info for debugging
-    try:
-        raw_info = bot.rpc.get_contact_encryption_info(accid, msg.from_id) or "(empty)"
-    except Exception as e:
-        raw_info = f"(error: {e})"
-    
-    match_status = "✅ MATCH" if (stored_fp == current_fp and stored_fp != "(not set)") else "❌ MISMATCH"
-    
-    debug_text = (
-        f"🔍 Admin Debug Info\n\n"
-        f"Your email: {sender_email}\n"
-        f"Your contact_id: {msg.from_id}\n\n"
-        f"Stored admin email: {stored_email}\n"
-        f"Stored fingerprint: {stored_fp[:40]}{'...' if len(stored_fp) > 40 else ''}\n"
-        f"Stored FP length: {len(stored_fp)}\n\n"
-        f"Current fingerprint: {current_fp[:40]}{'...' if len(str(current_fp)) > 40 else ''}\n"
-        f"Current FP length: {len(current_fp)}\n\n"
-        f"Result: {match_status}\n\n"
-        f"Raw encryption info:\n{raw_info}"
-    )
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=debug_text))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
