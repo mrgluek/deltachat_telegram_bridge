@@ -542,9 +542,11 @@ def _get_contact_fingerprint(bot, accid, contact_id):
     """Extract the encryption fingerprint for a contact.
     
     Uses get_contact_encryption_info which returns a human-readable string
-    containing fingerprints. We extract only the FIRST fingerprint block
-    (which belongs to the contact, not the bot).
-    Returns the raw fingerprint string (uppercase hex), or None if unavailable.
+    containing two fingerprint blocks:
+      1. "Me (bot@...): [bot's fingerprint]"
+      2. "Contact (user@...): [contact's fingerprint]"
+    We extract the LAST hex block, which is the contact's fingerprint.
+    Returns the raw fingerprint string (uppercase hex, 40 chars), or None.
     """
     try:
         enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
@@ -552,34 +554,36 @@ def _get_contact_fingerprint(bot, accid, contact_id):
             logger.info(f"No encryption info for contact {contact_id}")
             return None
         logger.info(f"Encryption info for contact {contact_id}:\n{enc_info}")
-        # The encryption info is a multi-line string with two fingerprint blocks.
-        # We only want the FIRST one (the contact's fingerprint).
-        # Strategy: collect hex-only lines, stop when we hit a non-hex line
-        # after already collecting some hex lines (i.e. the second header).
-        fingerprint_chars = []
-        found_first_block = False
+        # Collect all hex blocks (groups of consecutive hex-only lines).
+        # The last block is the contact's fingerprint.
+        all_blocks = []
+        current_block = []
         for line in enc_info.splitlines():
             stripped = line.strip()
-            # A fingerprint line consists of groups of hex chars separated by spaces
             is_hex_line = (
                 stripped 
                 and len(stripped) > 8 
                 and all(c in '0123456789abcdefABCDEF ' for c in stripped)
             )
             if is_hex_line:
-                fingerprint_chars.append(stripped.replace(' ', ''))
-                found_first_block = True
-            elif found_first_block:
-                # We hit a non-hex line after collecting hex lines = end of first block
-                break
-        if fingerprint_chars:
-            result = ''.join(fingerprint_chars).upper()
-            logger.info(f"Extracted fingerprint for contact {contact_id}: {result[:16]}...")
+                current_block.append(stripped.replace(' ', ''))
+            else:
+                if current_block:
+                    all_blocks.append(''.join(current_block))
+                    current_block = []
+        if current_block:
+            all_blocks.append(''.join(current_block))
+        
+        if all_blocks:
+            # Last block = contact's fingerprint
+            result = all_blocks[-1].upper()
+            logger.info(f"Extracted contact fingerprint for {contact_id}: {result[:16]}... (block {len(all_blocks)} of {len(all_blocks)})")
             return result
         logger.warning(f"Could not parse fingerprint from encryption info for contact {contact_id}")
     except Exception as e:
         logger.warning(f"Could not get encryption info for contact {contact_id}: {e}")
     return None
+
 
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
