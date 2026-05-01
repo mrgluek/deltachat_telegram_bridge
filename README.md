@@ -13,6 +13,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 - **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
+- **Login Code Forwarding**: Automatic delivery of Telegram login codes to the admin.
 - **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
 - **Automatic Updates**: Self-updating via a simple script and cron job.
 - **Admin-Only Management**: Securely bridge channels and groups with restricted access.
@@ -273,6 +274,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
 | `/userbotsync` | Force re-sync Userbot subscriptions |
+| `/userbotjoin <link>` | Join a channel/group via Userbot using an invite link |
 | `/groups` | List technical account's groups for easy bridging |
 | `/donate` | Support bot development ❤️ |
 
@@ -289,6 +291,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 
 - `/channeladd @username` — Bridge a new channel (admin email check).
 - `/channelremove N` — Remove bridge for channel #N.
+- `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/stats` — Show bridge statistics for the current chat.
 - `/help` — Show Delta Chat bot help.
@@ -320,6 +323,9 @@ This step requires entering your phone number and the SMS/Telegram validation co
 ```bash
 docker-compose exec bridge python bot.py init userbot
 ```
+
+> [!TIP]
+> If Telegram sends a login code to your technical account itself, the bot will automatically capture it and forward it to you via Delta Chat and Telegram.
 
 ### 4. Security Risks
 >

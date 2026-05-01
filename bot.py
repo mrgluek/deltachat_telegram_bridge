@@ -495,7 +495,9 @@ def get_dc_help_text(sender_email: str) -> str:
     
     help_text += (
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
-        f"/unbridge — Remove the bridge from the group\n\n"
+        f"/unbridge — Remove the bridge from the group\n"
+        f"/userbotsync — Force Userbot re-sync\n"
+        f"/userbotjoin <link> — Join channel via Userbot\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
@@ -527,6 +529,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/channelqr N — Get channel QR invite")
         lines.append(f"/channelremove N — Remove a channel bridge")
         lines.append(f"/userbotsync — Force Userbot re-sync")
+        lines.append(f"/userbotjoin link — Join channel via Userbot")
         
         lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
         lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
@@ -866,6 +869,138 @@ def dc_userbotsync_command(bot, accid, event):
         asyncio.run_coroutine_threadsafe(run_sync(), main_loop)
     else:
         logger.error("Main loop not found, cannot run userbotsync")
+
+@dc_cli.on(events.NewMessage(command="/userbotjoin"))
+def dc_userbotjoin_command(bot, accid, event):
+    """Join a channel/group via Userbot using an invite link. Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use this command."))
+        return
+
+    text = msg.text.strip()
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+            text="/userbotjoin <link>\n\n"
+                 "Examples:\n"
+                 "• /userbotjoin https://t.me/+AbCdEfGhIjK\n"
+                 "• /userbotjoin https://t.me/channelname\n"
+                 "• /userbotjoin @channelname"
+        ))
+        return
+
+    link = parts[1].strip()
+
+    async def do_join():
+        import re
+        global userbot_client
+
+        if not (userbot_client and userbot_client.is_connected()):
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Userbot is not connected."))
+            return
+
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"⏳ Attempting to join via Userbot: {link}..."))
+
+        try:
+            joined_entity = None
+            joined_title = "Unknown"
+
+            # Check if it's a private invite link
+            invite_hash = None
+            m = re.search(r't\.me/\+([a-zA-Z0-9_-]+)', link)
+            if m:
+                invite_hash = m.group(1)
+            else:
+                m = re.search(r't\.me/joinchat/([a-zA-Z0-9_-]+)', link)
+                if m:
+                    invite_hash = m.group(1)
+
+            if invite_hash:
+                if not ImportChatInviteRequest:
+                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Telethon not properly installed."))
+                    return
+
+                try:
+                    check = await userbot_client(CheckChatInviteRequest(invite_hash))
+                    if hasattr(check, 'chat'):
+                        joined_entity = check.chat
+                        joined_title = getattr(joined_entity, 'title', 'Unknown')
+                    else:
+                        result = await userbot_client(ImportChatInviteRequest(invite_hash))
+                        if hasattr(result, 'chats') and result.chats:
+                            joined_entity = result.chats[0]
+                            joined_title = getattr(joined_entity, 'title', 'Unknown')
+                except Exception as e:
+                    if "already" in str(e).lower() or "USER_ALREADY_PARTICIPANT" in str(e):
+                        try:
+                            joined_entity = await userbot_client.get_entity(link)
+                            joined_title = getattr(joined_entity, 'title', 'Unknown')
+                        except Exception:
+                            pass
+                    else:
+                        raise
+            else:
+                target = link
+                if not target.startswith('@') and 't.me/' in target:
+                    m = re.search(r't\.me/([a-zA-Z0-9_]+)', target)
+                    if m:
+                        target = f"@{m.group(1)}"
+
+                entity = await userbot_client.get_entity(target)
+                if getattr(entity, 'left', True):
+                    if JoinChannelRequest:
+                        await userbot_client(JoinChannelRequest(entity))
+                joined_entity = entity
+                joined_title = getattr(entity, 'title', 'Unknown')
+
+            if joined_entity:
+                joined_id = getattr(joined_entity, 'id', None)
+                tg_channel_id = int(f"-100{joined_id}") if joined_id and joined_id > 0 else joined_id
+
+                matched_channel = None
+                if tg_channel_id:
+                    matched_channel = database.get_channel_by_tg_id(tg_channel_id)
+                if not matched_channel:
+                    username = getattr(joined_entity, 'username', None)
+                    if username:
+                        matched_channel = database.get_channel_by_tg_username(username)
+
+                if matched_channel:
+                    database.update_channel_invite_link(matched_channel['id'], link)
+                    if not matched_channel.get('tg_channel_id') and tg_channel_id:
+                        database.update_channel_tg_id(
+                            matched_channel.get('tg_channel_username', ''),
+                            tg_channel_id
+                        )
+                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                        text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n"
+                             f"Invite link saved for future syncs.\n\n"
+                             f"Matched to bridged channel #{matched_channel['id']}."
+                    ))
+                else:
+                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                        text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n\n"
+                             f"⚠️ This channel is not yet bridged."
+                    ))
+
+                try:
+                    chan_id = matched_channel['id'] if matched_channel else None
+                    if chan_id:
+                        await update_tg_channel_stats(chan_id, joined_entity)
+                except Exception:
+                    pass
+            else:
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⚠️ Joined but could not determine channel details."))
+
+        except Exception as e:
+            logger.error(f"DC userbotjoin failed for {link}: {e}")
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to join: {str(e)[:500]}"))
+
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(do_join(), main_loop)
+    else:
+        logger.error("Main loop not found, cannot run userbotjoin")
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
@@ -2245,6 +2380,155 @@ async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_T
     
     await update.message.reply_text("⏳ Starting Userbot synchronization...")
     asyncio.create_task(sync_userbot_channels(force=True))
+
+
+async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Join a channel/group via Userbot using an invite link. Owner only."""
+    if not database.is_owner(update.effective_user.id):
+        return
+
+    if not (userbot_client and userbot_client.is_connected()):
+        await update.message.reply_text("❌ Userbot is not connected.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: <code>/userbotjoin &lt;invite_link_or_username&gt;</code>\n\n"
+            "Examples:\n"
+            "• <code>/userbotjoin https://t.me/+AbCdEfGhIjK</code>\n"
+            "• <code>/userbotjoin https://t.me/channelname</code>\n"
+            "• <code>/userbotjoin @channelname</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    link = context.args[0].strip()
+    status_msg = await update.message.reply_text(f"⏳ Attempting to join via Userbot: <code>{html.escape(link)}</code>...", parse_mode='HTML')
+
+    try:
+        joined_entity = None
+        joined_title = "Unknown"
+
+        # Check if it's a private invite link (t.me/+HASH or t.me/joinchat/HASH)
+        import re
+        invite_hash = None
+        m = re.search(r't\.me/\+([a-zA-Z0-9_-]+)', link)
+        if m:
+            invite_hash = m.group(1)
+        else:
+            m = re.search(r't\.me/joinchat/([a-zA-Z0-9_-]+)', link)
+            if m:
+                invite_hash = m.group(1)
+
+        if invite_hash:
+            # Private invite link — use ImportChatInviteRequest
+            if not ImportChatInviteRequest:
+                await status_msg.edit_text("❌ Telethon is not properly installed (ImportChatInviteRequest missing).")
+                return
+
+            # First check what we're joining
+            try:
+                check = await userbot_client(CheckChatInviteRequest(invite_hash))
+                if hasattr(check, 'chat'):
+                    # Already a member
+                    joined_entity = check.chat
+                    joined_title = getattr(joined_entity, 'title', 'Unknown')
+                    await status_msg.edit_text(
+                        f"✅ Userbot is already a member of <b>{html.escape(joined_title)}</b>.",
+                        parse_mode='HTML'
+                    )
+                else:
+                    # Not a member yet — join
+                    result = await userbot_client(ImportChatInviteRequest(invite_hash))
+                    if hasattr(result, 'chats') and result.chats:
+                        joined_entity = result.chats[0]
+                        joined_title = getattr(joined_entity, 'title', 'Unknown')
+            except Exception as e:
+                if "already" in str(e).lower() or "USER_ALREADY_PARTICIPANT" in str(e):
+                    # Try to resolve via the link to get the entity
+                    try:
+                        joined_entity = await userbot_client.get_entity(link)
+                        joined_title = getattr(joined_entity, 'title', 'Unknown')
+                    except Exception:
+                        pass
+                    await status_msg.edit_text(
+                        f"✅ Userbot is already a member." + (f" ({html.escape(joined_title)})" if joined_title != "Unknown" else ""),
+                        parse_mode='HTML'
+                    )
+                    # Still try to update DB below
+                else:
+                    raise
+        else:
+            # Public link or @username — use get_entity + JoinChannelRequest
+            target = link
+            if not target.startswith('@') and 't.me/' in target:
+                # Extract username from t.me/username
+                m = re.search(r't\.me/([a-zA-Z0-9_]+)', target)
+                if m:
+                    target = f"@{m.group(1)}"
+
+            entity = await userbot_client.get_entity(target)
+            if getattr(entity, 'left', True):
+                if JoinChannelRequest:
+                    await userbot_client(JoinChannelRequest(entity))
+            joined_entity = entity
+            joined_title = getattr(entity, 'title', 'Unknown')
+
+        if joined_entity:
+            joined_id = getattr(joined_entity, 'id', None)
+            # Telethon uses positive IDs; convert to Bot API format
+            tg_channel_id = int(f"-100{joined_id}") if joined_id and joined_id > 0 else joined_id
+
+            # Try to match this to an existing channel in DB and update its invite_link
+            matched_channel = None
+            if tg_channel_id:
+                matched_channel = database.get_channel_by_tg_id(tg_channel_id)
+            if not matched_channel:
+                username = getattr(joined_entity, 'username', None)
+                if username:
+                    matched_channel = database.get_channel_by_tg_username(username)
+
+            if matched_channel:
+                # Save the invite link for future syncs
+                database.update_channel_invite_link(matched_channel['id'], link)
+                # Also update tg_channel_id if it was missing
+                if not matched_channel.get('tg_channel_id') and tg_channel_id:
+                    database.update_channel_tg_id(
+                        matched_channel.get('tg_channel_username', ''),
+                        tg_channel_id
+                    )
+                await status_msg.edit_text(
+                    f"✅ Userbot joined <b>{html.escape(joined_title)}</b> "
+                    f"(ID: <code>{tg_channel_id}</code>).\n"
+                    f"Invite link saved for future syncs.\n\n"
+                    f"Matched to bridged channel #{matched_channel['id']}.",
+                    parse_mode='HTML'
+                )
+            else:
+                await status_msg.edit_text(
+                    f"✅ Userbot joined <b>{html.escape(joined_title)}</b> "
+                    f"(ID: <code>{tg_channel_id}</code>).\n\n"
+                    f"⚠️ This channel is not yet bridged. Use <code>/channeladd {tg_channel_id}</code> to bridge it.",
+                    parse_mode='HTML'
+                )
+
+            # Update stats
+            try:
+                chan_id = matched_channel['id'] if matched_channel else None
+                if chan_id:
+                    await update_tg_channel_stats(chan_id, joined_entity)
+            except Exception:
+                pass
+        else:
+            await status_msg.edit_text("⚠️ Joined successfully but could not determine channel details.")
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"userbotjoin failed for {link}: {e}")
+        await status_msg.edit_text(
+            f"❌ Failed to join: <code>{html.escape(error_msg[:500])}</code>",
+            parse_mode='HTML'
+        )
 
 
 async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3644,6 +3928,33 @@ async def _process_userbot_event_internal(event, is_edit=False):
     if not (userbot_client and userbot_client.is_connected()):
         return
 
+    # Forward login/verification codes from Telegram's service account (ID 777000) to admin
+    sender_id = getattr(msg, 'sender_id', None) or getattr(msg, 'from_id', None)
+    if sender_id == 777000 and msg.text:
+        logger.info("Userbot: Received message from Telegram service account (login code)")
+        code_text = f"🔐 *Login code for technical account:*\n\n`{msg.text}`"
+        admin_tg_id = database.get_config("admin_tg_id")
+        if admin_tg_id and tg_app:
+            try:
+                await tg_app.bot.send_message(
+                    chat_id=int(admin_tg_id),
+                    text=code_text,
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Failed to forward login code to TG admin: {e}")
+        # Also send to DC admin
+        admin_dc_email = database.get_config("admin_dc_email")
+        if admin_dc_email and dc_bot_instance and dc_accid:
+            try:
+                dc_code_text = f"🔐 Login code for technical account:\n\n{msg.text}"
+                contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
+                chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
+                dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_code_text))
+            except Exception as e:
+                logger.error(f"Failed to forward login code to DC admin: {e}")
+        return  # Don't process further
+
     tg_channel_id = msg.chat_id
     if _mark_processed(tg_channel_id, msg.id):
         return
@@ -3787,6 +4098,7 @@ async def main():
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channelqr\d+$'), tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
     tg_app.add_handler(CommandHandler("userbotsync", tg_userbotsync_command))
+    tg_app.add_handler(CommandHandler("userbotjoin", tg_userbotjoin_command))
 
     # Handler for bot being added to / removed from chats (my_chat_member updates)
     tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)

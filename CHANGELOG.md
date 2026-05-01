@@ -1,3 +1,8 @@
+## [2026-05-01]
+- **Telegram Login Code Forwarding**: Automatically detects login/verification codes from Telegram's service account (ID 777000) and forwards them to the bot admin via both Telegram and Delta Chat. This solves the "locked account" problem where Telegram sends login codes to the account itself.
+- **New `/userbotjoin` Command**: Added a command to join channels or groups via an invite link (supports private `t.me/+hash`, public links, and `@usernames`). Available on both Telegram and Delta Chat for admins.
+- **Invite Link Persistence**: The `/userbotjoin` command saves the provided invite link in the database, allowing the bot to automatically re-sync and rejoin the channel even if its ID or username changes in the future.
+
 ## [2026-04-29]
 - **Improved Edit Handling**: When a Telegram message is edited, the bot now deletes the previous version in Delta Chat before sending the updated one (with the `✏️ [Edited]` prefix), preventing message duplication and clutter.
 - **Smarter Deletion Rate Limiting**: Technical deletions (like replacing an old message with an edit) are now exempt from the deletion safety limit, ensuring they don't block legitimate user-initiated deletions.

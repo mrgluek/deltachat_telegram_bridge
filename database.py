@@ -564,6 +564,18 @@ def update_channel_tg_id(username: str, tg_channel_id: int):
         conn.commit()
         conn.close()
 
+def update_channel_invite_link(channel_id: int, invite_link: str):
+    """Update the invite_link for a channel by its autoincrement id."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channels SET invite_link = ? WHERE id = ?",
+            (invite_link, channel_id)
+        )
+        conn.commit()
+        conn.close()
+
 def get_dc_channel_chat_id(tg_channel_id: int) -> int | None:
     """Get the DC broadcast chat ID for a TG channel."""
     with _lock:
