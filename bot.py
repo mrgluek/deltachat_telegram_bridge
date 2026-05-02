@@ -597,19 +597,21 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
             # If it's a transport-related error and we have another attempt left
             if attempt < max_attempts - 1 and any(err in error_str for err in ["network", "timeout", "connection", "unreachable", "smtp", "status 0"]):
                 try:
+                    current_primary = bot.rpc.get_config(accid, "configured_addr")
                     transports = bot.rpc.list_transports(accid)
                     if len(transports) > 1:
-                        # Find the first backup and try to promote it to primary
+                        # Find a backup (any address that is not the current primary)
                         for t in transports:
-                            if t.get('role') == 'backup':
-                                addr = t.get('addr')
-                                logger.warning(f"Primary transport failed. Attempting to switch to backup: {addr}")
+                            addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                            if addr and addr != current_primary:
+                                logger.warning(f"Primary transport failed. Switching configured_addr to: {addr}")
                                 try:
-                                    bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
+                                    bot.rpc.set_config(accid, "configured_addr", addr)
                                     import time
-                                    time.sleep(2) # Give core some time
+                                    time.sleep(2) # Give core some time to reconfigure
                                     break 
-                                except Exception:
+                                except Exception as set_e:
+                                    logger.error(f"Failed to set configured_addr: {set_e}")
                                     continue
                 except Exception:
                     pass
@@ -632,10 +634,10 @@ def setprimary_command(bot, accid, event):
         return
 
     try:
-        bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` is now primary."))
+        bot.rpc.set_config(accid, "configured_addr", addr)
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary transport: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
