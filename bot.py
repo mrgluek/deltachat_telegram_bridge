@@ -553,41 +553,27 @@ def get_tg_help_text(name: str, user_id: int) -> str:
 
 
 def _get_contact_fingerprint(bot, accid, contact_id):
-    """Returns the cryptographic fingerprint of a contact, with fallback to parsing encryption info."""
+    """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
+    # 1. Try get_contact_config(accid, contact_id, "fp")
     try:
-        # 1. Try direct config (fastest/cleanest)
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
             return fp.upper()
+    except Exception:
+        pass
+
+    # 2. Try get_contact_encryption_info
+    for args in [(accid, contact_id), (contact_id,)]:
+        try:
+            enc_info = bot.rpc.get_contact_encryption_info(*args)
+            if enc_info:
+                import re
+                matches = re.findall(r'[0-9a-fA-F]{40}', enc_info.replace(' ', ''))
+                if matches:
+                    return matches[-1].upper()
+        except Exception:
+            continue
             
-        # 2. Fallback: Parse from encryption info
-        enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
-        if enc_info:
-            all_blocks = []
-            current_block = []
-            for line in enc_info.splitlines():
-                stripped = line.strip()
-                is_hex_line = (
-                    stripped 
-                    and len(stripped) > 8 
-                    and all(c in '0123456789abcdefABCDEF ' for c in stripped)
-                )
-                if is_hex_line:
-                    current_block.append(stripped.replace(' ', ''))
-                else:
-                    if current_block:
-                        all_blocks.append(''.join(current_block))
-                        current_block = []
-            if current_block:
-                all_blocks.append(''.join(current_block))
-            
-            if all_blocks:
-                # The last hex block in encryption info is usually the contact's fingerprint
-                return all_blocks[-1].upper()
-            else:
-                bot.logger.warning(f"No hex blocks found in encryption info for contact {contact_id}. Raw info: {enc_info}")
-    except Exception as e:
-        bot.logger.error(f"Error in _get_contact_fingerprint: {e}")
     return None
 
 
