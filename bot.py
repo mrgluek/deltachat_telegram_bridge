@@ -605,12 +605,14 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
         try:
             msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
             # Track success
+            addr = "unknown"
             try:
-                addr = bot.rpc.get_config(accid, "addr")
-                if addr:
+                addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr") or "unknown"
+                if addr != "unknown":
                     database.increment_transport_sent(addr)
             except Exception:
                 pass
+            logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid} (from {addr})")
             return msg_id
         except Exception as e:
             error_str = str(e).lower()
