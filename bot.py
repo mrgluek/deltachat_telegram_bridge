@@ -470,9 +470,10 @@ def on_init(bot, args):
         except Exception as e:
             bot.logger.warning(f"Could not set avatar: {e}")
 
-def get_dc_help_text(sender_email: str) -> str:
+def get_dc_help_text(bot, accid, sender_email, from_id):
     admin_dc_fingerprint = database.get_config("admin_dc_fingerprint")
     admin_dc_email = database.get_config("admin_dc_email")
+    is_admin = _is_dc_admin(bot, accid, from_id)
     
     mode = "Private (bot owner only)" if (admin_dc_fingerprint or admin_dc_email) else "Public (group admins only)"
     
@@ -486,23 +487,29 @@ def get_dc_help_text(sender_email: str) -> str:
         f"/channelNqr — Get QR code invite for channel #N\n"
         f"/stats — Show bridge statistics for current chat\n"
         f"/help — Show this help message\n"
-        f"/donate — Support bot development ❤️\n\n"
-        f"Management (Admins only):\n"
+        f"/donate — Support bot development ❤️\n"
     )
     
-    if not admin_dc_fingerprint:
+    if not admin_dc_fingerprint and not admin_dc_email:
+        help_text += "\n**Management:**\n"
         help_text += "/initadmin — Claim bot ownership (securely link your identity)\n"
+    elif is_admin:
+        fp_suffix = f" ({admin_dc_fingerprint[-8:].upper()})" if admin_dc_fingerprint else ""
+        help_text += f"\n👑 **Admin:** `{admin_dc_email}`{fp_suffix}\n"
+        help_text += (
+            f"\n**Management (Owner only):**\n"
+            f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
+            f"/unbridge — Remove the bridge from the group\n"
+            f"/userbotsync — Force Userbot re-sync\n"
+            f"/userbotjoin <link> — Join channel via Userbot\n"
+            f"/transports — Show configured mail relays & stats\n"
+            f"/addtransport — Add a backup mail relay\n"
+            f"/rmtransport <addr> — Remove a mail relay\n"
+            f"/setprimary <addr> — Switch the primary mail relay\n"
+        )
     
     help_text += (
-        f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
-        f"/unbridge — Remove the bridge from the group\n"
-        f"/userbotsync — Force Userbot re-sync\n"
-        f"/userbotjoin <link> — Join channel via Userbot\n"
-        f"/transports — Show configured mail relays & stats\n"
-        f"/addtransport — Add a backup mail relay\n"
-        f"/rmtransport <addr> — Remove a mail relay\n"
-        f"/setprimary <addr> — Switch the primary mail relay\n\n"
-        f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
+        f"\nTo get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
     return help_text
@@ -648,8 +655,8 @@ def help_command(bot, accid, event):
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
     
-    help_msg = get_dc_help_text(sender_email)
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_msg))
+    help_msg = get_dc_help_text(bot, accid, sender_email, msg.from_id)
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_msg))
 
 @dc_cli.on(events.NewMessage(command="/initadmin"))
 def initadmin_command(bot, accid, event):
