@@ -48,6 +48,8 @@ def init_db():
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_msg ON message_map (tg_msg_id, tg_chat_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_dc_msg ON message_map (dc_msg_id, dc_chat_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_dc_chat ON message_map (dc_chat_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_chat ON message_map (tg_chat_id)')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +177,7 @@ def remove_bridge(dc_chat_id: int):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
+        cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ?", (dc_chat_id,))
         deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()
@@ -186,6 +189,7 @@ def remove_bridge_by_tg(tg_chat_id: int):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
+        cursor.execute("DELETE FROM message_map WHERE tg_chat_id = ?", (tg_chat_id,))
         deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()
@@ -558,6 +562,14 @@ def remove_channel(channel_id: int) -> bool:
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        # Also clean up message map for this channel
+        cursor.execute("SELECT dc_chat_id FROM channels WHERE id = ?", (channel_id,))
+        row = cursor.fetchone()
+        if row:
+            dc_chat_id = row[0]
+            cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ?", (dc_chat_id,))
+            
         cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         deleted = cursor.rowcount > 0
         conn.commit()

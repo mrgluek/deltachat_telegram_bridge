@@ -213,6 +213,12 @@ _deletion_sync_lock = threading.Lock()
 _bot_initiated_dc_deletes: set[int] = set()
 _bot_initiated_dc_deletes_lock = threading.Lock()
 
+def _clear_dc_caches(dc_chat_id: int):
+    """Clear in-memory caches for a specific Delta Chat chat."""
+    _history_cooldowns.pop(dc_chat_id, None)
+    _history_cache.pop(dc_chat_id, None)
+    logger.debug(f"Cleared in-memory caches for DC chat {dc_chat_id}")
+
 def _register_bot_initiated_delete(dc_msg_id: int):
     """Mark a DC message as being deleted by the bot (e.g. edit replacement). Thread-safe."""
     with _bot_initiated_dc_deletes_lock:
@@ -884,6 +890,7 @@ def dc_channelremove_command(bot, accid, event):
              return
              
         if database.remove_channel(channel_id):
+             _clear_dc_caches(ch['dc_chat_id'])
              bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
         else:
              bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
@@ -960,6 +967,7 @@ def unbridge_command(bot, accid, event):
             pass
 
     if database.remove_bridge(chat_id):
+        _clear_dc_caches(chat_id)
         bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is not bridged."))
@@ -1567,8 +1575,16 @@ def handle_dc_msg_deleted(bot, accid, event):
             # Clean up the mapping immediately to prevent echo loops
             database.delete_message_map_entry_by_dc(msg_id, None)
 
-            # Do not sync deletions from DC to TG for channels (users are just subscribers)
+            # 1. Verify if the bridge is still active
+            # For channels:
             if database.get_channel_by_dc_chat_id(dc_chat_id):
+                 # Do not sync deletions from DC to TG for channels (users are just subscribers)
+                 continue
+            
+            # For group bridges:
+            active_tg_chats = database.get_tg_chats(dc_chat_id)
+            if tg_chat_id not in active_tg_chats:
+                logger.info(f"Skipping DC→TG deletion sync: bridge for DC chat {dc_chat_id} to TG {tg_chat_id} no longer exists.")
                 continue
 
             # Try to get chat title, author and text for better debugging
@@ -1696,7 +1712,15 @@ def handle_dc_reaction(bot, accid, event):
         else:
             bot.logger.info(f"No reactions found for DC msg {msg_id}")
                 
-        for tg_msg_id, tg_chat_id, _ in tg_mappings:
+        for tg_msg_id, tg_chat_id, dc_chat_id in tg_mappings:
+            # Verify if bridge is still active
+            is_channel = database.get_channel_by_dc_chat_id(int(dc_chat_id))
+            is_group = int(tg_chat_id) in database.get_tg_chats(int(dc_chat_id))
+            
+            if not is_channel and not is_group:
+                logger.info(f"Skipping DC→TG reaction sync: bridge for DC chat {dc_chat_id} to TG {tg_chat_id} no longer exists.")
+                continue
+
             try:
                 reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
                 asyncio.run_coroutine_threadsafe(
@@ -1993,7 +2017,12 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
 
+    # Get dc_chat_ids before deletion to clear caches
+    dc_chat_ids = database.get_dc_chats(chat.id)
+    
     if database.remove_bridge_by_tg(chat.id):
+        for dc_cid in dc_chat_ids:
+            _clear_dc_caches(dc_cid)
         await update.message.reply_text("✔️ Bridge removed.")
     else:
         await update.message.reply_text("❌ This group is not bridged.")
