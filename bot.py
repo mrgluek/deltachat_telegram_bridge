@@ -616,14 +616,14 @@ def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:
         # 1. Priority check: cryptographic fingerprint
+        # If a fingerprint is configured, we use it exclusively for admin verification.
+        # This makes the admin identity relay-independent (as long as the key is the same).
         stored_fingerprint = database.get_config("admin_dc_fingerprint")
         if stored_fingerprint:
             current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
-            if current_fingerprint and current_fingerprint == stored_fingerprint:
-                return True
+            return current_fingerprint == stored_fingerprint if current_fingerprint else False
         
-        # 2. Email fallback (allow access if email matches, even if fingerprint is different/missing)
-        # This allows the admin to run /initadmin to update their fingerprint.
+        # 2. Email fallback (only used if no fingerprint is configured)
         stored_email = database.get_config("admin_dc_email")
         if stored_email:
             contact = bot.rpc.get_contact(accid, from_id)
