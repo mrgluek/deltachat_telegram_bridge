@@ -673,61 +673,6 @@ def help_command(bot, accid, event):
     help_msg = get_dc_help_text(bot, accid, sender_email, msg.from_id)
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_msg))
 
-@dc_cli.on(events.NewMessage(command="/initadmin"))
-def initadmin_command(bot, accid, event):
-    """Claim bot ownership or update admin info."""
-    msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    sender_fingerprint = _get_contact_fingerprint(bot, accid, msg.from_id)
-    
-    stored_fingerprint = database.get_config("admin_dc_fingerprint")
-    stored_email = database.get_config("admin_dc_email")
-    
-    if stored_email and not stored_fingerprint:
-        # Recovery/Transfer mechanism: if user knows the old email, they can take over and link fingerprint
-        provided_email = event.payload.strip().lower()
-        if provided_email == stored_email.lower():
-            if sender_fingerprint:
-                database.set_config("admin_dc_email", sender_email)
-                database.set_config("admin_dc_fingerprint", sender_fingerprint)
-                short_fp = sender_fingerprint[-8:].upper()
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Ownership transferred to {sender_email}.\nFingerprint: {short_fp} linked successfully."))
-            else:
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Old email matched, but could not capture your fingerprint yet. Send another message and try again."))
-            return
-        
-        if sender_email.lower() == stored_email.lower():
-            # Standard upgrade for the same email
-            if sender_fingerprint:
-                database.set_config("admin_dc_fingerprint", sender_fingerprint)
-                short_fp = sender_fingerprint[-8:].upper()
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
-            else:
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Could not retrieve fingerprint yet. Try again later."))
-        else:
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set. If you changed your email, use `/initadmin <old_email>` to transfer ownership."))
-        return
-
-    if stored_fingerprint:
-        # If already admin by fingerprint, only they can update email
-        if sender_fingerprint and sender_fingerprint == stored_fingerprint:
-            database.set_config("admin_dc_email", sender_email)
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Admin email updated to {sender_email}."))
-        else:
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set (fingerprint mismatch)."))
-        return
-
-    # No admin set at all: first come, first served
-    if sender_fingerprint:
-        database.set_config("admin_dc_email", sender_email)
-        database.set_config("admin_dc_fingerprint", sender_fingerprint)
-        short_fp = ' '.join(sender_fingerprint[i:i+4] for i in range(0, min(16, len(sender_fingerprint)), 4)) + '…'
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\nFingerprint: {short_fp}"))
-    else:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
-                                                        "The encryption key exchange may not be complete yet. "
-                                                        "Try sending another message and then run /initadmin again."))
 
 @dc_cli.on(events.NewMessage(command="/transports"))
 def transports_command(bot, accid, event):
