@@ -617,8 +617,26 @@ def _is_dc_admin(bot, accid, from_id):
     try:
         # 1. Priority check: cryptographic fingerprint
         stored_fingerprint = database.get_config("admin_dc_fingerprint")
+        current_fingerprint = None
+        contact = None
+        try:
+            contact = bot.rpc.get_contact(accid, from_id)
+        except Exception:
+            pass
+
         if stored_fingerprint:
-            current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
+            if contact:
+                for attr in ['public_key', 'address', 'id']:
+                    val = getattr(contact, attr, None)
+                    if val:
+                        import re
+                        matches = re.findall(r'[0_a-fA-F]{40}', str(val).replace(' ', ''))
+                        if matches:
+                            current_fingerprint = matches[-1].upper()
+                            break
+            if not current_fingerprint:
+                current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
+
             logger.info(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
             if current_fingerprint and current_fingerprint == stored_fingerprint:
                 return True
