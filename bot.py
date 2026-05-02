@@ -553,11 +553,37 @@ def get_tg_help_text(name: str, user_id: int) -> str:
 
 
 def _get_contact_fingerprint(bot, accid, contact_id):
-    """Returns the cryptographic fingerprint of a contact."""
+    """Returns the cryptographic fingerprint of a contact, with fallback to parsing encryption info."""
     try:
+        # 1. Try direct config (fastest/cleanest)
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
             return fp.upper()
+            
+        # 2. Fallback: Parse from encryption info
+        enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
+        if enc_info:
+            all_blocks = []
+            current_block = []
+            for line in enc_info.splitlines():
+                stripped = line.strip()
+                is_hex_line = (
+                    stripped 
+                    and len(stripped) > 8 
+                    and all(c in '0123456789abcdefABCDEF ' for c in stripped)
+                )
+                if is_hex_line:
+                    current_block.append(stripped.replace(' ', ''))
+                else:
+                    if current_block:
+                        all_blocks.append(''.join(current_block))
+                        current_block = []
+            if current_block:
+                all_blocks.append(''.join(current_block))
+            
+            if all_blocks:
+                # The last hex block in encryption info is usually the contact's fingerprint
+                return all_blocks[-1].upper()
     except Exception:
         pass
     return None
@@ -572,10 +598,9 @@ def _is_dc_admin(bot, accid, from_id):
             current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
             if current_fingerprint and current_fingerprint == stored_fingerprint:
                 return True
-            # If fingerprint is set but doesn't match, we ignore email (closes spoofing window)
-            return False
-
-        # 2. Fallback check: email address (legacy/uninitialized)
+        
+        # 2. Email fallback (allow access if email matches, even if fingerprint is different/missing)
+        # This allows the admin to run /initadmin to update their fingerprint.
         stored_email = database.get_config("admin_dc_email")
         if stored_email:
             contact = bot.rpc.get_contact(accid, from_id)
@@ -669,28 +694,38 @@ def initadmin_command(bot, accid, event):
     stored_fingerprint = database.get_config("admin_dc_fingerprint")
     stored_email = database.get_config("admin_dc_email")
     
-    if stored_fingerprint:
-        # If admin is already set via fingerprint, only they can update it
-        if sender_fingerprint and sender_fingerprint == stored_fingerprint:
-            database.set_config("admin_dc_email", sender_email)
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ Admin information updated."))
-        else:
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set."))
-        return
-
-    if stored_email:
-        # Legacy transition: if email matches, "upgrade" to fingerprint
+    if stored_email and not stored_fingerprint:
+        # Recovery/Transfer mechanism: if user knows the old email, they can take over and link fingerprint
+        provided_email = event.payload.strip().lower()
+        if provided_email == stored_email.lower():
+            if sender_fingerprint:
+                database.set_config("admin_dc_email", sender_email)
+                database.set_config("admin_dc_fingerprint", sender_fingerprint)
+                short_fp = sender_fingerprint[-8:].upper()
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Ownership transferred to {sender_email}.\nFingerprint: {short_fp} linked successfully."))
+            else:
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Old email matched, but could not capture your fingerprint yet. Send another message and try again."))
+            return
+        
         if sender_email.lower() == stored_email.lower():
+            # Standard upgrade for the same email
             if sender_fingerprint:
                 database.set_config("admin_dc_fingerprint", sender_fingerprint)
-                short_fp = ' '.join(sender_fingerprint[i:i+4] for i in range(0, min(16, len(sender_fingerprint)), 4)) + '…'
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
+                short_fp = sender_fingerprint[-8:].upper()
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
             else:
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
-                                                                "The encryption key exchange may not be complete yet. "
-                                                                "Try sending another message and then run /initadmin again."))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Could not retrieve fingerprint yet. Try again later."))
         else:
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set (via legacy email)."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set. If you changed your email, use `/initadmin <old_email>` to transfer ownership."))
+        return
+
+    if stored_fingerprint:
+        # If already admin by fingerprint, only they can update email
+        if sender_fingerprint and sender_fingerprint == stored_fingerprint:
+            database.set_config("admin_dc_email", sender_email)
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Admin email updated to {sender_email}."))
+        else:
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set (fingerprint mismatch)."))
         return
 
     # No admin set at all: first come, first served
