@@ -637,8 +637,8 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
                     pass
             
             if attempt == max_attempts - 1:
-                logger.error(f"Failed to send DC message: {e}")
-                raise
+                logger.error(f"Failed to send DC message (Account {accid}) after {max_attempts} attempts: {e}")
+                raise e
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
 def setprimary_command(bot, accid, event):
