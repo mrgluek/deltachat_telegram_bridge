@@ -1,3 +1,11 @@
+## [2026-05-02]
+- **Multi-transport Support (Backup Relays)**: Added support for multiple email transports on a single account for high availability.
+  - Core automatically fails over to backup relays if the primary server (`chat.gluek.info`) is down.
+  - New admin command `/transports` to view configured relays, connectivity status, and usage statistics.
+  - New admin commands `/addtransport` and `/rmtransport` to manage relays from the chat.
+  - New CLI command `python bot.py init transport` for manual relay setup.
+- **Transport Statistics Tracking**: The bot now tracks the number of messages sent and received per transport address.
+
 ## [2026-05-01]
 - **Telegram Login Code Forwarding**: Automatically detects login/verification codes from Telegram's service account (ID 777000) and forwards them to the bot admin via both Telegram and Delta Chat. This solves the "locked account" problem where Telegram sends login codes to the account itself.
 - **New `/userbotjoin` Command**: Added a command to join channels or groups via an invite link (supports private `t.me/+hash`, public links, and `@usernames`). Available on both Telegram and Delta Chat for admins.

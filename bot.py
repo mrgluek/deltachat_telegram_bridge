@@ -497,7 +497,11 @@ def get_dc_help_text(sender_email: str) -> str:
         f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
         f"/unbridge — Remove the bridge from the group\n"
         f"/userbotsync — Force Userbot re-sync\n"
-        f"/userbotjoin <link> — Join channel via Userbot\n\n"
+        f"/userbotjoin <link> — Join channel via Userbot\n"
+        f"/transports — Show configured mail relays & stats\n"
+        f"/addtransport — Add a backup mail relay\n"
+        f"/rmtransport <addr> — Remove a mail relay\n"
+        f"/setprimary <addr> — Switch the primary mail relay\n\n"
         f"To get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"
     )
@@ -605,6 +609,65 @@ def _is_dc_admin(bot, accid, from_id):
         logger.error(f"Error during admin verification: {e}")
     return False
 
+def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
+    """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+            # Track success
+            try:
+                addr = bot.rpc.get_config(accid, "addr")
+                if addr:
+                    database.increment_transport_sent(addr)
+            except Exception:
+                pass
+            return msg_id
+        except Exception as e:
+            error_str = str(e).lower()
+            # If it's a transport-related error and we have another attempt left
+            if attempt < max_attempts - 1 and any(err in error_str for err in ["network", "timeout", "connection", "unreachable", "smtp", "status 0"]):
+                try:
+                    transports = bot.rpc.list_transports(accid)
+                    if len(transports) > 1:
+                        # Find the first backup and try to promote it to primary
+                        for t in transports:
+                            if t.get('role') == 'backup':
+                                addr = t.get('addr')
+                                logger.warning(f"Primary transport failed. Attempting to switch to backup: {addr}")
+                                try:
+                                    bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
+                                    import time
+                                    time.sleep(2) # Give core some time
+                                    break 
+                                except Exception:
+                                    continue
+                except Exception:
+                    pass
+            
+            if attempt == max_attempts - 1:
+                logger.error(f"Failed to send DC message: {e}")
+                raise
+
+@dc_cli.on(events.NewMessage(command="/setprimary"))
+def setprimary_command(bot, accid, event):
+    """Set a specific transport as primary. Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /setprimary."))
+        return
+
+    addr = event.payload.strip()
+    if not addr:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /setprimary user@example.com"))
+        return
+
+    try:
+        bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` is now primary."))
+    except Exception as e:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary transport: {e}"))
+
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     """Reply with help text."""
@@ -662,6 +725,143 @@ def initadmin_command(bot, accid, event):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
                                                         "The encryption key exchange may not be complete yet. "
                                                         "Try sending another message and then run /initadmin again."))
+
+@dc_cli.on(events.NewMessage(command="/transports"))
+def transports_command(bot, accid, event):
+    """Show configured transports (mail relays) and their status."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /transports."))
+        return
+
+    try:
+        transports = bot.rpc.list_transports(accid)
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to list transports: {e}"))
+        return
+
+    if not transports:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No transports configured."))
+        return
+
+    # Get connectivity status
+    connectivity_label = "❓ Unknown"
+    try:
+        connectivity = bot.rpc.get_connectivity(accid)
+        if connectivity >= 4000:
+            connectivity_label = "🟢 Connected"
+        elif connectivity >= 3000:
+            connectivity_label = "🔄 Working"
+        elif connectivity >= 2000:
+            connectivity_label = "🟡 Connecting"
+        else:
+            connectivity_label = "🔴 Not connected"
+    except Exception:
+        pass
+
+    # Get per-transport statistics
+    stats_map = {}
+    for s in database.get_all_transport_stats():
+        stats_map[s['addr']] = s
+
+    transport_addrs = []
+    for t in transports:
+        addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+        transport_addrs.append(addr)
+
+    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
+
+    for i, addr in enumerate(transport_addrs):
+        role = "🏠 Primary" if i == 0 else "🔄 Backup"
+        reply += f"**{role}:** `{addr}`\n"
+
+        stats = stats_map.get(addr)
+        if stats:
+            reply += f"  📤 Sent: {stats['msgs_sent']}  📥 Received: {stats['msgs_received']}\n"
+            if stats.get('last_sent_at'):
+                import datetime
+                last_sent = datetime.datetime.fromtimestamp(stats['last_sent_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last sent: {last_sent}\n"
+            if stats.get('last_received_at'):
+                import datetime
+                last_recv = datetime.datetime.fromtimestamp(stats['last_received_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last received: {last_recv}\n"
+        else:
+            reply += f"  📤 Sent: 0  📥 Received: 0\n"
+        reply += "\n"
+
+    reply += f"Total transports: {len(transport_addrs)}"
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+
+@dc_cli.on(events.NewMessage(command="/addtransport"))
+def addtransport_command(bot, accid, event):
+    """Add a backup mail relay (transport). Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /addtransport."))
+        return
+
+    payload = event.payload.strip()
+    if not payload:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+            text="Usage:\n"
+                 "/addtransport DCACCOUNT:server.example\n"
+                 "/addtransport user@example.com password123"
+        ))
+        return
+
+    try:
+        if payload.startswith("DCACCOUNT:"):
+            bot.rpc.add_transport_from_qr(accid, payload)
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport added via chatmail URI."))
+        else:
+            parts = payload.split(None, 1)
+            if len(parts) < 2:
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                    text="❌ For email accounts, provide both address and password:\n"
+                         "/addtransport user@example.com password123"
+                ))
+                return
+            addr, password = parts[0], parts[1]
+            bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport `{addr}` added."))
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to add transport: {e}"))
+
+@dc_cli.on(events.NewMessage(command="/rmtransport"))
+def rmtransport_command(bot, accid, event):
+    """Remove a mail relay (transport). Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /rmtransport."))
+        return
+
+    addr = event.payload.strip()
+    if not addr:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
+        return
+
+    try:
+        transports = bot.rpc.list_transports(accid)
+        transport_addrs = []
+        for t in transports:
+            a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+            transport_addrs.append(a)
+        if len(transport_addrs) <= 1:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport."))
+            return
+        if addr not in transport_addrs:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Transport `{addr}` not found."))
+            return
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to check transports: {e}"))
+        return
+
+    try:
+        bot.rpc.delete_transport(accid, addr)
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
@@ -1169,6 +1369,14 @@ def handle_dc_message(bot, accid, event):
     dc_chat_id = msg.chat_id
     from_id = msg.from_id
 
+    # Track receiving stats
+    try:
+        addr = bot.rpc.get_config(accid, "addr")
+        if addr:
+            database.increment_transport_received(addr)
+    except Exception:
+        pass
+
     # Detect new users in private chats and send help
     try:
         chat_info = bot.rpc.get_basic_chat_info(accid, dc_chat_id)
@@ -1176,7 +1384,7 @@ def handle_dc_message(bot, accid, event):
             # Check if we already greeted this contact
             if not bot.rpc.get_contact_config(accid, from_id, "greeted"):
                 help_text = get_dc_help_text(bot.rpc.get_contact(accid, from_id).address)
-                bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"👋 Welcome!\n\n{help_text}"))
+                _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"👋 Welcome!\n\n{help_text}"))
                 bot.rpc.set_contact_config(accid, from_id, "greeted", "1")
     except Exception as e:
         logger.warning(f"Greeting check failed: {e}")
@@ -3347,7 +3555,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     msg_data.file = local_file_path
                 try:
                     await _wait_for_global_dc_rate_limit()
-                    sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                    sent_msg_id = _dc_send_msg_with_stats(dc_bot_instance, dc_accid, dc_chat_id, msg_data)
                 except Exception as e:
                     # If quoting failed because the message was deleted in DC, retry without the quote
                     if "does not exist" in str(e).lower() and "message" in str(e).lower():
@@ -3369,7 +3577,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 msg_data.text = _truncate(f"{chat_reply_prefix}{text}" if text else "", DC_MAX_MSG_LEN)
                         
                         await _wait_for_global_dc_rate_limit()
-                        sent_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                        sent_msg_id = _dc_send_msg_with_stats(dc_bot_instance, dc_accid, dc_chat_id, msg_data)
                     else:
                         raise  # Re-raise other exceptions
                 
@@ -3425,7 +3633,7 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         msg_data = MsgData(text=text)
-        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        _dc_send_msg_with_stats(dc_bot_instance, dc_accid, dc_chat_id, msg_data)
         logger.info(f"Relayed TG poll results to DC chat {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay poll results to DC chat {dc_chat_id}: {e}")
@@ -4264,12 +4472,42 @@ if __name__ == "__main__":
             client.start()
             print("Userbot session successfully created in userbot_session.session")
             sys.exit(0)
+        elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "transport":
+            if len(sys.argv) < init_idx + 3:
+                print("Usage:")
+                print("  python bot.py init transport DCACCOUNT:uri")
+                print("  python bot.py init transport addr password")
+                sys.exit(1)
+            
+            # Start DC bot to get access to RPC
+            start_dc_bot()
+            if not dc_bot_instance or not dc_accid:
+                print("Error: Could not initialize Delta Chat bot.")
+                sys.exit(1)
+            
+            payload = sys.argv[init_idx + 2]
+            try:
+                if payload.startswith("DCACCOUNT:"):
+                    dc_bot_instance.rpc.add_transport_from_qr(dc_accid, payload)
+                    print(f"Success: Backup transport added via chatmail URI.")
+                elif len(sys.argv) >= init_idx + 4:
+                    addr, password = sys.argv[init_idx + 2], sys.argv[init_idx + 3]
+                    dc_bot_instance.rpc.add_or_update_transport(dc_accid, {"addr": addr, "password": password})
+                    print(f"Success: Backup transport {addr} added.")
+                else:
+                    print("Error: For email accounts, provide both address and password.")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"Error: {e}")
+                sys.exit(1)
+            sys.exit(0)
         else:
             print("Usage:")
             print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account")
             print("  python bot.py init tg [token]             - Initialize Telegram bot token")
             print("  python bot.py init admin_tg <tg_id>       - Set Admin Telegram ID for error logs")
             print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email (resets fingerprint)")
+            print("  python bot.py init transport <uri|addr>   - Add backup mail relay (transport)")
             print("  python bot.py init api_id <id>            - Set MTProto API ID for userbot")
             print("  python bot.py init api_hash <hash>        - Set MTProto API HASH for userbot")
             print("  python bot.py init userbot                - Interactive sign-in for userbot channels")

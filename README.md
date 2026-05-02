@@ -14,6 +14,8 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 - **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
 - **Login Code Forwarding**: Automatic delivery of Telegram login codes to the admin.
+- **Multi-transport Support**: Link multiple mail relays (e.g. arcanechat.me) to a single account for automatic failover and high availability.
+- **Transport Statistics**: Detailed tracking of messages sent and received per relay, viewable via `/transports`.
 - **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
 - **Automatic Updates**: Self-updating via a simple script and cron job.
 - **Admin-Only Management**: Securely bridge channels and groups with restricted access.
@@ -273,9 +275,11 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/channels` | List bridged channels (as admin, private chat) |
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
-| `/userbotsync` | Force re-sync Userbot subscriptions |
 | `/userbotjoin <link>` | Join a channel/group via Userbot using an invite link |
 | `/groups` | List technical account's groups for easy bridging |
+| `/transports` | Show configured mail relays & usage stats |
+| `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
+| `/rmtransport <addr>` | Remove a mail relay |
 | `/donate` | Support bot development ❤️ |
 
 ## Delta Chat User Commands
