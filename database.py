@@ -172,16 +172,19 @@ def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = 
         finally:
             conn.close()
 
-def remove_bridge(dc_chat_id: int):
+def remove_bridge(dc_chat_id: int) -> list[int]:
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        # Get tg_chat_ids before deletion
+        cursor.execute("SELECT tg_chat_id FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
+        tg_chat_ids = [row[0] for row in cursor.fetchall()]
+        
         cursor.execute("DELETE FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
         cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ?", (dc_chat_id,))
-        deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        return deleted
+        return tg_chat_ids
 
 def remove_bridge_by_tg(tg_chat_id: int):
     """Remove all bridges for a given TG chat ID."""
@@ -203,6 +206,18 @@ def get_tg_chats(dc_chat_id: int) -> list[int]:
         rows = cursor.fetchall()
         conn.close()
         return [row[0] for row in rows]
+
+def count_bridges_for_tg(tg_chat_id: int) -> int:
+    """Return the total number of bridges (group or channel) for a given TG ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
+        count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM channels WHERE tg_channel_id = ?", (tg_chat_id,))
+        count += cursor.fetchone()[0]
+        conn.close()
+        return count
 
 def get_dc_chats(tg_chat_id: int) -> list[int]:
     with _lock:
@@ -557,24 +572,25 @@ def get_all_channels() -> list[dict]:
         conn.close()
         return [dict(r) for r in rows]
 
-def remove_channel(channel_id: int) -> bool:
-    """Remove a channel by its id."""
+def remove_channel(channel_id: int) -> int | None:
+    """Remove a channel by its id and return its tg_channel_id."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Also clean up message map for this channel
-        cursor.execute("SELECT dc_chat_id FROM channels WHERE id = ?", (channel_id,))
+        # Get info before deletion
+        cursor.execute("SELECT dc_chat_id, tg_channel_id FROM channels WHERE id = ?", (channel_id,))
         row = cursor.fetchone()
+        tg_channel_id = None
         if row:
-            dc_chat_id = row[0]
+            dc_chat_id, tg_channel_id = row
+            # Clean up message map
             cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ?", (dc_chat_id,))
             
         cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
-        deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        return deleted
+        return tg_channel_id
 
 def update_channel_tg_id(username: str, tg_channel_id: int):
     """Set the numeric TG channel ID once we receive the first post."""

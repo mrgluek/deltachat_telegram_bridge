@@ -20,13 +20,14 @@ from telegram.error import NetworkError, TimedOut
 
 try:
     from telethon import TelegramClient, events as tg_events
-    from telethon.tl.functions.channels import JoinChannelRequest
+    from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
     from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
     from telethon.errors import ChannelPrivateError
 except ImportError:
     TelegramClient = None
     tg_events = None
     JoinChannelRequest = None
+    LeaveChannelRequest = None
     ImportChatInviteRequest = None
     CheckChatInviteRequest = None
     ChannelPrivateError = None
@@ -212,6 +213,34 @@ _deletion_sync_lock = threading.Lock()
 # These are exempt from the rate limit so that edit-replacements never block real deletions.
 _bot_initiated_dc_deletes: set[int] = set()
 _bot_initiated_dc_deletes_lock = threading.Lock()
+
+async def _userbot_leave_chat(tg_chat_id: int):
+    """Make the Userbot leave a chat or channel if no other bridges exist."""
+    global userbot_client, main_loop
+    if not (userbot_client and userbot_client.is_connected()):
+        return
+
+    # Wait a bit to ensure DB is updated
+    await asyncio.sleep(1)
+
+    if database.count_bridges_for_tg(tg_chat_id) > 0:
+        logger.debug(f"Userbot: Keeping membership in {tg_chat_id} (other bridges exist).")
+        return
+
+    try:
+        from telethon.tl.types import Channel, Chat
+        entity = await userbot_client.get_entity(tg_chat_id)
+        if isinstance(entity, Channel):
+             await userbot_client(LeaveChannelRequest(entity))
+             logger.info(f"Userbot: Left Telegram channel/supergroup {tg_chat_id}")
+        elif isinstance(entity, Chat):
+             # For legacy small groups
+             me = await userbot_client.get_me()
+             from telethon.tl.functions.messages import DeleteChatUserRequest
+             await userbot_client(DeleteChatUserRequest(chat_id=entity.id, user_id=me.id))
+             logger.info(f"Userbot: Left Telegram group {tg_chat_id}")
+    except Exception as e:
+        logger.debug(f"Userbot: Could not leave chat {tg_chat_id} (maybe already left): {e}")
 
 def _clear_dc_caches(dc_chat_id: int):
     """Clear in-memory caches for a specific Delta Chat chat."""
@@ -889,8 +918,12 @@ def dc_channelremove_command(bot, accid, event):
              bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
              return
              
-        if database.remove_channel(channel_id):
+        tg_channel_id = database.remove_channel(channel_id)
+        if tg_channel_id:
              _clear_dc_caches(ch['dc_chat_id'])
+             # Trigger Userbot leave in background
+             if main_loop:
+                 asyncio.run_coroutine_threadsafe(_userbot_leave_chat(tg_channel_id), main_loop)
              bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
         else:
              bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
@@ -966,8 +999,12 @@ def unbridge_command(bot, accid, event):
         except Exception:
             pass
 
-    if database.remove_bridge(chat_id):
+    tg_chat_ids = database.remove_bridge(chat_id)
+    if tg_chat_ids:
         _clear_dc_caches(chat_id)
+        if main_loop:
+            for tid in tg_chat_ids:
+                asyncio.run_coroutine_threadsafe(_userbot_leave_chat(tid), main_loop)
         bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is not bridged."))
@@ -2023,6 +2060,10 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if database.remove_bridge_by_tg(chat.id):
         for dc_cid in dc_chat_ids:
             _clear_dc_caches(dc_cid)
+        
+        # Userbot leave
+        asyncio.create_task(_userbot_leave_chat(chat.id))
+        
         await update.message.reply_text("✔️ Bridge removed.")
     else:
         await update.message.reply_text("❌ This group is not bridged.")
