@@ -546,42 +546,11 @@ def get_tg_help_text(name: str, user_id: int) -> str:
 
 
 def _get_contact_fingerprint(bot, accid, contact_id):
-    """Extract the encryption fingerprint for a contact.
-    
-    Uses get_contact_encryption_info which returns a human-readable string
-    containing two fingerprint blocks:
-      1. "Me (bot@...): [bot's fingerprint]"
-      2. "Contact (user@...): [contact's fingerprint]"
-    We extract the LAST hex block, which is the contact's fingerprint.
-    Returns the raw fingerprint string (uppercase hex, 40 chars), or None.
-    """
+    """Returns the cryptographic fingerprint of a contact."""
     try:
-        enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
-        if not enc_info:
-            return None
-        # Collect all hex blocks (groups of consecutive hex-only lines).
-        # The last block is the contact's fingerprint.
-        all_blocks = []
-        current_block = []
-        for line in enc_info.splitlines():
-            stripped = line.strip()
-            is_hex_line = (
-                stripped 
-                and len(stripped) > 8 
-                and all(c in '0123456789abcdefABCDEF ' for c in stripped)
-            )
-            if is_hex_line:
-                current_block.append(stripped.replace(' ', ''))
-            else:
-                if current_block:
-                    all_blocks.append(''.join(current_block))
-                    current_block = []
-        if current_block:
-            all_blocks.append(''.join(current_block))
-        
-        if all_blocks:
-            # Last block = contact's fingerprint
-            return all_blocks[-1].upper()
+        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
+        if fp:
+            return fp.upper()
     except Exception:
         pass
     return None
