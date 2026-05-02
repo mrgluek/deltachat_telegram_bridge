@@ -584,8 +584,10 @@ def _get_contact_fingerprint(bot, accid, contact_id):
             if all_blocks:
                 # The last hex block in encryption info is usually the contact's fingerprint
                 return all_blocks[-1].upper()
-    except Exception:
-        pass
+            else:
+                bot.logger.warning(f"No hex blocks found in encryption info for contact {contact_id}. Raw info: {enc_info}")
+    except Exception as e:
+        bot.logger.error(f"Error in _get_contact_fingerprint: {e}")
     return None
 
 
