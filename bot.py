@@ -612,8 +612,6 @@ def _get_contact_fingerprint(bot, accid, contact_id):
     return None
 
 
-Fix for _is_dc_admin function to handle relay-independent admin verification.
-This function needs to be copied into bot.py, replacing the existing _is_dc_admin implementation.
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:
@@ -658,47 +656,6 @@ def _is_dc_admin(bot, accid, from_id):
         logger.error(f"Error during admin verification: {e}")
         
     return False
-def _is_dc_admin(bot, accid, from_id):
-    """Checks if a Delta Chat user is the bot administrator."""
-    try:
-        # 1. Priority check: cryptographic fingerprint
-        stored_fingerprint = database.get_config("admin_dc_fingerprint")
-        current_fingerprint = None
-        contact = None
-        try:
-            contact = bot.rpc.get_contact(accid, from_id)
-        except Exception:
-            pass
-
-        if stored_fingerprint:
-            if contact:
-                for attr in ['public_key', 'address', 'id']:
-                    val = getattr(contact, attr, None)
-                    if val:
-                        import re
-                        matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
-                        if matches:
-                            current_fingerprint = matches[-1].upper()
-                            break
-            if not current_fingerprint:
-                current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
-
-            logger.info(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
-            if current_fingerprint and current_fingerprint == stored_fingerprint:
-                return True
-        
-        # 2. Email fallback (allow access if email matches, even if fingerprint is different/missing)
-        stored_email = database.get_config("admin_dc_email")
-        if stored_email:
-            contact = bot.rpc.get_contact(accid, from_id)
-            if contact:
-                logger.info(f"Admin check (email): stored={stored_email}, current={contact.address.lower()}")
-                if contact.address.lower() == stored_email.lower():
-                    return True
-    except Exception as e:
-        logger.error(f"Error during admin verification: {e}")
-    return False
-
 def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
     max_attempts = 2
