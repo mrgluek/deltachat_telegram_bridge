@@ -599,14 +599,14 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 import re
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
                 if matches:
-                    logger.info(f"Found fingerprint in contact.{attr}: {matches[0]}")
+                    logger.debug(f"Found fingerprint in contact.{attr}: {matches[0]}")
                     return matches[0].upper()
 
     # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
-            logger.info(f"Found fingerprint in contact config 'fp': {fp}")
+            logger.debug(f"Found fingerprint in contact config 'fp': {fp}")
             return fp.upper().replace(' ', '')
     except Exception:
         pass
@@ -618,7 +618,7 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
                 # Log raw info for debugging (helps when fingerprint detection fails)
-                logger.info(f"Contact {contact_id} encryption info: {enc_info}")
+                logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
                 # Clean ALL whitespace including newlines
                 cleaned_info = "".join(enc_info.split()).replace(':', '')
@@ -628,10 +628,10 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                     # In encryption info, we might have multiple fingerprints (Me and Contact).
                     # We return all of them joined by comma, and let _is_dc_admin check.
                     fps = ",".join(matches).upper()
-                    logger.info(f"Found fingerprint(s) in encryption info: {fps}")
+                    logger.debug(f"Found fingerprint(s) in encryption info: {fps}")
                     return fps
         except Exception as e:
-            logger.info(f"get_contact_encryption_info{args} failed: {e}")
+            logger.debug(f"get_contact_encryption_info{args} failed: {e}")
             continue
             
     return None
@@ -653,7 +653,7 @@ def _is_dc_admin(bot, accid, from_id):
             # Try to get fingerprint through improved extraction
             current_fingerprint = _get_contact_fingerprint(bot, accid, from_id, contact=contact)
                             
-            logger.info(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
+            logger.debug(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
             if current_fingerprint:
                 # current_fingerprint might be a comma-separated list if multiple keys were found
                 if stored_fingerprint.upper() in current_fingerprint.upper().split(','):
@@ -669,7 +669,7 @@ def _is_dc_admin(bot, accid, from_id):
         if stored_email and contact:
             email = contact.address.replace(' ', '').lower()
             target = stored_email.replace(' ', '').lower()
-            logger.info(f"Admin check (email): stored={stored_email}, current={email}")
+            logger.debug(f"Admin check (email): stored={stored_email}, current={email}")
             if email == target:
                 return True
                 
