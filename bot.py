@@ -630,7 +630,7 @@ def _is_dc_admin(bot, accid, from_id):
                     val = getattr(contact, attr, None)
                     if val:
                         import re
-                        matches = re.findall(r'[0_a-fA-F]{40}', str(val).replace(' ', ''))
+                        matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
                         if matches:
                             current_fingerprint = matches[-1].upper()
                             break
