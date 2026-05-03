@@ -1424,7 +1424,8 @@ def handle_dc_message(bot, accid, event):
 
     # Track receiving stats
     try:
-        addr = bot.rpc.get_config(accid, "addr")
+        # Use configured_addr (SMTP override) if set, otherwise fallback to main account addr
+        addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
         if addr:
             database.increment_transport_received(addr)
     except Exception:
