@@ -679,10 +679,18 @@ def _is_dc_admin(bot, accid, from_id):
     return False
 def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
-    max_attempts = 2
+    # Try to determine how many attempts we should make based on number of transports
+    try:
+        transports = bot.rpc.list_transports(accid)
+        max_attempts = max(2, len(transports))
+    except Exception:
+        transports = []
+        max_attempts = 2
+
     for attempt in range(max_attempts):
         try:
             msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+            
             # Track success
             addr = "unknown"
             try:
@@ -691,34 +699,42 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
                     database.increment_transport_sent(addr)
             except Exception:
                 pass
+            
             logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid} (from {addr})")
             return msg_id
+            
         except Exception as e:
             error_str = str(e).lower()
-            # If it's a transport-related error and we have another attempt left
-            if attempt < max_attempts - 1 and any(err in error_str for err in ["network", "timeout", "connection", "unreachable", "smtp", "status 0"]):
+            # List of strings that suggest a transport/network level failure
+            transport_errors = ["network", "timeout", "connection", "unreachable", "smtp", "status 0", "socket", "refused"]
+            
+            if attempt < max_attempts - 1 and any(err in error_str for err in transport_errors):
                 try:
-                    current_primary = bot.rpc.get_config(accid, "configured_addr")
-                    transports = bot.rpc.list_transports(accid)
+                    # Determine active primary (configured_addr is what we SET, addr is what core is USING)
+                    current_primary = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+                    
+                    if not transports:
+                        transports = bot.rpc.list_transports(accid)
+                    
                     if len(transports) > 1:
-                        # Find a backup (any address that is not the current primary)
+                        # Find a backup relay we haven't tried yet or just the next one
+                        # We try to find any relay that is NOT the one that just failed
                         for t in transports:
-                            addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
-                            if addr and addr != current_primary:
-                                logger.warning(f"Primary transport failed. Switching configured_addr to: {addr}")
+                            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                            if t_addr and t_addr != current_primary:
+                                logger.warning(f"Transport {current_primary} failed. Switching to backup: {t_addr}")
                                 try:
-                                    bot.rpc.set_config(accid, "configured_addr", addr)
-                                    import time
-                                    time.sleep(2) # Give core some time to reconfigure
+                                    bot.rpc.set_config(accid, "configured_addr", t_addr)
+                                    time.sleep(2) # Give core a moment to reconfigure
                                     break 
                                 except Exception as set_e:
-                                    logger.error(f"Failed to set configured_addr: {set_e}")
+                                    logger.error(f"Failed to switch transport: {set_e}")
                                     continue
-                except Exception:
-                    pass
+                except Exception as fail_e:
+                    logger.error(f"Failover logic error: {fail_e}")
             
             if attempt == max_attempts - 1:
-                logger.error(f"Failed to send DC message (Account {accid}) after {max_attempts} attempts: {e}")
+                logger.error(f"Failed to send DC message after {max_attempts} attempts. Last error: {e}")
                 raise e
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
@@ -758,17 +774,17 @@ def transports_command(bot, accid, event):
     """Show configured transports (mail relays) and their status."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /transports."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /transports."))
         return
 
     try:
         transports = bot.rpc.list_transports(accid)
     except Exception as e:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to list transports: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to list transports: {e}"))
         return
 
     if not transports:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No transports configured."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
     # Get connectivity status
@@ -818,19 +834,19 @@ def transports_command(bot, accid, event):
         reply += "\n"
 
     reply += f"Total transports: {len(transport_addrs)}"
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/addtransport"))
 def addtransport_command(bot, accid, event):
     """Add a backup mail relay (transport). Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /addtransport."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /addtransport."))
         return
 
     payload = event.payload.strip()
     if not payload:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
             text="Usage:\n"
                  "/addtransport DCACCOUNT:server.example\n"
                  "/addtransport user@example.com password123"
@@ -840,32 +856,32 @@ def addtransport_command(bot, accid, event):
     try:
         if payload.startswith("DCACCOUNT:"):
             bot.rpc.add_transport_from_qr(accid, payload)
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport added via chatmail URI."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Backup transport added via chatmail URI."))
         else:
             parts = payload.split(None, 1)
             if len(parts) < 2:
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
                     text="❌ For email accounts, provide both address and password:\n"
                          "/addtransport user@example.com password123"
                 ))
                 return
             addr, password = parts[0], parts[1]
             bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport `{addr}` added."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Backup transport `{addr}` added."))
     except Exception as e:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to add transport: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to add transport: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/rmtransport"))
 def rmtransport_command(bot, accid, event):
     """Remove a mail relay (transport). Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /rmtransport."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /rmtransport."))
         return
 
     addr = event.payload.strip()
     if not addr:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
         return
 
     try:
@@ -875,20 +891,20 @@ def rmtransport_command(bot, accid, event):
             a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
             transport_addrs.append(a)
         if len(transport_addrs) <= 1:
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport."))
             return
         if addr not in transport_addrs:
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Transport `{addr}` not found."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Transport `{addr}` not found."))
             return
     except Exception as e:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to check transports: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to check transports: {e}"))
         return
 
     try:
         bot.rpc.delete_transport(accid, addr)
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
     except Exception as e:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
@@ -901,7 +917,7 @@ def dc_donate_command(bot, accid, event):
         "🚀 Tribute: https://web.tribute.tg/d/IWb (🇷🇺 russian cards, SBP, high commissions)\n\n"
         "Thank you! 🙏"
     )
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=support_msg))
 
 def to_dc_markdown(text: str) -> str:
     """Convert limited HTML tags (b, i, code) to Markdown for Delta Chat."""
@@ -921,20 +937,20 @@ def dc_channeladd_command(bot, accid, event):
     
     # Admin check
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
         return
 
     if not payload:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /channeladd @username or t.me link"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /channeladd @username or t.me link"))
         return
 
     # Use run_coroutine_threadsafe since dc_cli hooks might run in a separate thread
     async def run_add():
-        status_id = bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
+        status_id = _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
         result = await _add_channel_bridge(payload)
         # Convert HTML response to Markdown for DC
         result_md = to_dc_markdown(result)
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=result_md))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=result_md))
     
     if main_loop:
         asyncio.run_coroutine_threadsafe(run_add(), main_loop)
@@ -948,18 +964,18 @@ def dc_channelremove_command(bot, accid, event):
     payload = event.payload.strip()
     
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
         return
 
     if not payload:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /channelremove N (channel number)"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /channelremove N (channel number)"))
         return
 
     try:
         channel_id = int(payload)
         ch = database.get_channel_by_id(channel_id)
         if not ch:
-             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
              return
              
         tg_channel_id = database.remove_channel(channel_id)
@@ -968,11 +984,11 @@ def dc_channelremove_command(bot, accid, event):
              # Trigger Userbot leave in background
              if main_loop:
                  asyncio.run_coroutine_threadsafe(_userbot_leave_chat(tg_channel_id), main_loop)
-             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
+             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
         else:
-             bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
+             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
     except ValueError:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Invalid channel number."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid channel number."))
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
@@ -983,13 +999,13 @@ def bridge_command(bot, accid, event):
     # Check if it's a group chat
     chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
     if chat_info.get("type") == 1:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
     # Admin check: if a global admin is set, only they can manage bridges
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
         if not _is_dc_admin(bot, accid, msg.from_id):
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /bridge."))
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /bridge."))
             return
     else:
         # Fallback to group creator check
@@ -998,7 +1014,7 @@ def bridge_command(bot, accid, event):
             # In Delta Chat, the first contact in the list is the group creator/admin
             # Also check if the sender is the bot owner (contact ID 1 = self)
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
-                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via /initadmin)"))
+                _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via /initadmin)"))
                 return
         except Exception:
             pass  # If we can't check, allow it (backward compat)
@@ -1009,13 +1025,13 @@ def bridge_command(bot, accid, event):
             raise ValueError()
         tg_chat_id = int(payload)
     except ValueError:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ You must provide the Telegram chat ID. Example: /bridge -123456789"))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must provide the Telegram chat ID. Example: /bridge -123456789"))
         return
 
     if database.add_bridge(chat_id, tg_chat_id):
-        bot.rpc.send_msg(accid, chat_id, MsgData(text=f"✔️ Bridged with Telegram group {tg_chat_id}."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✔️ Bridged with Telegram group {tg_chat_id}."))
     else:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is already bridged."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is already bridged."))
 
 @dc_cli.on(events.NewMessage(command="/unbridge"))
 def unbridge_command(bot, accid, event):
@@ -1026,19 +1042,19 @@ def unbridge_command(bot, accid, event):
     # Check if it's a group chat
     chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
     if chat_info.get("type") == 1:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
     # Admin check
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
         if not _is_dc_admin(bot, accid, msg.from_id):
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /unbridge."))
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /unbridge."))
             return
     else:
         try:
             contacts = bot.rpc.get_chat_contacts(accid, chat_id)
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
-                bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via /initadmin)"))
+                _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via /initadmin)"))
                 return
         except Exception:
             pass
@@ -1049,9 +1065,9 @@ def unbridge_command(bot, accid, event):
         if main_loop:
             for tid in tg_chat_ids:
                 asyncio.run_coroutine_threadsafe(_userbot_leave_chat(tid), main_loop)
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="✔️ Bridge removed."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ This chat is not bridged."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is not bridged."))
 
 
 @dc_cli.on(events.NewMessage(command="/locupdate"))
@@ -1062,12 +1078,12 @@ def locupdate_command(bot, accid, event):
 
     # Check if this is a reply to another message
     if not hasattr(msg, 'quote') or not msg.quote:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
         return
 
     quote_msg_id = msg.quote.get('message_id') if isinstance(msg.quote, dict) else None
     if not quote_msg_id:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Please reply to a Live Location message with /locupdate."))
         return
 
     # Check group chat mappings
@@ -1079,14 +1095,14 @@ def locupdate_command(bot, accid, event):
             tg_msg_id = database.get_tg_msg_id(quote_msg_id, chat_id, tg_chat_id)
             if tg_msg_id and tg_msg_id in LIVE_LOCATIONS:
                 lat, lon = LIVE_LOCATIONS[tg_msg_id]
-                bot.rpc.send_msg(accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=quote_msg_id))
+                _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=quote_msg_id))
                 found = True
                 break
                 
     if not found:
         # Check channel mapping if needed (very rare case for locupdate but just in case)
         # We don't track channel reverse mapping in memory easily here, so we just return not found.
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ No active live location found for this message. It may have expired or not be a live location.", quoted_message_id=msg.id))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ No active live location found for this message. It may have expired or not be a live location.", quoted_message_id=msg.id))
 
 
 @dc_cli.on(events.NewMessage(command="/userbotsync"))
@@ -1094,13 +1110,13 @@ def dc_userbotsync_command(bot, accid, event):
     """Force Userbot sync from Delta Chat. Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can trigger synchronization."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can trigger synchronization."))
         return
 
     async def run_sync():
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⏳ Starting Userbot synchronization..."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Starting Userbot synchronization..."))
         await sync_userbot_channels(force=True)
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ Userbot synchronization completed (subscriber counts updated)."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Userbot synchronization completed (subscriber counts updated)."))
     
     if main_loop:
         asyncio.run_coroutine_threadsafe(run_sync(), main_loop)
@@ -1112,13 +1128,13 @@ def dc_userbotjoin_command(bot, accid, event):
     """Join a channel/group via Userbot using an invite link. Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use this command."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use this command."))
         return
 
     text = msg.text.strip()
     parts = text.split(None, 1)
     if len(parts) < 2:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
             text="/userbotjoin <link>\n\n"
                  "Examples:\n"
                  "• /userbotjoin https://t.me/+AbCdEfGhIjK\n"
@@ -1134,10 +1150,10 @@ def dc_userbotjoin_command(bot, accid, event):
         global userbot_client
 
         if not (userbot_client and userbot_client.is_connected()):
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Userbot is not connected."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Userbot is not connected."))
             return
 
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"⏳ Attempting to join via Userbot: {link}..."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"⏳ Attempting to join via Userbot: {link}..."))
 
         try:
             joined_entity = None
@@ -1155,7 +1171,7 @@ def dc_userbotjoin_command(bot, accid, event):
 
             if invite_hash:
                 if not ImportChatInviteRequest:
-                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Telethon not properly installed."))
+                    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Telethon not properly installed."))
                     return
 
                 try:
@@ -1210,13 +1226,13 @@ def dc_userbotjoin_command(bot, accid, event):
                             matched_channel.get('tg_channel_username', ''),
                             tg_channel_id
                         )
-                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
                         text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n"
                              f"Invite link saved for future syncs.\n\n"
                              f"Matched to bridged channel #{matched_channel['id']}."
                     ))
                 else:
-                    bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
                         text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n\n"
                              f"⚠️ This channel is not yet bridged."
                     ))
@@ -1228,11 +1244,11 @@ def dc_userbotjoin_command(bot, accid, event):
                 except Exception:
                     pass
             else:
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="⚠️ Joined but could not determine channel details."))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⚠️ Joined but could not determine channel details."))
 
         except Exception as e:
             logger.error(f"DC userbotjoin failed for {link}: {e}")
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to join: {str(e)[:500]}"))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to join: {str(e)[:500]}"))
 
     if main_loop:
         asyncio.run_coroutine_threadsafe(do_join(), main_loop)
@@ -1251,12 +1267,12 @@ def stats_command(bot, accid, event):
     if is_private:
         # In private chat: show all bridges (admin only)
         if not _is_dc_admin(bot, accid, msg.from_id):
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
             return
 
         bridges = database.get_all_bridges()
         if not bridges:
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 No bridges configured."))
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="📊 No bridges configured."))
             return
 
         lines = [f"📊 Bridge Statistics ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
@@ -1270,12 +1286,12 @@ def stats_command(bot, accid, event):
                 title = "Unknown Group"
             lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
                 
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
     else:
         # In group chat: show stats for this bridge only
         tg_chats = database.get_tg_chats(chat_id)
         if not tg_chats:
-            bot.rpc.send_msg(accid, chat_id, MsgData(text="📊 This group is not bridged."))
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="📊 This group is not bridged."))
             return
 
         lines = ["📊 Bridge Statistics\n"]
@@ -1290,7 +1306,7 @@ def stats_command(bot, accid, event):
             r_count = database.get_bridge_reaction_count(chat_id, tg_cid)
             lines.append(f"• TG Group {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
                 
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(is_info=True))
@@ -1365,7 +1381,7 @@ def channels_command_dc(bot, accid, event):
         display_channels = [c for c in channels if c.get('tg_channel_username')]
 
     if not display_channels:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text="📺 No public channels are currently available."))
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="📺 No public channels are currently available."))
         return
 
     lines = [f"📺 **{'All' if is_admin else 'Public'} Channels:**\n"]
@@ -1394,7 +1410,7 @@ def channels_command_dc(bot, accid, event):
         lines.append(f"/channel{ch['id']} — {title} {tg_ref} — {stats_str}")
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
-    bot.rpc.send_msg(accid, chat_id, MsgData(text="\n".join(lines)))
+    _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(is_info=False))
@@ -1464,12 +1480,12 @@ def handle_dc_message(bot, accid, event):
                     
                     if not is_admin:
                         # Deny access to private channels for regular users
-                        bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+                        _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
                         return
 
                 invite_link = ch.get('invite_link', '')
                 if not invite_link:
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text="❌ No invite link available for this channel."))
+                    _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text="❌ No invite link available for this channel."))
                     return
                 
                 if is_qr:
@@ -1498,7 +1514,7 @@ def handle_dc_message(bot, accid, event):
                     tg_username = ch.get('tg_channel_username')
                     link_part = f" (t.me/{tg_username})" if tg_username else ""
                     
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(
+                    _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(
                         text=f"📷 QR Code for **{title}**{link_part}", 
                         file=tmp_path
                     ))
@@ -1518,7 +1534,7 @@ def handle_dc_message(bot, accid, event):
                     
                     tg_username = ch.get('tg_channel_username')
                     link_part = f" (t.me/{tg_username})" if tg_username else ""
-                    bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}**{link_part}:\n\n{invite_link}"))
+                    _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"🔗 Join channel **{title}**{link_part}:\n\n{invite_link}"))
                     
                     # Relay last 3 channel posts to user's private chat as a preview
                     if main_loop and userbot_client:
@@ -1534,7 +1550,7 @@ def handle_dc_message(bot, accid, event):
                             )
                 return
             else:
-                bot.rpc.send_msg(accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
+                _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
                 return
         except Exception as e:
             logger.error(f"Error handling /channelN(qr): {e}")
