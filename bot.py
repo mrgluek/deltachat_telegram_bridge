@@ -612,6 +612,52 @@ def _get_contact_fingerprint(bot, accid, contact_id):
     return None
 
 
+Fix for _is_dc_admin function to handle relay-independent admin verification.
+This function needs to be copied into bot.py, replacing the existing _is_dc_admin implementation.
+def _is_dc_admin(bot, accid, from_id):
+    """Checks if a Delta Chat user is the bot administrator."""
+    try:
+        # 1. Always load contact object first to avoid race conditions
+        contact = None
+        try:
+            contact = bot.rpc.get_contact(accid, from_id)
+        except Exception:
+            pass
+            
+        # 2. Fingerprint check
+        stored_fingerprint = database.get_config("admin_dc_fingerprint")
+        if stored_fingerprint:
+            # Try to get fingerprint through RPC first
+            current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
+            
+            # If RPC fails, try to extract from contact object attributes
+            if not current_fingerprint and contact:
+                for attr in ['public_key', 'address', 'id']:
+                    val = getattr(contact, attr, None)
+                    if val:
+                        import re
+                        matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
+                        if matches:
+                            current_fingerprint = matches[0].upper()
+                            break
+                            
+            logger.info(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
+            if current_fingerprint and current_fingerprint == stored_fingerprint:
+                return True
+                
+        # 3. Email fallback (only used if fingerprint didn't match or is missing)
+        stored_email = database.get_config("admin_dc_email")
+        if stored_email and contact:
+            email = contact.address.replace(' ', '').lower()
+            target = stored_email.replace(' ', '').lower()
+            logger.info(f"Admin check (email): stored={stored_email}, current={email}")
+            if email == target:
+                return True
+                
+    except Exception as e:
+        logger.error(f"Error during admin verification: {e}")
+        
+    return False
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:
