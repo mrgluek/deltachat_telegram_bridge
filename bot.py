@@ -587,24 +587,39 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     return "\n".join(lines)
 
 
-def _get_contact_fingerprint(bot, accid, contact_id):
+def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
-    # 1. Try get_contact_config(accid, contact_id, "fp")
+    # 1. Try directly from the contact object if available
+    if contact:
+        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
+            val = getattr(contact, attr, None)
+            if val:
+                import re
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
+                if matches:
+                    return matches[0].upper()
+
+    # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
-            return fp.upper()
+            return fp.upper().replace(' ', '')
     except Exception:
         pass
 
-    # 2. Try get_contact_encryption_info
+    # 3. Try get_contact_encryption_info
+    # We try different argument variations to be safe across different bindings/core versions
     for args in [(accid, contact_id), (contact_id,)]:
         try:
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
+                # Log raw info for debugging (helps when fingerprint detection fails)
+                logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
-                matches = re.findall(r'[0-9a-fA-F]{40}', enc_info.replace(' ', ''))
+                # Look for hex strings between 32 and 64 characters (handles SHA-1 and Ed25519)
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', enc_info.replace(' ', '').replace(':', ''))
                 if matches:
+                    # Usually the last match is the contact's fingerprint
                     return matches[-1].upper()
         except Exception:
             continue
@@ -622,28 +637,22 @@ def _is_dc_admin(bot, accid, from_id):
         except Exception:
             pass
             
-        # 2. Fingerprint check
+        # 2. Fingerprint check (Secure)
         stored_fingerprint = database.get_config("admin_dc_fingerprint")
         if stored_fingerprint:
-            # Try to get fingerprint through RPC first
-            current_fingerprint = _get_contact_fingerprint(bot, accid, from_id)
-            
-            # If RPC fails, try to extract from contact object attributes
-            if not current_fingerprint and contact:
-                for attr in ['public_key', 'address', 'id']:
-                    val = getattr(contact, attr, None)
-                    if val:
-                        import re
-                        matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
-                        if matches:
-                            current_fingerprint = matches[0].upper()
-                            break
+            # Try to get fingerprint through improved extraction
+            current_fingerprint = _get_contact_fingerprint(bot, accid, from_id, contact=contact)
                             
             logger.info(f"Admin check (fp): stored={stored_fingerprint}, current={current_fingerprint}")
             if current_fingerprint and current_fingerprint == stored_fingerprint:
                 return True
                 
-        # 3. Email fallback (only used if fingerprint didn't match or is missing)
+            # If fingerprint is set but didn't match, we REJECT even if email matches (security)
+            if current_fingerprint:
+                 logger.warning(f"Admin fingerprint mismatch for {from_id}")
+                 return False
+
+        # 3. Email fallback (only used if fingerprint is not configured OR not found for current user)
         stored_email = database.get_config("admin_dc_email")
         if stored_email and contact:
             email = contact.address.replace(' ', '').lower()
