@@ -4569,26 +4569,35 @@ if __name__ == "__main__":
                 print("  python bot.py init transport addr password")
                 sys.exit(1)
             
-            # Start DC bot to get access to RPC
-            start_dc_bot()
-            if not dc_bot_instance or not dc_accid:
-                print("Error: Could not initialize Delta Chat bot.")
-                sys.exit(1)
+            # We need to manually initialize RPC to add transport without starting the full bot loop
+            from deltachat2 import Rpc, IOTransport
+            from appdirs import user_config_dir
             
-            payload = sys.argv[init_idx + 2]
+            config_dir = user_config_dir("deltachat_telegram_bridge")
+            accounts_dir = os.path.join(config_dir, "accounts")
+            
             try:
-                if payload.startswith("DCACCOUNT:"):
-                    dc_bot_instance.rpc.add_transport_from_qr(dc_accid, payload)
-                    print(f"Success: Backup transport added via chatmail URI.")
-                elif len(sys.argv) >= init_idx + 4:
-                    addr, password = sys.argv[init_idx + 2], sys.argv[init_idx + 3]
-                    dc_bot_instance.rpc.add_or_update_transport(dc_accid, {"addr": addr, "password": password})
-                    print(f"Success: Backup transport {addr} added.")
-                else:
-                    print("Error: For email accounts, provide both address and password.")
-                    sys.exit(1)
+                with IOTransport(accounts_dir=accounts_dir) as trans:
+                    rpc = Rpc(trans)
+                    accids = rpc.get_all_account_ids()
+                    if not accids:
+                        print("Error: No accounts configured. Run 'python bot.py init dc addr password' first.")
+                        sys.exit(1)
+                    accid = accids[0]
+                    
+                    payload = sys.argv[init_idx + 2]
+                    if payload.startswith("DCACCOUNT:"):
+                        rpc.add_transport_from_qr(accid, payload)
+                        print(f"Success: Backup transport added via chatmail URI.")
+                    elif len(sys.argv) >= init_idx + 4:
+                        addr, password = sys.argv[init_idx + 2], sys.argv[init_idx + 3]
+                        rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
+                        print(f"Success: Backup transport {addr} added.")
+                    else:
+                        print("Error: For email accounts, provide both address and password.")
+                        sys.exit(1)
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error adding transport: {e}")
                 sys.exit(1)
             sys.exit(0)
         else:
