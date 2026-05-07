@@ -73,23 +73,23 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 Instead of using a local virtual environment, you can run the bot using Docker Compose:
 
-1. Initialise the database and accounts using `docker-compose run`:
+1. Initialise the database and accounts using `docker compose run`:
 
    ```bash
-   docker-compose run --rm bridge python bot.py init dc me@example.com MyPassword
-   docker-compose run --rm bridge python bot.py init tg
+   docker compose run --rm bridge python bot.py init dc me@example.com MyPassword
+   docker compose run --rm bridge python bot.py init tg
    ```
 
 2. Start the bridge:
 
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 3. **To update the bot manually** after pulling new code:
 
    ```bash
-   docker-compose up -d --build
+   docker compose up -d --build
    ```
 
    *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
@@ -182,14 +182,22 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
   **Important Note:** Setting `admin_tg` locks the Telegram management commands so that *only* this user can manage the bot (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash
-  docker-compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID
+  docker compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID
   ```
 
 - **Set Global Admin (Delta Chat)**: Configures a Delta Chat email to receive all bot error logs via direct message.
   **Important Note:** Setting `admin_dc` locks the `/bridge` and `/unbridge` commands so that *only* this user can use them (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash
-  docker-compose exec bridge python bot.py init admin_dc admin@example.com
+  docker compose exec bridge python bot.py init admin_dc admin@example.com
+  ```
+
+- **Add Backup Relay (Transport)**: Link multiple mail servers for automatic failover.
+  
+  ```bash
+  docker compose stop bridge
+  docker compose run --rm bridge python bot.py init transport backup@example.com "PASSWORD"
+  docker compose up -d
   ```
 
 ## Other Commands
@@ -204,31 +212,31 @@ Here are the commands (shown for Docker, assuming the container is running):
 - **Get Invite Link (QR Code data)**: Print the bot's invitation link so you can add it to Delta Chat groups.
   
   ```bash
-  docker-compose exec bridge python bot.py link
+  docker compose exec bridge python bot.py link
   ```
 
 - **List accounts**: View the IDs and addresses of configured Delta Chat accounts.
   
   ```bash
-  docker-compose exec bridge python bot.py list
+  docker compose exec bridge python bot.py list
   ```
 
 - **Config**: View or set configuration options for the bot account.
   
   ```bash
-  docker-compose exec bridge python bot.py config
+  docker compose exec bridge python bot.py config
   ```
 
 - **Remove account**: Remove a specific Delta Chat account if you accidentally created multiple. Replace `ID` with the account number (e.g. `2`).
   
   ```bash
-  docker-compose exec bridge python bot.py --account ID remove
+  docker compose exec bridge python bot.py --account ID remove
   ```
 
 - **Admin**: Generates a setup QR code to join an Admin control group where you can manage the bot remotely.
   
   ```bash
-  docker-compose exec bridge python bot.py admin
+  docker compose exec bridge python bot.py admin
   ```
 
 *For more details on management commands, see the [deltabot-cli-py repository](https://github.com/deltachat-bot/deltabot-cli-py).*
@@ -325,7 +333,7 @@ python bot.py init api_hash YOUR_API_HASH
 This step requires entering your phone number and the SMS/Telegram validation code. If using Docker, you must run it interactively:
 
 ```bash
-docker-compose exec bridge python bot.py init userbot
+docker compose exec bridge python bot.py init userbot
 ```
 
 > [!TIP]
