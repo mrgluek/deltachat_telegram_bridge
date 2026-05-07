@@ -1843,6 +1843,17 @@ def on_start(bot, _args):
     if accounts:
         dc_accid = accounts[0]
 
+        # Show configured transports
+        try:
+            transports = bot.rpc.list_transports(dc_accid)
+            print("\n" + "=" * 50)
+            print("Configured Bot Transports (Relays):")
+            for t in transports:
+                addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+                print(f" - {addr}")
+        except Exception:
+            pass
+
         # Detect bot's own contact ID to prevent echo loops
         try:
             bot_contact_id = bot.rpc.get_contact(dc_accid, 1).id  # Contact ID 1 = self
