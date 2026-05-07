@@ -836,6 +836,30 @@ def transports_command(bot, accid, event):
     reply += f"Total transports: {len(transport_addrs)}"
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
+@dc_cli.on(events.NewMessage(command="/rmtransport"))
+def rmtransport_command(bot, accid, event):
+    """Remove a mail relay. Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /rmtransport."))
+        return
+
+    addr = event.payload.strip()
+    if not addr:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
+        return
+
+    try:
+        transports = bot.rpc.list_transports(accid)
+        if len(transports) <= 1:
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport."))
+            return
+
+        bot.rpc.delete_transport(accid, addr)
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
+    except Exception as e:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
+
 @dc_cli.on(events.NewMessage(command="/addtransport"))
 def addtransport_command(bot, accid, event):
     """Add a backup mail relay (transport). Admin only."""
