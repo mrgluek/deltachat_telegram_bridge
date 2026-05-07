@@ -1867,7 +1867,13 @@ def on_start(bot, _args):
     if accounts:
         dc_accid = accounts[0]
 
-        # Show configured transports
+        # Show configured admin and transports
+        admin_dc_email = database.get_config("admin_dc_email")
+        admin_dc_fingerprint = database.get_config("admin_dc_fingerprint")
+        if admin_dc_email:
+            fp_suffix = f" ({admin_dc_fingerprint[-8:].upper()})" if admin_dc_fingerprint else ""
+            print(f"Bot Administrator: {admin_dc_email}{fp_suffix}")
+
         try:
             transports = bot.rpc.list_transports(dc_accid)
             print("\n" + "=" * 50)
