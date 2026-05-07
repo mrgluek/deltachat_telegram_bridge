@@ -588,46 +588,72 @@ def get_tg_help_text(name: str, user_id: int) -> str:
 
 
 def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
-    """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
+    self_fps = set()
+    try:
+        bot_addrs = []
+        bot_addr = bot.rpc.get_config(accid, "addr")
+        if bot_addr: bot_addrs.append(bot_addr.lower().strip())
+            
+        try:
+            transports = bot.rpc.list_transports(accid)
+            for t in transports:
+                t_addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+                if t_addr: bot_addrs.append(t_addr.lower().strip())
+        except: pass
+        
+        if bot_addrs:
+            for args in [(accid, contact_id), (contact_id,)]:
+                try:
+                    enc_info_self = bot.rpc.get_contact_encryption_info(*args)
+                    if enc_info_self:
+                        import re
+                        blocks = re.split(r'\n\s*\n', enc_info_self.strip())
+                        for block in blocks:
+                            if any(a in block.lower() for a in bot_addrs):
+                                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(block.split()).replace(':', ''))
+                                self_fps.update(m.upper() for m in matches)
+                        break
+                except Exception:
+                    continue
+        if self_fps:
+            logger.info(f"Detected bot's own fingerprints from enc_info: {[f[-8:] for f in self_fps]}")
+    except Exception as e:
+        logger.error(f"Error detecting self-fingerprint: {e}")
+
     # 1. Try directly from the contact object if available
     if contact:
-        # The contact object from RPC is often a dict-like object
         get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
         for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
             val = get_val(attr)
             if val:
                 import re
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
-                if matches:
-                    logger.debug(f"Found fingerprint in contact.{attr}: {matches[0]}")
-                    return matches[0].upper()
+                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
+                if valid_matches:
+                    fps = ",".join(valid_matches)
+                    logger.debug(f"Found fingerprint(s) in contact.{attr}: {fps}")
+                    return fps
 
     # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
-        if fp:
+        if fp and fp.upper().replace(' ', '') not in self_fps:
             logger.debug(f"Found fingerprint in contact config 'fp': {fp}")
             return fp.upper().replace(' ', '')
     except Exception:
         pass
 
     # 3. Try get_contact_encryption_info
-    # We try different argument variations to be safe across different bindings/core versions
     for args in [(accid, contact_id), (contact_id,)]:
         try:
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
-                # Log raw info for debugging (helps when fingerprint detection fails)
-                logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
-                # Clean ALL whitespace including newlines
                 cleaned_info = "".join(enc_info.split()).replace(':', '')
-                # Look for hex strings between 32 and 64 characters (handles SHA-1 and Ed25519)
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned_info)
-                if matches:
-                    # In encryption info, we might have multiple fingerprints (Me and Contact).
-                    # We return all of them joined by comma, and let _is_dc_admin check.
-                    fps = ",".join(matches).upper()
+                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
+                if valid_matches:
+                    fps = ",".join(valid_matches)
                     logger.debug(f"Found fingerprint(s) in encryption info: {fps}")
                     return fps
         except Exception as e:
