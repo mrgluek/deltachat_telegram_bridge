@@ -4413,7 +4413,10 @@ async def main():
     is_serve = "serve" in args
 
     if not is_serve:
-        start_dc_bot()
+        # If we are not in 'serve' mode, we are running a blocking CLI command (like init).
+        # We must run it in an executor to avoid deadlocking the asyncio loop.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, start_dc_bot)
         return
 
     token = database.get_config("telegram_token") or os.environ.get("TELEGRAM_TOKEN")
@@ -4571,7 +4574,13 @@ if __name__ == "__main__":
             print("Telegram token saved in bridge.db.")
             sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "dc":
-            sys.argv.pop(init_idx + 1)
+            # Handle 'init dc' via dc_cli directly and exit to avoid asyncio deadlock.
+            # We don't pop 'dc' here because deltabot-cli expects it.
+            try:
+                dc_cli.start()
+            except SystemExit:
+                pass
+            sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "admin_tg":
             if len(sys.argv) > init_idx + 2:
                 database.set_config("admin_tg_id", sys.argv[init_idx + 2])
