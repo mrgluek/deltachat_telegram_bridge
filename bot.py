@@ -53,18 +53,32 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # Global tracker for Userbot background tasks
 _userbot_tasks: set[asyncio.Task] = set()
 
+# Transient network error patterns that should be suppressed/downgraded during polling.
+# These are expected during brief connectivity interruptions and resolve automatically.
+_TRANSIENT_POLLING_ERRORS = (
+    "Server disconnected without sending a response",
+    "ReadTimeout",
+    "All connection attempts failed",
+    "ConnectError",
+    "httpcore.ConnectError",
+    "httpx.ConnectError",
+)
+
 class PollingErrorFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             exc_str = str(record.exc_info[1])
-            if "Server disconnected without sending a response" in exc_str or "ReadTimeout" in exc_str:
+            if any(pat in exc_str for pat in _TRANSIENT_POLLING_ERRORS):
                 return False
         msg = record.getMessage()
-        if "Server disconnected without sending a response" in msg or "ReadTimeout" in msg:
+        if any(pat in msg for pat in _TRANSIENT_POLLING_ERRORS):
             return False
         return True
 
 logging.getLogger("telegram.ext.Updater").addFilter(PollingErrorFilter())
+logging.getLogger("telegram.ext.Application").addFilter(PollingErrorFilter())
+logging.getLogger("httpx").addFilter(PollingErrorFilter())
+logging.getLogger("httpcore").addFilter(PollingErrorFilter())
 
 class AdminLogHandler(logging.Handler):
     def __init__(self):
@@ -74,6 +88,15 @@ class AdminLogHandler(logging.Handler):
     def emit(self, record):
         if record.levelno < logging.ERROR:
             return
+
+        # Suppress transient polling/network errors — they self-resolve and should not spam admin.
+        try:
+            exc_str = str(record.exc_info[1]) if record.exc_info else ""
+            msg_str = record.getMessage()
+            if any(pat in exc_str or pat in msg_str for pat in _TRANSIENT_POLLING_ERRORS):
+                return
+        except Exception:
+            pass
             
         if getattr(self._is_emitting, 'flag', False):
             return
