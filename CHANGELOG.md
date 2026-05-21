@@ -1,3 +1,6 @@
+## [2026-05-21]
+- **Suppressed Telethon Reconnection Logs**: Avoided spamming the admin chat with internal Telethon connection errors and `AttributeError` tracebacks. Since the built-in connection watchdog handles reconnection automatically, these transient logs are now suppressed from chat notifications while still being logged to the console/system logs.
+
 ## [2026-05-02]
 - **Multi-transport Support (Backup Relays)**: Added support for multiple email transports on a single account for high availability.
   - Core automatically fails over to backup relays if the primary server (`chat.gluek.info`) is down.
