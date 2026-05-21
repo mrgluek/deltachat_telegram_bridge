@@ -1,3 +1,7 @@
+## [2026-05-22]
+- **Standardized Welcome Greeting**: Refactored the welcome greeting to be exactly identical to the output of the `/help` command instead of a custom welcome prefix message.
+- **Fixed Greeting Arguments Bug**: Resolved a calling parameter bug where the welcome greeting method call to `get_dc_help_text` had incorrect positional arguments, which previously caused the greeting check to fail silently in logs.
+
 ## [2026-05-21]
 - **Suppressed Telethon Reconnection Logs**: Avoided spamming the admin chat with internal Telethon connection errors and `AttributeError` tracebacks. Since the built-in connection watchdog handles reconnection automatically, these transient logs are now suppressed from chat notifications while still being logged to the console/system logs.
 

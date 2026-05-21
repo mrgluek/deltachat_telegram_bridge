@@ -1515,8 +1515,9 @@ def handle_dc_message(bot, accid, event):
             # Check if we already greeted this contact
             greeted_key = f"greeted_{from_id}"
             if not database.get_config(greeted_key):
-                help_text = get_dc_help_text(bot.rpc.get_contact(accid, from_id).address)
-                _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"👋 Welcome!\n\n{help_text}"))
+                sender_email = bot.rpc.get_contact(accid, from_id).address
+                help_text = get_dc_help_text(bot, accid, sender_email, from_id)
+                _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=help_text))
                 database.set_config(greeted_key, "1")
     except Exception as e:
         logger.warning(f"Greeting check failed: {e}")
