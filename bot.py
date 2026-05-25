@@ -4615,14 +4615,6 @@ if __name__ == "__main__":
             print("Telegram token saved in bridge.db.")
             sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "dc":
-            name = input("Bot display name (default: TG Bridge): ").strip()
-            if name:
-                database.set_config("bot_displayname", name)
-
-            avatar = input("Avatar file path or name (default: icon_deltachat.jpg): ").strip()
-            if avatar:
-                database.set_config("bot_avatar_path", avatar)
-
             new_args = sys.argv[init_idx + 2:]
 
             if len(new_args) < 1 or not new_args[0]:
@@ -4632,6 +4624,14 @@ if __name__ == "__main__":
             elif len(new_args) < 2:
                 password = getpass.getpass("Password (input will be hidden): ").strip()
                 new_args = [new_args[0], password] if password else [new_args]
+
+            name = input("Bot display name (default: TG Bridge): ").strip()
+            if name:
+                database.set_config("bot_displayname", name)
+
+            avatar = input("Avatar file path or name (default: icon_deltachat.jpg): ").strip()
+            if avatar:
+                database.set_config("bot_avatar_path", avatar)
 
             # Strip 'dc' but keep 'init' so dc_cli sees the command and email/password
             sys.argv = [sys.argv[0], "init"] + new_args
