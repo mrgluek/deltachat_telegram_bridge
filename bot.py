@@ -515,21 +515,29 @@ def on_init(bot, args):
     bot.logger.addHandler(admin_handler)
     
     for accid in bot.rpc.get_all_account_ids():
-        bot.rpc.set_config(accid, "displayname", "TG Bridge")
+        displayname = database.get_config("bot_displayname") or "TG Bridge"
+        bot.rpc.set_config(accid, "displayname", displayname)
         bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups. Send /help for commands.")
-        # Auto-delete messages after 7 days to save disk space
-        # (shorter values cause 'message does not exist' errors for reactions/replies)
         bot.rpc.set_config(accid, "delete_device_after", "604800")
-        # Set bot avatar if icon file exists (prefer .jpg)
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base_dir, "icon_deltachat.jpg")
-            if not os.path.exists(icon_path):
-                icon_path = os.path.join(base_dir, "icon_deltachat.png")
-            if os.path.exists(icon_path):
-                bot.rpc.set_config(accid, "selfavatar", icon_path)
-        except Exception as e:
-            bot.logger.warning(f"Could not set avatar: {e}")
+        avatar_path = database.get_config("bot_avatar_path")
+        if avatar_path:
+            if not os.path.isabs(avatar_path):
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                avatar_path = os.path.join(base_dir, avatar_path)
+            if os.path.exists(avatar_path):
+                bot.rpc.set_config(accid, "selfavatar", avatar_path)
+            else:
+                bot.logger.warning(f"Avatar file not found: {avatar_path}")
+        else:
+            try:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                icon_path = os.path.join(base_dir, "icon_deltachat.jpg")
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(base_dir, "icon_deltachat.png")
+                if os.path.exists(icon_path):
+                    bot.rpc.set_config(accid, "selfavatar", icon_path)
+            except Exception as e:
+                bot.logger.warning(f"Could not set avatar: {e}")
 
 def get_dc_help_text(bot, accid, sender_email, from_id):
     admin_dc_fingerprint = database.get_config("admin_dc_fingerprint")
@@ -558,11 +566,15 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
         fp_suffix = f" ({admin_dc_fingerprint[-8:].upper()})" if admin_dc_fingerprint else ""
         help_text += f"\n👑 **Admin:** `{admin_dc_email}`{fp_suffix}\n"
         help_text += (
-            f"\n**Management (Owner only):**\n"
+            f"\n**Channel Management (Owner only):**\n"
+            f"/channeladd @name or ID — Bridge a TG channel/group (bot as admin or Userbot)\n"
+            f"/channelremove N — Remove a channel bridge\n"
+            f"/channels — List bridged channels\n"
+            f"/userbotjoin <link> — Join channel via Userbot (no admin needed)\n"
+            f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
             f"/userbotsync — Force Userbot re-sync\n"
-            f"/userbotjoin <link> — Join channel via Userbot\n"
             f"/transports — Show configured mail relays & stats\n"
             f"/addtransport — Add a backup mail relay\n"
             f"/rmtransport <addr> — Remove a mail relay\n"
@@ -594,19 +606,27 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     ]
     if database.is_owner(user_id):
         lines.append(f"\n<b>⚙️ Channel & Userbot (Owner):</b>")
-        lines.append(f"/channeladd @name or ID — Bridge a channel/group")
+        lines.append(f"/channeladd @name or ID — Bridge a channel/group (bot must be admin OR use Userbot)")
+        lines.append(f"/userbotjoin link — Join channel/group via Userbot (no admin needed; use before /channeladd)")
         lines.append(f"/channels — List bridged channels")
         lines.append(f"/groups — List Userbot groups to bridge")
         lines.append(f"/channel N — Get channel invite link")
         lines.append(f"/channelqr N — Get channel QR invite")
         lines.append(f"/channelremove N — Remove a channel bridge")
         lines.append(f"/userbotsync — Force Userbot re-sync")
-        lines.append(f"/userbotjoin link — Join channel via Userbot")
         
         lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
         lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
         lines.append(f"/adminremove <i>user_id</i> — Remove a sub-admin")
         lines.append(f"/admins — List sub-admins")
+    else:
+        lines.append(f"\n<b>📡 Channels (Public):</b>")
+        lines.append(f"/channeladd @name or ID — Bridge a channel/group")
+        lines.append(f"/userbotjoin link — Join channel/group via Userbot")
+        lines.append(f"/channels — List bridged channels")
+        lines.append(f"/channel N — Get channel invite link")
+        lines.append(f"/channelqr N — Get channel QR invite")
+        lines.append(f"/channelremove N — Remove a channel bridge")
     lines.append(f"\nTo get started, add me to a Telegram group and use /bridge to connect it to Delta Chat.")
     lines.append(f"\nℹ️ Make sure Group Privacy is turned off in @BotFather → Bot Settings.")
     lines.append(f"\nRun your own bot: https://github.com/mrgluek/deltachat_telegram_bridge")
@@ -4603,8 +4623,25 @@ if __name__ == "__main__":
             print("Telegram token saved in bridge.db.")
             sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "dc":
-            # Strip 'dc' but keep 'init' so dc_cli sees the command and email/password
             new_args = sys.argv[init_idx + 2:]
+
+            if len(new_args) < 1 or not new_args[0]:
+                email = input("Delta Chat email: ").strip()
+                password = getpass.getpass("Password (input will be hidden): ").strip()
+                new_args = [email, password] if password else [email]
+            elif len(new_args) < 2:
+                password = getpass.getpass("Password (input will be hidden): ").strip()
+                new_args = [new_args[0], password] if password else [new_args]
+
+            name = input("Bot display name (default: TG Bridge): ").strip()
+            if name:
+                database.set_config("bot_displayname", name)
+
+            avatar = input("Avatar file path or name (default: icon_deltachat.jpg): ").strip()
+            if avatar:
+                database.set_config("bot_avatar_path", avatar)
+
+            # Strip 'dc' but keep 'init' so dc_cli sees the command and email/password
             sys.argv = [sys.argv[0], "init"] + new_args
             try:
                 dc_cli.start()

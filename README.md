@@ -267,10 +267,12 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 ### Setup
 
-1. **Add the bot** as an admin to the Telegram channel you want to bridge.
+1. **Add the bot** as an admin to the Telegram channel you want to bridge.  
+   *Alternatively, if you cannot add the bot as admin, configure [Userbot Mode](#userbot-mode-bridging-without-admin-permissions) and use `/userbotjoin` first.*
 2. **In a private chat** with the bot, use `/channeladd @channel_username` or `/channeladd -1001234567890` (numeric ID) to create the bridge.
 
    - *Tip:* When you add the bot as an administrator to a channel, it will automatically send a private message to the configured `admin_tg` with the channel's numeric ID and a ready-to-use bridging command.
+   - *Tip:* If the bot is not an admin but Userbot is configured and has joined the channel, `/channeladd` will automatically fall back to Userbot mode.
 
 3. The bot will create a DC broadcast channel (with the same name and avatar) and return an **invite link** for subscribing.
 
@@ -278,12 +280,12 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 | Command | Description |
 |---------|-------------|
-| `/channeladd <target>` | Create a bridge for a Telegram channel or group |
+| `/channeladd <target>` | Create a bridge (bot as admin, or Userbot if pre-joined via `/userbotjoin`) |
 | `/channelremove <target>` | Remove a channel bridge |
 | `/channels` | List bridged channels (as admin, private chat) |
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
-| `/userbotjoin <link>` | Join a channel/group via Userbot using an invite link |
+| `/userbotjoin <link>` | Join a channel/group via Userbot (no admin needed) |
 | `/groups` | List technical account's groups for easy bridging |
 | `/transports` | Show configured mail relays & usage stats |
 | `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
@@ -347,6 +349,15 @@ docker compose exec bridge python bot.py init userbot
 > - **Session Security:** A file named `userbot_session.session` will be created. This file is essentially a "master key" to your Telegram account. **Never share it.** Ensure your server has strict file permissions.
 > - **Account Activity:** The bot will join channels on your behalf to read posts.
 > - **API Limits:** While safe for moderate use, intensive API operations can theoretically lead to temporary rate limits or account flags from Telegram's anti-spam systems. It is recommended to use a dedicated "feeder" account if you plan to bridge a very large number of channels.
+
+### 5. Bridge the Channel
+
+Once the Userbot is configured and has joined the channel (via `/userbotjoin`):
+
+1. In a private chat with the bot, use `/channeladd @channel_username` or `/channeladd -1001234567890`.
+2. The bot will automatically use the Userbot to resolve the channel and relay messages — no admin rights needed.
+
+> **Note:** `/channeladd` always tries the Bot API first. If the bot is not an admin and the Bot API fails, it falls back to the Userbot transparently. You don't need to specify which mode to use.
 
 ---
 
