@@ -662,7 +662,7 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 except Exception:
                     continue
         if self_fps:
-            logger.info(f"Detected bot's own fingerprints from enc_info: {[f[-8:] for f in self_fps]}")
+            logger.debug(f"Detected bot's own fingerprints from enc_info: {[f[-8:] for f in self_fps]}")
     except Exception as e:
         logger.error(f"Error detecting self-fingerprint: {e}")
 
