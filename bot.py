@@ -1441,23 +1441,7 @@ def handle_dc_info_message(bot, accid, event):
                               ("memberadded", "memberjoined"))
     
     if is_member_event:
-        logger.info(f"Member event detected in DC chat {dc_chat_id} (type={smt!r})")
-        # Check if this is a bridged channel
-        ch = database.get_channel_by_dc_chat_id(dc_chat_id)
-        if ch and main_loop:
-            tg_channel_id = ch['tg_channel_id']
-            # ub_target is username if available, else numeric ID
-            ub_target = ch['tg_channel_username'] if ch['tg_channel_username'] else tg_channel_id
-            
-            if ub_target:
-                logger.info(f"New member joined bridged DC channel {dc_chat_id}. Relaying history...")
-                invite_link = ch.get('invite_link')
-                asyncio.run_coroutine_threadsafe(
-                    _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=invite_link),
-                    main_loop
-                )
-        elif not ch:
-            logger.debug(f"DC chat {dc_chat_id} is not a bridged channel, skipping history relay.")
+        logger.info(f"Member event detected in DC chat {dc_chat_id} (type={smt!r}). History is resent automatically by core.")
 
 
 @dc_cli.on(events.NewMessage(command="/channels"))
@@ -2718,9 +2702,10 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             # Register in cooldown so subsequent joins immediately after creation don't trigger history relay again
             _history_cooldowns[dc_chat_id] = time.time()
             
-            # Relay last 3 messages as history
+            # Relay last 10 messages as history so they are present in the broadcast chat
+            # and can be automatically resent to new subscribers by deltachat-core.
             ub_target = resolved_username if resolved_username else tg_channel_id
-            await _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=3, invite_link=invite_link)
+            await _relay_channel_history(dc_chat_id, tg_channel_id, ub_target, limit=10, invite_link=invite_link)
 
             # Sync subscriber stats immediately
             try:
@@ -2739,8 +2724,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 f"✅ Channel {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
-                f"🔗 Subscribe in Delta Chat:\n{invite_link}\n\n"
-                f"<i>(The last 3 posts have been relayed as history)</i>"
+                f"🔗 Subscribe in Delta Chat:\n{invite_link}"
             )
         else:
             return "❌ Failed to save channel to database (may already exist)."

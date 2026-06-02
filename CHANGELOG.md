@@ -1,3 +1,9 @@
+## [2026-06-02]
+- **Adaptation for New Core History Resending**: 
+  - Increased history relay limit from 3 to 10 when bridging a channel to seed the broadcast group. This enables the new deltachat-core / chatmail core to automatically resend the last 10 messages to newly connected subscribers.
+  - Removed manual history relay on new member join events, since this is now handled natively by the core/server.
+  - Removed the redundant `*(The last 3 posts have been relayed as history)*` notice from the channel creation output.
+
 ## [2026-05-22]
 - **Standardized Welcome Greeting**: Refactored the welcome greeting to be exactly identical to the output of the `/help` command instead of a custom welcome prefix message.
 - **Fixed Greeting Arguments Bug**: Resolved a calling parameter bug where the welcome greeting method call to `get_dc_help_text` had incorrect positional arguments, which previously caused the greeting check to fail silently in logs.
