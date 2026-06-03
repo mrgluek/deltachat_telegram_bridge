@@ -71,6 +71,22 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 ## Setup with Docker Compose (Recommended)
 
+> [!IMPORTANT]
+> **Breaking Change (June 2026):**
+> The bot's execution user inside the Docker container has been changed to `root` (matching other Delta Chat bots). All configuration and runtime data are now centralized under a single `./data` directory on the host to make backups simpler and cleaner.
+>
+> If you are migrating from an older installation:
+> 1. Stop the bot: `docker compose down`
+> 2. Create the `./data` directory: `mkdir -p data`
+> 3. Move your existing data to the new structure:
+>    ```bash
+>    mv bridge.db data/bridge.db
+>    mv userbot_session.session data/userbot_session.session
+>    # If you had account configuration in ~/.config/tgbridge:
+>    mv ~/.config/tgbridge data/tgbridge
+>    ```
+> 4. Pull the latest code and start the bot: `./update.sh` (or `docker compose up -d --build`).
+
 Instead of using a local virtual environment, you can run the bot using Docker Compose:
 
 1. Initialise the database and accounts using `docker compose run`:
@@ -92,7 +108,8 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    docker compose up -d --build
    ```
 
-   *Your configuration and message history will be preserved since they are stored in the mounted `bridge.db` and configuration volumes.*
+   *Your configuration and message history will be preserved since they are stored in the mounted `./data` directory.*
+
 
 ## Automatic Updates
 
@@ -162,13 +179,14 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
 3. Send `/bridge -100123456789` in the DC group (owner only in private mode).
 4. To remove the bridge, send `/unbridge` in the DC group.
 
-*Note: Group mappings are saved locally in the `bridge.db` SQLite file.*
+*Note: Group mappings are saved locally in the `bridge.db` SQLite file (or `data/bridge.db` when using Docker).*
 
 > **Reactions:** For reaction bridging (TG → DC) to work, the bot must be an **administrator** in the Telegram group. No special permissions are needed — just the admin role. When a basic group is promoted, Telegram may migrate it to a supergroup (changing the chat ID). The bot detects this automatically and updates its stored mappings.
 
 ## Security Notes
 
-- The `bridge.db` file contains your **Telegram bot token** in plaintext. Protect it with appropriate file permissions (e.g. `chmod 600 bridge.db`).
+- The `bridge.db` (or `data/bridge.db` when using Docker) file contains your **Telegram bot token** in plaintext. Protect it with appropriate file permissions (e.g. `chmod 600 data/bridge.db`).
+
 - Management commands (`/bridge`, `/unbridge`, `/id`) are restricted to group admins or bot owner (see below).
 - Messages are rate-limited to **30 messages per minute per chat** to prevent flooding.
 - **Global outgoing limit**: The bot enforces a global limit of **60 messages per minute** across all Delta Chat interactions to stay within chatmail server limits.

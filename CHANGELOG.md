@@ -1,3 +1,10 @@
+## [2026-06-03]
+- **Breaking Change: Root Execution & Centralized Data Directory**:
+  - Centralized all persistent files under a single host `./data` directory (database, Userbot session, and Delta Chat config/accounts).
+  - Modified the Docker setup to run the bridge bot as `root` user inside the container, standardizing privilege levels with other bots (like `deltachat_bouncer`).
+  - Added environment variable configuration in `docker-compose.yml`: `DB_PATH`, `USERBOT_SESSION_PATH`, and `XDG_CONFIG_HOME`.
+  - Removed host non-root UID/GID mapping and host-level user check in `update.sh`.
+
 ## [2026-06-02]
 - **Adaptation for New Core History Resending**: 
   - Increased history relay limit from 3 to 10 when bridging a channel to seed the broadcast group. This enables the new deltachat-core / chatmail core to automatically resend the last 10 messages to newly connected subscribers.

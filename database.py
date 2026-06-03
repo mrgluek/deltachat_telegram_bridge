@@ -2,7 +2,7 @@ import os
 import sqlite3
 import threading
 
-DB_PATH = "bridge.db"
+DB_PATH = os.getenv("DB_PATH", "bridge.db")
 _lock = threading.Lock()
 
 def init_db():

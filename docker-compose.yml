@@ -3,17 +3,14 @@ services:
     image: deltachat_telegram_bridge:latest
     build:
       context: .
-      args:
-        UID: ${HOST_UID:-1000}
-        GID: ${HOST_GID:-1000}
     container_name: tg_dc_bridge
     restart: unless-stopped
     volumes:
-      - ./bridge.db:/app/bridge.db
-      - ./userbot_session.session:/app/userbot_session.session
-      # Directory created by deltabot-cli to store account data
-      - ~/.config/tgbridge:/home/bot/.config/tgbridge
+      - ./data:/app/data
     environment:
       # Optional: set token via env variable, or use initialized db
       # TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
+      - DB_PATH=/app/data/bridge.db
+      - USERBOT_SESSION_PATH=/app/data/userbot_session
+      - XDG_CONFIG_HOME=/app/data
       - PYTHONUNBUFFERED=1

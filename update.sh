@@ -13,18 +13,7 @@ hc_ping() {
 trap 'hc_ping /fail' ERR
 hc_ping /start
 
-if [ "$(id -u)" = "0" ]; then
-    echo "❌ Do not run this script as root. Please switch to the service user:"
-    echo "   sudo su - tgbridge"
-    exit 1
-fi
 
-# Automatically create/update .env file with host user IDs
-echo "HOST_UID=$(id -u)" > .env
-echo "HOST_GID=$(id -g)" >> .env
-
-export HOST_UID=$(id -u)
-export HOST_GID=$(id -g)
 
 # --- BACKUP REMOTE ---
 BACKUP_REMOTE_URL="https://git.gluek.info/gluek/deltachat_telegram_bridge"

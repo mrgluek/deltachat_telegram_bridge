@@ -160,6 +160,7 @@ db_lock = threading.Lock()
 import collections
 
 dc_cli = BotCli("tgbridge")
+USERBOT_SESSION_PATH = os.environ.get("USERBOT_SESSION_PATH", "userbot_session")
 
 # Global references
 tg_app: Optional[Application] = None
@@ -4410,7 +4411,7 @@ async def start_userbot():
                 userbot_client = None
         
         logger.info("Initializing new Telethon Userbot client...")
-        userbot_client = TelegramClient('userbot_session', int(api_id), api_hash, sequential_updates=False)
+        userbot_client = TelegramClient(USERBOT_SESSION_PATH, int(api_id), api_hash, sequential_updates=False)
         
         @userbot_client.on(tg_events.NewMessage())
         async def on_new_userbot_msg(event):
@@ -4674,9 +4675,9 @@ if __name__ == "__main__":
                 sys.exit(1)
             
             print("Initializing userbot interactive login...")
-            client = TelegramClient('userbot_session', int(api_id), api_hash)
+            client = TelegramClient(USERBOT_SESSION_PATH, int(api_id), api_hash)
             client.start()
-            print("Userbot session successfully created in userbot_session.session")
+            print(f"Userbot session successfully created at {USERBOT_SESSION_PATH}.session")
             sys.exit(0)
         elif len(sys.argv) > init_idx + 1 and sys.argv[init_idx + 1] == "transport":
             if len(sys.argv) < init_idx + 3:
@@ -4689,7 +4690,7 @@ if __name__ == "__main__":
             from deltachat2 import Rpc, IOTransport
             from appdirs import user_config_dir
             
-            config_dir = user_config_dir("deltachat_telegram_bridge")
+            config_dir = os.environ.get("DC_DB_DIR") or user_config_dir("tgbridge")
             accounts_dir = os.path.join(config_dir, "accounts")
             
             try:
