@@ -15,7 +15,6 @@ def get_telegram_chat_title(token, chat_id_or_username):
     if not token:
         return None
     try:
-        # If it's a username without @, prepend it
         chat_arg = chat_id_or_username
         if isinstance(chat_arg, str) and not chat_arg.startswith("-") and not chat_arg.startswith("@"):
             chat_arg = f"@{chat_arg}"
@@ -29,6 +28,50 @@ def get_telegram_chat_title(token, chat_id_or_username):
     except Exception:
         pass
     return None
+
+def download_telegram_chat_avatar(token, chat_id_or_username, dest_path):
+    if not token:
+        return False
+    try:
+        chat_arg = chat_id_or_username
+        if isinstance(chat_arg, str) and not chat_arg.startswith("-") and not chat_arg.startswith("@"):
+            chat_arg = f"@{chat_arg}"
+            
+        # 1. getChat to get the photo file_id
+        url = f"https://api.telegram.org/bot{token}/getChat?chat_id={chat_arg}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ssl_context, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            if not data.get("ok"):
+                return False
+            photo = data["result"].get("photo")
+            if not photo:
+                return False
+            file_id = photo.get("big_file_id") or photo.get("small_file_id")
+            if not file_id:
+                return False
+                
+        # 2. getFile to get the file_path
+        url = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ssl_context, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            if not data.get("ok"):
+                return False
+            file_path = data["result"].get("file_path")
+            if not file_path:
+                return False
+                
+        # 3. Download the file
+        download_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        req = urllib.request.Request(download_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ssl_context, timeout=10) as response:
+            with open(dest_path, "wb") as f:
+                f.write(response.read())
+            return True
+    except Exception:
+        pass
+    return False
 
 def main():
     DB_PATH = os.environ.get("DB_PATH", "bridge.db")
@@ -48,7 +91,7 @@ def main():
     row = cursor.fetchone()
     token = row[0] if row else None
     if not token:
-        print("⚠️ Warning: telegram_token not found in database. Chat titles might fallback to defaults.")
+        print("⚠️ Warning: telegram_token not found in database. Chat titles and avatars will fallback to defaults.")
     else:
         print("✅ Telegram token loaded successfully.")
 
@@ -80,6 +123,14 @@ def main():
                     try:
                         dc_chat_id = rpc.create_broadcast(accid, title)
                         
+                        # Try to download and set avatar
+                        avatar_path = f"tmp_restore_{tg_id}.jpg"
+                        if download_telegram_chat_avatar(token, chat_ref, avatar_path):
+                            rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                            print("  Avatar successfully downloaded and applied.")
+                            try: os.unlink(avatar_path)
+                            except: pass
+                        
                         invite_link = rpc.get_chat_securejoin_qr_code(accid, dc_chat_id)
                         if invite_link.startswith("OPEN-CHAT:"):
                             invite_link = "https://i.delta.chat/#" + invite_link[10:]
@@ -107,6 +158,14 @@ def main():
                     try:
                         dc_chat_id = rpc.create_group_chat(accid, title, True)
                         
+                        # Try to download and set avatar
+                        avatar_path = f"tmp_restore_{tg_chat_id}.jpg"
+                        if download_telegram_chat_avatar(token, tg_chat_id, avatar_path):
+                            rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                            print("  Avatar successfully downloaded and applied.")
+                            try: os.unlink(avatar_path)
+                            except: pass
+
                         cursor.execute(
                             "DELETE FROM bridges WHERE dc_chat_id = ? AND tg_chat_id = ?",
                             (old_dc_chat_id, tg_chat_id)
