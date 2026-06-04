@@ -1,3 +1,11 @@
+## [2026-06-04]
+- **Thread-safe RPC Proxy**: Implemented `RpcProxy` to serialize Delta Chat JSON-RPC calls via a thread lock, preventing deadlocks and concurrent access hangs.
+- **Improved Userbot Reliability**: Added a 15-second timeout to userbot history fetches via `asyncio.wait_for` to prevent hanging on slow network requests.
+- **Configurable Limits via Environment Variables**:
+  - Allowed configuring local Delta Chat message retention duration (`DELETE_DEVICE_AFTER`, default 7 days) and maximum downloaded attachment size (`MAX_ATTACHMENT_SIZE_MB`, default 50 MB) through the `.env` file and `docker-compose.yml`.
+- **Database Cleanup Utility**: Added `cleanup_db.py` to allow administrators to safely purge local Delta Chat message history using dynamic column resolution and SQLite IDs fallback, making it easy to run `VACUUM` and shrink bloated databases.
+- **Exclude Webpage Link Previews**: Prevented download and relay of webpage link previews (`MessageMediaWebPage`) from Telegram userbot.
+
 ## [2026-06-03]
 - **Breaking Change: Root Execution & Centralized Data Directory**:
   - Centralized all persistent files under a single host `./data` directory (database, Userbot session, and Delta Chat config/accounts).

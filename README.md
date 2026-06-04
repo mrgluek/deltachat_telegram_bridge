@@ -111,6 +111,37 @@ Instead of using a local virtual environment, you can run the bot using Docker C
    *Your configuration and message history will be preserved since they are stored in the mounted `./data` directory.*
 
 
+## Configuration (Environment Variables)
+
+The bot supports customizing message retention and attachment size limits via environment variables. If you are using Docker Compose, you can define these in the `.env` file in the same directory as `docker-compose.yml`:
+
+| Environment Variable | Description | Default Value |
+|----------------------|-------------|---------------|
+| `DELETE_DEVICE_AFTER` | Local message retention duration (in seconds). Delta Chat core automatically deletes messages older than this. | `604800` (7 days) |
+| `MAX_ATTACHMENT_SIZE_MB` | Maximum size of attachments to download and relay (in megabytes). Files larger than this will be skipped. | `50` |
+
+### Setting Environment Variables
+
+Create or edit the `.env` file in the project root:
+
+```env
+# Retain messages on device for 3 days (259200 seconds)
+DELETE_DEVICE_AFTER=259200
+
+# Set maximum attachment size limit to 20 MB
+MAX_ATTACHMENT_SIZE_MB=20
+```
+
+Apply the changes by restarting the container:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+*Note: The local message retention duration (`DELETE_DEVICE_AFTER`) is applied to all active Delta Chat accounts on startup.*
+
+
 ## Automatic Updates
 
 The repository includes an `update.sh` script that automates the update process. It performs the following steps:
