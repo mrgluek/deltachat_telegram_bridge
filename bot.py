@@ -2589,7 +2589,11 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
                 return
 
             logger.info(f"Fetching fresh history for TG {ub_target}...")
-            history = await userbot_client.get_messages(ub_entity, limit=limit)
+            try:
+                history = await asyncio.wait_for(userbot_client.get_messages(ub_entity, limit=limit), timeout=15)
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching fresh history for TG {ub_target}")
+                history = None
             if history:
                 _history_cache[dc_chat_id] = {
                     'timestamp': now,
@@ -2640,7 +2644,11 @@ async def _relay_channel_history_to_chat(target_dc_chat_id: int, tg_channel_id: 
                     return
 
             logger.info(f"Fetching fresh history preview for TG {ub_target}...")
-            history = await userbot_client.get_messages(ub_entity, limit=limit)
+            try:
+                history = await asyncio.wait_for(userbot_client.get_messages(ub_entity, limit=limit), timeout=15)
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching fresh history preview for TG {ub_target}")
+                history = None
             if history:
                 _history_cache[cache_key] = {'timestamp': now, 'messages': history}
 
