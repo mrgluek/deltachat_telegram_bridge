@@ -161,6 +161,13 @@ import collections
 
 dc_cli = BotCli("tgbridge")
 USERBOT_SESSION_PATH = os.environ.get("USERBOT_SESSION_PATH", "userbot_session")
+_download_semaphore = None
+
+def _get_download_semaphore():
+    global _download_semaphore
+    if _download_semaphore is None:
+        _download_semaphore = asyncio.Semaphore(3)
+    return _download_semaphore
 
 # Global references
 tg_app: Optional[Application] = None
@@ -364,8 +371,10 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         os.close(tmp_fd)
         logger.info(f"Userbot downloading media from {chat_id}:{msg_id} (size: {size // 1024 // 1024} MB)...")
-        path = await userbot_client.download_media(msg.media, file=tmp_path)
+        async with _get_download_semaphore():
+            path = await userbot_client.download_media(msg.media, file=tmp_path)
         return path
+
     except Exception as e:
         logger.error(f"Userbot download failed for {chat_id}:{msg_id}: {e}")
     return None
@@ -4188,7 +4197,9 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
                 tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
                 os.close(tmp_fd)
-                file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
+                async with _get_download_semaphore():
+                    file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
+
         except Exception as e:
             logger.error(f"Failed to download userbot media: {e}")
 

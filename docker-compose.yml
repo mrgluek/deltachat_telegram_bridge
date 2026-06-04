@@ -14,3 +14,8 @@ services:
       - USERBOT_SESSION_PATH=/app/data/userbot_session
       - XDG_CONFIG_HOME=/app/data
       - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
