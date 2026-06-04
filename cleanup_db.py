@@ -9,17 +9,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("cleanup_db")
 
 def get_db_email(db_path):
-    """Get account email from SQLite config table."""
+    """Get account email from SQLite config table, with schema fallbacks."""
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        # Delta Chat config table has 'key' and 'value' columns
-        cursor.execute("SELECT value FROM config WHERE key = 'addr'")
+        
+        # Determine column names by inspecting table info
+        cursor.execute("PRAGMA table_info(config)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        key_col, val_col = None, None
+        # Look for key-like column
+        for k in ["key", "name", "c_key", "conf_key"]:
+            if k in columns:
+                key_col = k
+                break
+        # Look for value-like column
+        for v in ["value", "val", "c_value", "c_val", "conf_val"]:
+            if v in columns:
+                val_col = v
+                break
+                
+        if not key_col or not val_col:
+            # Fallback guess if columns not found by keyword
+            key_col = columns[0] if len(columns) > 0 else "key"
+            val_col = columns[1] if len(columns) > 1 else "value"
+            
+        cursor.execute(f"SELECT {val_col} FROM config WHERE {key_col} = 'addr'")
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else None
     except Exception as e:
         logger.warning(f"Failed to read email from {db_path}: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         return None
 
 def get_db_message_ids(db_path):
@@ -69,7 +96,7 @@ def main():
                 logger.info("No active accounts found in RPC.")
                 return
 
-            for accid in accids:
+            for i, accid in enumerate(accids):
                 addr = rpc.get_config(accid, "addr")
                 if not addr:
                     continue
@@ -78,6 +105,17 @@ def main():
                 logger.info(f"Processing account {accid} ({addr})...")
                 
                 db_path = db_map.get(addr_lower)
+                
+                # Fallback 1: Single account and single database file
+                if not db_path and len(db_files) == 1 and len(accids) == 1:
+                    db_path = db_files[0]
+                    logger.info(f"Mapping single database {db_path} to single account {accid}")
+                
+                # Fallback 2: Index-based mapping if email matching failed
+                if not db_path and i < len(db_files):
+                    db_path = db_files[i]
+                    logger.info(f"Fallback mapping database {db_path} to account {accid} by index")
+                    
                 if not db_path:
                     logger.warning(f"No local database file found matching address {addr}")
                     continue
