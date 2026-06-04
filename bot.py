@@ -354,7 +354,7 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
     try:
         # Telethon get_messages can fetch by ID
         msg = await userbot_client.get_messages(chat_id, ids=msg_id)
-        if not (msg and msg.media):
+        if not (msg and msg.media) or type(msg.media).__name__ == 'MessageMediaWebPage':
             return None
         
         # Check size (limit to 50MB for Delta Chat)
@@ -4184,7 +4184,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
 
     # Note: downloading media with Telethon if needed
     file_path = None
-    if msg.media:
+    if msg.media and type(msg.media).__name__ != 'MessageMediaWebPage':
         try:
             media_size = 0
             if hasattr(msg, 'file') and msg.file:
