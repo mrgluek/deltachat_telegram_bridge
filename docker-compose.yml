@@ -19,6 +19,8 @@ services:
       - USERBOT_SESSION_PATH=/app/data/userbot_session
       - XDG_CONFIG_HOME=/app/data
       - PYTHONUNBUFFERED=1
+      - DELETE_DEVICE_AFTER=${DELETE_DEVICE_AFTER:-604800}
+      - MAX_ATTACHMENT_SIZE_MB=${MAX_ATTACHMENT_SIZE_MB:-50}
     deploy:
       resources:
         limits:

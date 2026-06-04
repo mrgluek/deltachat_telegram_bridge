@@ -170,6 +170,7 @@ TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
 DC_MAX_MSG_LEN = 10000   # Practical DC limit
 RATE_LIMIT_WINDOW = 60   # seconds
 RATE_LIMIT_MAX = 30       # max messages per window per chat
+MAX_ATTACHMENT_SIZE = int(os.environ.get("MAX_ATTACHMENT_SIZE_MB", "50")) * 1024 * 1024
 
 LIVE_LOCATIONS = {}
 db_lock = threading.Lock()
@@ -375,11 +376,11 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
         if not (msg and msg.media) or type(msg.media).__name__ == 'MessageMediaWebPage':
             return None
         
-        # Check size (limit to 50MB for Delta Chat)
+        # Check size limit
         size = _get_media_size(msg)
 
-        if size > 50 * 1024 * 1024:
-            logger.warning(f"Userbot: Media in {chat_id}:{msg_id} is too large ({size // 1024 // 1024} MB > 50 MB)")
+        if size > MAX_ATTACHMENT_SIZE:
+            logger.warning(f"Userbot: Media in {chat_id}:{msg_id} is too large ({size // 1024 // 1024} MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024} MB)")
             return None
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -585,7 +586,10 @@ def on_init(bot, args):
         displayname = database.get_config("bot_displayname") or "TG Bridge"
         bot.rpc.set_config(accid, "displayname", displayname)
         bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups. Send /help for commands.")
-        bot.rpc.set_config(accid, "delete_device_after", "604800")
+        
+        # Configure local message retention policy (in seconds, default: 7 days)
+        delete_after = os.environ.get("DELETE_DEVICE_AFTER", "604800")
+        bot.rpc.set_config(accid, "delete_device_after", delete_after)
         avatar_path = database.get_config("bot_avatar_path")
         if avatar_path:
             if not os.path.isabs(avatar_path):
@@ -4253,9 +4257,9 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     if msg.media and type(msg.media).__name__ != 'MessageMediaWebPage':
         try:
             media_size = _get_media_size(msg)
-            if media_size > 50 * 1024 * 1024:
-                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > 50MB")
-                formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
+            if media_size > MAX_ATTACHMENT_SIZE:
+                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB")
+                formatted_msg += f"\n\n[Media is too large to be forwarded (limit {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB)]"
             else:
                 suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
                 tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
