@@ -146,6 +146,24 @@ logging.getLogger().addHandler(admin_handler)
 logging.getLogger("deltachat2").addHandler(admin_handler)
 logging.getLogger("deltachat2").propagate = True
 logging.getLogger("telegram").addHandler(admin_handler)
+class RpcProxy:
+    """Thread-safe proxy for Rpc to prevent race conditions on JSON-RPC stdin/stdout pipes."""
+    def __init__(self, rpc_instance):
+        self._rpc = rpc_instance
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name):
+        attr = getattr(self._rpc, name)
+        if callable(attr):
+            def wrapped(*args, **kwargs):
+                with self._lock:
+                    return attr(*args, **kwargs)
+            return wrapped
+        return attr
+
+def _make_rpc_thread_safe(bot):
+    if hasattr(bot, 'rpc') and not isinstance(bot.rpc, RpcProxy):
+        bot.rpc = RpcProxy(bot.rpc)
 
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
@@ -557,6 +575,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
+    _make_rpc_thread_safe(bot)
     bot.logger.info("Initializing Delta Chat tgbridge...")
     
     # Ensure our error handler is attached to the bot's own logger
@@ -1969,6 +1988,7 @@ def handle_dc_reaction(bot, accid, event):
 @dc_cli.on_start
 def on_start(bot, _args):
     global dc_bot_instance, dc_accid, bot_contact_id
+    _make_rpc_thread_safe(bot)
     dc_bot_instance = bot
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
