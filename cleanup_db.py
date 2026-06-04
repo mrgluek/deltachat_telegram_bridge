@@ -1,10 +1,39 @@
 import os
 import sys
+import glob
+import sqlite3
 import logging
 from deltachat2 import Rpc, IOTransport
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("cleanup_db")
+
+def get_db_email(db_path):
+    """Get account email from SQLite config table."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        # Delta Chat config table has 'key' and 'value' columns
+        cursor.execute("SELECT value FROM config WHERE key = 'addr'")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning(f"Failed to read email from {db_path}: {e}")
+        return None
+
+def get_db_message_ids(db_path):
+    """Get all message IDs from SQLite msgs table."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM msgs")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+    except Exception as e:
+        logger.warning(f"Failed to read message IDs from {db_path}: {e}")
+        return []
 
 def main():
     config_dir = "/app/data/tgbridge"
@@ -14,35 +43,64 @@ def main():
         logger.error(f"Accounts directory not found at {accounts_dir}")
         sys.exit(1)
 
+    # Find all database files in the accounts directory
+    db_files = []
+    for pattern in ["db.sqlite", "dc.db"]:
+        db_files.extend(glob.glob(os.path.join(accounts_dir, "*", pattern)))
+    
+    if not db_files:
+        logger.error("No Delta Chat databases found.")
+        sys.exit(1)
+
+    logger.info(f"Found {len(db_files)} database files.")
+    db_map = {}
+    for db_file in db_files:
+        email = get_db_email(db_file)
+        if email:
+            db_map[email.lower()] = db_file
+            logger.info(f"Database {db_file} belongs to {email}")
+
     logger.info("Connecting to Delta Chat RPC...")
     try:
         with IOTransport(accounts_dir=accounts_dir) as trans:
             rpc = Rpc(trans)
             accids = rpc.get_all_account_ids()
             if not accids:
-                logger.info("No accounts found.")
+                logger.info("No active accounts found in RPC.")
                 return
 
             for accid in accids:
                 addr = rpc.get_config(accid, "addr")
+                if not addr:
+                    continue
+                
+                addr_lower = addr.lower()
                 logger.info(f"Processing account {accid} ({addr})...")
                 
-                chat_ids = rpc.get_chat_ids(accid)
-                logger.info(f"Found {len(chat_ids)} chats.")
+                db_path = db_map.get(addr_lower)
+                if not db_path:
+                    logger.warning(f"No local database file found matching address {addr}")
+                    continue
                 
+                msg_ids = get_db_message_ids(db_path)
+                if not msg_ids:
+                    logger.info(f"No messages found for account {accid}.")
+                    continue
+                
+                logger.info(f"Deleting {len(msg_ids)} messages on account {accid}...")
+                
+                # Delete in chunks of 500 to avoid buffer limits
+                chunk_size = 500
                 total_deleted = 0
-                for chat_id in chat_ids:
-                    # Retrieve all message IDs for this chat
+                for i in range(0, len(msg_ids), chunk_size):
+                    chunk = msg_ids[i:i + chunk_size]
                     try:
-                        msg_ids = rpc.get_chat_message_ids(accid, chat_id)
-                        if msg_ids:
-                            logger.info(f"  Chat {chat_id}: Deleting {len(msg_ids)} messages...")
-                            rpc.delete_messages(accid, msg_ids)
-                            total_deleted += len(msg_ids)
-                    except Exception as chat_e:
-                        logger.error(f"  Failed to process chat {chat_id}: {chat_e}")
-
-                logger.info(f"Deleted {total_deleted} messages on account {accid}.")
+                        rpc.delete_messages(accid, chunk)
+                        total_deleted += len(chunk)
+                    except Exception as del_e:
+                        logger.error(f"Failed to delete chunk: {del_e}")
+                
+                logger.info(f"Successfully deleted {total_deleted} messages on account {accid}.")
                 
                 # Try running vacuum via RPC
                 try:
