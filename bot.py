@@ -1823,7 +1823,29 @@ def handle_dc_msg_deleted(bot, accid, event):
         if not tg_mappings:
             return
 
-        for tg_msg_id, tg_chat_id, dc_chat_id in tg_mappings:
+        # Determine deletion retention threshold to ignore auto-cleanup deletions
+        delete_after = os.environ.get("DELETE_DEVICE_AFTER", "604800")
+        try:
+            delete_after_seconds = int(delete_after)
+        except ValueError:
+            delete_after_seconds = 604800
+
+        for mapping in tg_mappings:
+            tg_msg_id, tg_chat_id, dc_chat_id = mapping[0], mapping[1], mapping[2]
+            created_at = mapping[3] if len(mapping) > 3 else None
+
+            # If the mapping has a timestamp, check if its age is close to or exceeds
+            # the retention period. If so, skip deletion as it was likely triggered by DC core.
+            if delete_after_seconds > 0 and created_at is not None:
+                age = time.time() - created_at
+                # Use a small 60-second buffer to handle processing delay
+                if age >= (delete_after_seconds - 60):
+                    logger.info(
+                        f"DC→TG: Skipping deletion sync for TG msg {tg_msg_id} in {tg_chat_id}. "
+                        f"Message age ({int(age)}s) is close to/exceeds retention threshold ({delete_after_seconds}s)."
+                    )
+                    continue
+
             # Clean up the mapping immediately to prevent echo loops
             database.delete_message_map_entry_by_dc(msg_id, None)
 
@@ -1964,7 +1986,8 @@ def handle_dc_reaction(bot, accid, event):
         else:
             bot.logger.info(f"No reactions found for DC msg {msg_id}")
                 
-        for tg_msg_id, tg_chat_id, dc_chat_id in tg_mappings:
+        for mapping in tg_mappings:
+            tg_msg_id, tg_chat_id, dc_chat_id = mapping[0], mapping[1], mapping[2]
             # Verify if bridge is still active
             is_channel = database.get_channel_by_dc_chat_id(int(dc_chat_id))
             is_group = int(tg_chat_id) in database.get_tg_chats(int(dc_chat_id))

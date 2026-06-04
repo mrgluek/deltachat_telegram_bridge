@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import threading
+import time
 
 DB_PATH = os.getenv("DB_PATH", "bridge.db")
 _lock = threading.Lock()
@@ -30,6 +31,7 @@ def init_db():
                 tg_msg_id INTEGER,
                 tg_chat_id INTEGER,
                 content_hash TEXT,
+                created_at INTEGER DEFAULT 0,
                 PRIMARY KEY (dc_msg_id, dc_chat_id, tg_chat_id)
             )
         ''')
@@ -39,6 +41,13 @@ def init_db():
                 SELECT rowid FROM message_map ORDER BY rowid DESC LIMIT 10000
             )
         ''')
+        # Migration: add created_at to message_map if missing
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(message_map)").fetchall()]
+            if 'created_at' not in col_names:
+                cursor.execute("ALTER TABLE message_map ADD COLUMN created_at INTEGER DEFAULT 0")
+        except Exception:
+            pass
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS polls (
                 poll_id TEXT PRIMARY KEY,
@@ -235,8 +244,8 @@ def save_message_map(dc_msg_id: int, dc_chat_id: int, tg_msg_id: int, tg_chat_id
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT OR REPLACE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash) VALUES (?, ?, ?, ?, ?)",
-                (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash)
+                "INSERT OR REPLACE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, int(time.time()))
             )
             conn.commit()
         except Exception:
@@ -294,13 +303,13 @@ def get_tg_msg_id(dc_msg_id: int, dc_chat_id: int, tg_chat_id: int) -> int | Non
         conn.close()
         return row[0] if row else None
 
-def get_tg_mappings_by_dc_msg_id(dc_msg_id: int) -> list[tuple[int, int, int]]:
-    """Look up all (tg_msg_id, tg_chat_id, dc_chat_id) mappings for a given DC message."""
+def get_tg_mappings_by_dc_msg_id(dc_msg_id: int) -> list[tuple]:
+    """Look up all (tg_msg_id, tg_chat_id, dc_chat_id, created_at) mappings for a given DC message."""
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT tg_msg_id, tg_chat_id, dc_chat_id FROM message_map WHERE dc_msg_id = ?",
+            "SELECT tg_msg_id, tg_chat_id, dc_chat_id, created_at FROM message_map WHERE dc_msg_id = ?",
             (dc_msg_id,)
         )
         rows = cursor.fetchall()
