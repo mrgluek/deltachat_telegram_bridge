@@ -358,11 +358,7 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
             return None
         
         # Check size (limit to 50MB for Delta Chat)
-        size = 0
-        if hasattr(msg, 'document') and msg.document:
-            size = msg.document.size
-        elif hasattr(msg, 'video') and msg.video:
-            size = msg.video.size
+        size = _get_media_size(msg)
 
         if size > 50 * 1024 * 1024:
             logger.warning(f"Userbot: Media in {chat_id}:{msg_id} is too large ({size // 1024 // 1024} MB > 50 MB)")
@@ -417,6 +413,48 @@ def _get_content_hash(msg) -> str:
     caption = getattr(msg, 'caption', "") or ""
     content = text or caption or ""
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+
+def _get_media_size(msg) -> int:
+    """Helper to reliably extract media file size from a Telethon Message object."""
+    if not (msg and msg.media):
+        return 0
+    if type(msg.media).__name__ == 'MessageMediaWebPage':
+        return 0
+    
+    # Try msg.document (most reliable for documents/videos/audios)
+    try:
+        if hasattr(msg, 'document') and msg.document and msg.document.size is not None:
+            return msg.document.size
+    except Exception:
+        pass
+
+    # Try msg.file helper (which computes size for photos/documents)
+    try:
+        if hasattr(msg, 'file') and msg.file and msg.file.size is not None:
+            return msg.file.size
+    except Exception:
+        pass
+
+    # Try direct msg.media.document
+    try:
+        media = msg.media
+        if hasattr(media, 'document') and media.document and media.document.size is not None:
+            return media.document.size
+    except Exception:
+        pass
+
+    # Try photo sizes (rarely > 50MB, but for completeness)
+    try:
+        media = msg.media
+        if hasattr(media, 'photo') and media.photo and hasattr(media.photo, 'sizes') and media.photo.sizes:
+            sizes = [s.size for s in media.photo.sizes if hasattr(s, 'size') and s.size is not None]
+            if sizes:
+                return max(sizes)
+    except Exception:
+        pass
+
+    return 0
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -4186,10 +4224,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     file_path = None
     if msg.media and type(msg.media).__name__ != 'MessageMediaWebPage':
         try:
-            media_size = 0
-            if hasattr(msg, 'file') and msg.file:
-                media_size = msg.file.size or 0
-                
+            media_size = _get_media_size(msg)
             if media_size > 50 * 1024 * 1024:
                 logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > 50MB")
                 formatted_msg += f"\n\n[Media is too large to be forwarded (limit 50MB)]"
@@ -4199,7 +4234,6 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 os.close(tmp_fd)
                 async with _get_download_semaphore():
                     file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
-
         except Exception as e:
             logger.error(f"Failed to download userbot media: {e}")
 
