@@ -339,6 +339,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/transports` | Show configured mail relays & usage stats |
 | `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
+| `/resilient` | Toggle resilient sending mode across all relays (admin only) |
 | `/donate` | Support bot development ❤️ |
 
 ## Delta Chat User Commands
@@ -357,6 +358,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/stats` — Show bridge statistics for the current chat.
+- `/resilient` — Toggle resilient sending mode across all relays (admin only).
 - `/help` — Show Delta Chat bot help.
 
 ## Userbot Mode (Bridging without Admin permissions)

@@ -577,11 +577,92 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
 # DELTA CHAT HANDLERS
 # ---------------------------------------------------------
 
+def _setup_resilient_mode(bot):
+    original_send_msg = bot.rpc.send_msg
+
+    def patched_send_msg(account_id, chat_id, msg_data):
+        try:
+            is_resilient = database.get_config("resilient") == "1"
+        except Exception:
+            is_resilient = False
+
+        if not is_resilient:
+            return original_send_msg(account_id, chat_id, msg_data)
+
+        try:
+            transports = bot.rpc.list_transports(account_id)
+        except Exception:
+            transports = []
+
+        if len(transports) <= 1:
+            return original_send_msg(account_id, chat_id, msg_data)
+
+        initial_addr = None
+        try:
+            initial_addr = bot.rpc.get_config(account_id, "configured_addr") or bot.rpc.get_config(account_id, "addr")
+        except Exception:
+            pass
+
+        bot.logger.info(f"Resilient mode: sending message to chat {chat_id} via {len(transports)} transports.")
+        sent_msg_ids = []
+
+        for t in transports:
+            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+            if not t_addr:
+                continue
+
+            bot.logger.info(f"Resilient send: switching primary transport to {t_addr}")
+            try:
+                bot.rpc.set_config(account_id, "configured_addr", t_addr)
+                time.sleep(1)
+            except Exception as switch_err:
+                bot.logger.error(f"Resilient send: failed to switch transport to {t_addr}: {switch_err}")
+                continue
+
+            try:
+                msg_id = original_send_msg(account_id, chat_id, msg_data)
+                sent_msg_ids.append(msg_id)
+                bot.logger.info(f"Resilient send: msg queued with ID {msg_id} on transport {t_addr}. Waiting for delivery...")
+                
+                start_time = time.time()
+                delivered = False
+                while time.time() - start_time < 10:
+                    try:
+                        msg_snapshot = bot.rpc.get_message(account_id, msg_id)
+                        state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                        if state in (26, 28):
+                            bot.logger.info(f"Resilient send: msg {msg_id} delivered successfully on {t_addr}.")
+                            delivered = True
+                            break
+                        if state == 24:
+                            bot.logger.warning(f"Resilient send: msg {msg_id} failed on {t_addr}.")
+                            break
+                    except Exception as poll_err:
+                        bot.logger.debug(f"Resilient send poll error: {poll_err}")
+                    time.sleep(0.5)
+                
+                if not delivered:
+                    bot.logger.warning(f"Resilient send: msg {msg_id} did not deliver on {t_addr} within timeout.")
+            except Exception as send_err:
+                bot.logger.error(f"Resilient send: failed to queue message on transport {t_addr}: {send_err}")
+
+        if initial_addr:
+            try:
+                bot.logger.info(f"Resilient send: restoring initial primary transport to {initial_addr}")
+                bot.rpc.set_config(account_id, "configured_addr", initial_addr)
+            except Exception as restore_err:
+                bot.logger.error(f"Resilient send: failed to restore transport to {initial_addr}: {restore_err}")
+
+        return sent_msg_ids[0] if sent_msg_ids else None
+
+    bot.rpc.send_msg = patched_send_msg
+
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
     _make_rpc_thread_safe(bot)
     bot.logger.info("Initializing Delta Chat tgbridge...")
+    _setup_resilient_mode(bot)
     
     # Ensure our error handler is attached to the bot's own logger
     bot.logger.addHandler(admin_handler)
@@ -654,6 +735,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/addtransport — Add a backup mail relay\n"
             f"/rmtransport <addr> — Remove a mail relay\n"
             f"/setprimary <addr> — Switch the primary mail relay\n"
+            f"/resilient — Toggle resilient sending mode (all relays)\n"
         )
     
     help_text += (
@@ -902,6 +984,24 @@ def setprimary_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
     except Exception as e:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
+
+@dc_cli.on(events.NewMessage(command="/resilient"))
+def resilient_command(bot, accid, event):
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /resilient."))
+        return
+
+    try:
+        current = database.get_config("resilient")
+        if current == "1":
+            database.set_config("resilient", "0")
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Resilient sending mode disabled."))
+        else:
+            database.set_config("resilient", "1")
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports."))
+    except Exception as e:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to toggle resilient mode: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):

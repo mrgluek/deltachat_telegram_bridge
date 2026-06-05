@@ -1,3 +1,6 @@
+## [Unreleased]
+- **Resilient Sending Mode**: Added `/resilient` admin command to toggle resilient mode. When enabled, each outgoing message is sent through all configured mail relays sequentially to bypass chatmail blocking issues.
+
 ## [2026-06-04]
 - **Thread-safe RPC Proxy**: Implemented `RpcProxy` to serialize Delta Chat JSON-RPC calls via a thread lock, preventing deadlocks and concurrent access hangs.
 - **Improved Userbot Reliability**: Added a 15-second timeout to userbot history fetches via `asyncio.wait_for` to prevent hanging on slow network requests.
