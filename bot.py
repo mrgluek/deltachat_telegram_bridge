@@ -1025,16 +1025,25 @@ def resilient_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /resilient."))
         return
 
+    arg = event.payload.strip().lower() if event.payload else ""
+
     try:
-        current = database.get_config("resilient")
-        if current == "1":
+        current = database.get_config("resilient") == "1"
+        if not arg:
+            status = "enabled" if current else "disabled"
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ Resilient sending mode is currently {status}."))
+            return
+
+        if arg in ("on", "1", "true"):
+            database.set_config("resilient", "1")
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports."))
+        elif arg in ("off", "0", "false"):
             database.set_config("resilient", "0")
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Resilient sending mode disabled."))
         else:
-            database.set_config("resilient", "1")
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to toggle resilient mode: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to update resilient mode: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
