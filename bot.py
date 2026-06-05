@@ -577,6 +577,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
 # DELTA CHAT HANDLERS
 # ---------------------------------------------------------
 
+
 def _setup_resilient_mode(bot):
     original_send_msg = bot.rpc.send_msg
 
@@ -604,48 +605,80 @@ def _setup_resilient_mode(bot):
             pass
 
         bot.logger.info(f"Resilient mode: sending message to chat {chat_id} via {len(transports)} transports.")
-        sent_msg_ids = []
+        
+        # 1. Send the message normally via the current primary transport
+        msg_id = None
+        try:
+            msg_id = original_send_msg(account_id, chat_id, msg_data)
+            bot.logger.info(f"Resilient send: initial msg queued with ID {msg_id} on transport {initial_addr}. Waiting for delivery...")
+            
+            # Wait up to 10 seconds for initial delivery
+            start_time = time.time()
+            delivered = False
+            while time.time() - start_time < 10:
+                try:
+                    msg_snapshot = bot.rpc.get_message(account_id, msg_id)
+                    state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                    if state in (26, 28):
+                        bot.logger.info(f"Resilient send: initial msg {msg_id} delivered successfully on {initial_addr}.")
+                        delivered = True
+                        break
+                    if state == 24:
+                        bot.logger.warning(f"Resilient send: initial msg {msg_id} failed on {initial_addr}.")
+                        break
+                except Exception as poll_err:
+                    bot.logger.debug(f"Resilient send initial poll error: {poll_err}")
+                time.sleep(0.5)
+            
+            if not delivered:
+                bot.logger.warning(f"Resilient send: initial msg {msg_id} did not deliver on {initial_addr} within timeout.")
+        except Exception as send_err:
+            bot.logger.error(f"Resilient send: failed to send initial message on transport {initial_addr}: {send_err}")
+            return None
 
-        for t in transports:
-            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
-            if not t_addr:
-                continue
+        # 2. Resend the same message on all other transports
+        if msg_id:
+            for t in transports:
+                t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                if not t_addr or (initial_addr and t_addr.lower() == initial_addr.lower()):
+                    continue
 
-            bot.logger.info(f"Resilient send: switching primary transport to {t_addr}")
-            try:
-                bot.rpc.set_config(account_id, "configured_addr", t_addr)
-                time.sleep(1)
-            except Exception as switch_err:
-                bot.logger.error(f"Resilient send: failed to switch transport to {t_addr}: {switch_err}")
-                continue
+                bot.logger.info(f"Resilient send: switching primary transport to {t_addr} for resending")
+                try:
+                    bot.rpc.set_config(account_id, "configured_addr", t_addr)
+                    time.sleep(1)
+                except Exception as switch_err:
+                    bot.logger.error(f"Resilient send: failed to switch transport to {t_addr}: {switch_err}")
+                    continue
 
-            try:
-                msg_id = original_send_msg(account_id, chat_id, msg_data)
-                sent_msg_ids.append(msg_id)
-                bot.logger.info(f"Resilient send: msg queued with ID {msg_id} on transport {t_addr}. Waiting for delivery...")
-                
-                start_time = time.time()
-                delivered = False
-                while time.time() - start_time < 10:
-                    try:
-                        msg_snapshot = bot.rpc.get_message(account_id, msg_id)
-                        state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                        if state in (26, 28):
-                            bot.logger.info(f"Resilient send: msg {msg_id} delivered successfully on {t_addr}.")
-                            delivered = True
-                            break
-                        if state == 24:
-                            bot.logger.warning(f"Resilient send: msg {msg_id} failed on {t_addr}.")
-                            break
-                    except Exception as poll_err:
-                        bot.logger.debug(f"Resilient send poll error: {poll_err}")
-                    time.sleep(0.5)
-                
-                if not delivered:
-                    bot.logger.warning(f"Resilient send: msg {msg_id} did not deliver on {t_addr} within timeout.")
-            except Exception as send_err:
-                bot.logger.error(f"Resilient send: failed to queue message on transport {t_addr}: {send_err}")
+                try:
+                    bot.logger.info(f"Resilient send: resending msg {msg_id} on transport {t_addr}...")
+                    bot.rpc.resend_messages(account_id, [msg_id])
+                    
+                    # Wait up to 10 seconds for the resent message to be delivered/failed
+                    start_time = time.time()
+                    delivered = False
+                    while time.time() - start_time < 10:
+                        try:
+                            msg_snapshot = bot.rpc.get_message(account_id, msg_id)
+                            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                            if state in (26, 28):
+                                            bot.logger.info(f"Resilient send: msg {msg_id} delivered successfully on {t_addr}.")
+                                            delivered = True
+                                            break
+                            if state == 24:
+                                            bot.logger.warning(f"Resilient send: msg {msg_id} failed on {t_addr}.")
+                                            break
+                        except Exception as poll_err:
+                            bot.logger.debug(f"Resilient send poll error: {poll_err}")
+                        time.sleep(0.5)
+                    
+                    if not delivered:
+                        bot.logger.warning(f"Resilient send: msg {msg_id} did not deliver on {t_addr} within timeout.")
+                except Exception as resend_err:
+                    bot.logger.error(f"Resilient send: failed to resend message on transport {t_addr}: {resend_err}")
 
+        # 3. Restore the initial primary transport configuration
         if initial_addr:
             try:
                 bot.logger.info(f"Resilient send: restoring initial primary transport to {initial_addr}")
@@ -653,7 +686,7 @@ def _setup_resilient_mode(bot):
             except Exception as restore_err:
                 bot.logger.error(f"Resilient send: failed to restore transport to {initial_addr}: {restore_err}")
 
-        return sent_msg_ids[0] if sent_msg_ids else None
+        return msg_id
 
     bot.rpc.send_msg = patched_send_msg
 
