@@ -1890,6 +1890,12 @@ def handle_dc_message(bot, accid, event):
 
     text = msg.text or ""
     text = DC_FALLBACK_PATTERN.sub('', text).strip()
+
+    # Do not relay command messages (starting with '/') to Telegram
+    if text.startswith('/'):
+        logger.info(f"DC→TG: Suppressed command message starting with slash: '{text[:30]}...'")
+        return
+
     file_path = getattr(msg, 'file', None) or None
     viewtype = getattr(msg, 'viewtype', None) or ''
     is_media = viewtype in ('Image', 'Gif', 'Sticker', 'Video', 'Voice', 'Audio', 'Document', 'File')
