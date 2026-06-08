@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bin/deltachat-rpc-server /usr/local/bin/deltachat-rpc-server
 COPY . .
 
 
