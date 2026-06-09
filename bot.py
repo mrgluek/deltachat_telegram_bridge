@@ -3516,7 +3516,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
                 text = (text + f"\n\n[🎥 Video is too large ({v_size//1024//1024} MB) to be forwarded]").strip()
     elif post.animation:
         tg_file = post.animation
-        file_name = "animation.gif"
+        file_name = "animation.mp4"
     elif post.voice:
         tg_file = post.voice
         file_name = "voice.ogg"
@@ -3890,7 +3890,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = (text + f"\n\n[🎥 Video is too large ({v_size//1024//1024} MB) to be forwarded]").strip()
     elif update.message.animation:  # GIF
         tg_file = update.message.animation
-        file_name = "animation.gif"
+        file_name = "animation.mp4"
     elif update.message.voice:
         tg_file = update.message.voice
         file_name = "voice.ogg"

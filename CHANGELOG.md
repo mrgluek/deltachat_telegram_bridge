@@ -1,3 +1,6 @@
+## [2026-06-09]
+- **Animation Relay Fix**: Corrected forwarding of Telegram animation/GIF files. Telegram encodes animations as silent MP4 video files under the hood. By changing the temporary file suffix from `.gif` to `.mp4`, the files are correctly identified as `video/mp4` in Delta Chat, allowing clients to play them rather than displaying a broken image.
+
 ## [2026-06-05]
 - **DPI Bypass Hack**: Integrated a patched `deltachat-rpc-server` binary into the Docker setup to bypass SSL DPI connection blocks when communicating with chatmail.
 - **Resilient Sending Mode**: Added `/resilient` admin command to configure resilient mode (accepts `on`/`off`/`1`/`0`/`true`/`false`, or no arguments to query current status). When enabled, each outgoing message is sent through all configured mail relays using resending mechanism in a non-blocking background thread to bypass chatmail blocking issues without causing UI delays, while ensuring deduplication into a single message bubble on the recipient client.
