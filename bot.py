@@ -1080,18 +1080,17 @@ def transports_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
-    # Get connectivity status
-    connectivity_label = "❓ Unknown"
+    # Get connectivity HTML to parse per-transport status
+    connectivity_html = ""
     try:
-        connectivity = bot.rpc.get_connectivity(accid)
-        if connectivity >= 4000:
-            connectivity_label = "🟢 Connected"
-        elif connectivity >= 3000:
-            connectivity_label = "🔄 Working"
-        elif connectivity >= 2000:
-            connectivity_label = "🟡 Connecting"
-        else:
-            connectivity_label = "🔴 Not connected"
+        connectivity_html = bot.rpc.get_connectivity_html(accid)
+    except Exception:
+        pass
+
+    # Get resilient sending mode status
+    resilient_on = False
+    try:
+        resilient_on = database.get_config("resilient") == "1"
     except Exception:
         pass
 
@@ -1106,11 +1105,29 @@ def transports_command(bot, accid, event):
         addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
         transport_addrs.append(addr)
 
-    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
+    reply = "🔌 **Mail Relays (Transports)**\n\n"
 
+    import re
     for addr in transport_addrs:
-        role = "🏠 Primary" if addr == active_addr else "🔄 Backup"
-        reply += f"**{role}:** `{addr}`\n"
+        # Determine status label from HTML
+        status_label = "❓ Unknown"
+        if connectivity_html:
+            domain = addr.split('@')[-1] if '@' in addr else addr
+            pattern = rf'class="([^"]+)\s+dot".*?<b>{re.escape(domain)}:</b>\s*([^<]+)'
+            match = re.search(pattern, connectivity_html, re.IGNORECASE)
+            if match:
+                color = match.group(1).lower()
+                status_text = match.group(2).strip().lower()
+                if "yellow" in color or "connecting" in status_text:
+                    status_label = "🟡 Connecting"
+                elif "green" in color:
+                    status_label = "🔄 Working"
+                elif "red" in color or "lost" in status_text or "error" in status_text:
+                    status_label = "🔴 Not connected"
+
+        is_used = resilient_on or (addr == active_addr)
+        used_str = " ✔︎ Used for sending:" if is_used else ":"
+        reply += f"**{status_label}**{used_str} `{addr}`\n"
 
         stats = stats_map.get(addr)
         if stats:
