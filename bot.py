@@ -1080,6 +1080,21 @@ def transports_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
+    # Get connectivity status
+    connectivity_label = "❓ Unknown"
+    try:
+        connectivity = bot.rpc.get_connectivity(accid)
+        if connectivity >= 4000:
+            connectivity_label = "🟢 Connected"
+        elif connectivity >= 3000:
+            connectivity_label = "🔄 Working"
+        elif connectivity >= 2000:
+            connectivity_label = "🟡 Connecting"
+        else:
+            connectivity_label = "🔴 Not connected"
+    except Exception:
+        pass
+
     # Get connectivity HTML to parse per-transport status
     connectivity_html = ""
     try:
@@ -1105,7 +1120,7 @@ def transports_command(bot, accid, event):
         addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
         transport_addrs.append(addr)
 
-    reply = "🔌 **Mail Relays (Transports)**\n\n"
+    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
 
     import re
     for addr in transport_addrs:
