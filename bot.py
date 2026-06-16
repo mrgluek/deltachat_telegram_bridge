@@ -699,7 +699,7 @@ _message_failover_attempts = {}
 
 @dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))
 def on_msg_failed(bot, accid, event):
-    """Handle message sending failures by switching to a backup transport if available with backoff."""
+    """Handle message sending failures by switching to a backup transport temporarily with backoff."""
     try:
         if database.get_config("resilient") == "1":
             return
@@ -808,17 +808,43 @@ def on_msg_failed(bot, accid, event):
         delay = min(300, 5 * (2 ** (state['count'] - 1)))
         bot.logger.warning(
             f"Resilient Failover: Message {msg_id} (Chat: {chat_name}, ID: {chat_id}) failed on {current_addr} (attempt {state['count']}/10). "
-            f"Switching primary transport to {next_addr} and scheduling resend in {delay}s."
+            f"Scheduling resend on transport {next_addr} in {delay}s."
         )
 
-        # Switch configured_addr to next transport immediately
-        bot.rpc.set_config(accid, "configured_addr", next_addr)
+        init_addr = current_addr
 
         # Schedule the resend asynchronously using a non-blocking Timer thread
         def delayed_resend():
             try:
                 bot.logger.info(f"Executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}) on transport {next_addr}...")
-                bot.rpc.resend_messages(accid, [msg_id])
+                with resilient_lock:
+                    # Switch configured_addr to next transport temporarily
+                    bot.rpc.set_config(accid, "configured_addr", next_addr)
+                    time.sleep(1) # Give core a moment to reconfigure
+                    
+                    bot.rpc.resend_messages(accid, [msg_id])
+                    
+                    # Wait up to 10 seconds for the resent message to be delivered/failed
+                    start_time = time.time()
+                    delivered = False
+                    while time.time() - start_time < 10:
+                        try:
+                            msg_snapshot = bot.rpc.get_message(accid, msg_id)
+                            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                            if state in (26, 28):
+                                bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
+                                delivered = True
+                                break
+                            if state == 24:
+                                bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
+                                break
+                        except Exception as poll_err:
+                            bot.logger.debug(f"Resilient Failover bg poll error: {poll_err}")
+                        time.sleep(0.5)
+
+                    if not delivered:
+                        bot.logger.warning(f"Resilient Failover bg: msg {msg_id} did not deliver on {next_addr} within timeout.")
+
             except Exception as resend_err:
                 bot.logger.error(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
                 err_str = str(resend_err).lower()
@@ -828,6 +854,13 @@ def on_msg_failed(bot, accid, event):
                         _message_failover_attempts[msg_id]['count'] = 10
                     except Exception:
                         pass
+            finally:
+                # Always restore the initial primary transport address!
+                try:
+                    bot.logger.info(f"Resilient Failover bg: restoring primary transport to {init_addr}")
+                    bot.rpc.set_config(accid, "configured_addr", init_addr)
+                except Exception as restore_err:
+                    bot.logger.error(f"Resilient Failover bg: failed to restore transport to {init_addr}: {restore_err}")
 
         import threading
         threading.Timer(delay, delayed_resend).start()
@@ -840,7 +873,7 @@ def on_msg_failed(bot, accid, event):
                     contact_id = bot.rpc.create_contact(accid, admin_email, "Admin")
                     chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
                     if chat_id:
-                        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nSwitched primary active transport to `{next_addr}`."))
+                        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
                 except Exception as admin_err:
                     bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
 
@@ -1098,64 +1131,23 @@ def _is_dc_admin(bot, accid, from_id):
         
     return False
 def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
-    """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
-    # Try to determine how many attempts we should make based on number of transports
+    """Wrapper for bot.rpc.send_msg that tracks stats."""
     try:
-        transports = bot.rpc.list_transports(accid)
-        max_attempts = max(2, len(transports))
-    except Exception:
-        transports = []
-        max_attempts = 2
-
-    for attempt in range(max_attempts):
+        msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+        
+        # Track success
         try:
-            msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
-            
-            # Track success
-            addr = "unknown"
-            try:
-                addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr") or "unknown"
-                if addr != "unknown":
-                    database.increment_transport_sent(addr)
-            except Exception:
-                pass
-            
-            logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid} (from {addr})")
-            return msg_id
-            
-        except Exception as e:
-            error_str = str(e).lower()
-            # List of strings that suggest a transport/network level failure
-            transport_errors = ["network", "timeout", "connection", "unreachable", "smtp", "status 0", "socket", "refused"]
-            
-            if attempt < max_attempts - 1 and any(err in error_str for err in transport_errors):
-                try:
-                    # Determine active primary (configured_addr is what we SET, addr is what core is USING)
-                    current_primary = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
-                    
-                    if not transports:
-                        transports = bot.rpc.list_transports(accid)
-                    
-                    if len(transports) > 1:
-                        # Find a backup relay we haven't tried yet or just the next one
-                        # We try to find any relay that is NOT the one that just failed
-                        for t in transports:
-                            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
-                            if t_addr and t_addr != current_primary:
-                                logger.warning(f"Transport {current_primary} failed. Switching to backup: {t_addr}")
-                                try:
-                                    bot.rpc.set_config(accid, "configured_addr", t_addr)
-                                    time.sleep(2) # Give core a moment to reconfigure
-                                    break 
-                                except Exception as set_e:
-                                    logger.error(f"Failed to switch transport: {set_e}")
-                                    continue
-                except Exception as fail_e:
-                    logger.error(f"Failover logic error: {fail_e}")
-            
-            if attempt == max_attempts - 1:
-                logger.error(f"Failed to send DC message after {max_attempts} attempts. Last error: {e}")
-                raise e
+            addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr") or "unknown"
+            if addr != "unknown":
+                database.increment_transport_sent(addr)
+        except Exception:
+            pass
+        
+        logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid}")
+        return msg_id
+    except Exception as e:
+        logger.error(f"Failed to send DC message to chat {chat_id} on account {accid}: {e}")
+        raise e
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
 def setprimary_command(bot, accid, event):
