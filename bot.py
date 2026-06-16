@@ -4993,13 +4993,13 @@ async def main():
     # Initialize Telegram Application with robust retry loop for start-up network/DNS resilience
     for attempt in range(1, 6):
         try:
-            bot.logger.info(f"Initializing Telegram Application (attempt {attempt}/5)...")
+            logger.info(f"Initializing Telegram Application (attempt {attempt}/5)...")
             await tg_app.initialize()
             break
         except Exception as e:
             if attempt == 5:
                 raise e
-            bot.logger.warning(f"Telegram Application initialization failed (attempt {attempt}/5): {e}. Retrying in 5s...")
+            logger.warning(f"Telegram Application initialization failed (attempt {attempt}/5): {e}. Retrying in 5s...")
             await asyncio.sleep(5)
 
     await tg_app.start()
