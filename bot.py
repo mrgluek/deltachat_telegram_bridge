@@ -737,12 +737,8 @@ def on_msg_failed(bot, accid, event):
             return
 
         # Fetch chat details to include in logs
-        chat_id = None
+        chat_id = msg_snapshot.get('chat_id') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'chat_id', None)
         chat_name = "Unknown"
-        if isinstance(msg_snapshot, dict):
-            chat_id = msg_snapshot.get('chatId')
-        else:
-            chat_id = getattr(msg_snapshot, 'chatId', getattr(msg_snapshot, 'chat_id', None))
 
         if chat_id:
             try:
