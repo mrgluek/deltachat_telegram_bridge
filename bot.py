@@ -880,18 +880,7 @@ def on_msg_failed(bot, accid, event):
         import threading
         threading.Timer(delay, delayed_resend).start()
 
-        # Send a warning message to the administrator about the failover (only on the first failure)
-        if state['count'] == 1:
-            admin_email = database.get_config("admin_dc_email")
-            if admin_email:
-                try:
-                    contact_id = bot.rpc.create_contact(accid, admin_email, "Admin")
-                    admin_chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
-                    # Protect against infinite admin alert loops if the admin alert itself fails to send
-                    if admin_chat_id and chat_id != admin_chat_id:
-                        _dc_send_msg_with_stats(bot, accid, admin_chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
-                except Exception as admin_err:
-                    bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
+
 
     except Exception as e:
         bot.logger.error(f"Error handling message failover for message {msg_id}: {e}")

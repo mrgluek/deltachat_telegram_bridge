@@ -3,7 +3,7 @@
   - Added fallback support for both `chat_id` and `chatId` keys when extracting details from raw RPC message snapshots.
   - Downgraded permanent E2E failure and resend logs to `WARNING` to prevent them from triggering the admin error email handler.
   - Filtered out loop-prone failover keywords from `AdminLogHandler.emit()` to completely avoid infinite logging/emailing loops when the admin's E2E key is missing.
-  - Blocked sending of admin failover alerts if the failed message itself was sent to the admin chat to prevent recursion.
+  - Removed administrative failover alert emails completely, relying entirely on structured logging to prevent any potential loop risks.
 - **Telegram Startup Resilience**:
   - Configured custom HTTPX request timeouts (30s) and pool sizes to handle API congestion.
   - Wrapped the startup `tg_app.initialize()` call in a 5-attempt retry loop with backoff to handle transient network hiccups on boot.
