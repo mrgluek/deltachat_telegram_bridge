@@ -14,7 +14,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 - **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
 - **Login Code Forwarding**: Automatic delivery of Telegram login codes to the admin.
-- **Multi-transport Support**: Link multiple mail relays (e.g. arcanechat.me) to a single account for automatic failover and high availability.
+- **Automatic Transport Failover**: Link multiple mail relays to a single account. The bot automatically detects message delivery failures via raw core events, rotates `configured_addr` to the next transport in round-robin fashion, resends the message, and remains on the working transport.
 - **Transport Statistics**: Detailed tracking of messages sent and received per relay, viewable via `/transports`.
 - **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
 - **Automatic Updates**: Self-updating via a simple script and cron job.

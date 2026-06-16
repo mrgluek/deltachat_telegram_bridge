@@ -694,6 +694,97 @@ def _setup_resilient_mode(bot):
 
     bot.rpc.send_msg = patched_send_msg
 
+
+_message_failover_attempts = {}
+
+@dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))
+def on_msg_failed(bot, accid, event):
+    """Handle message sending failures by switching to a backup transport if available."""
+    msg_id = getattr(event, 'msg_id', None)
+    if not msg_id:
+        return
+
+    try:
+        global _message_failover_attempts
+        if len(_message_failover_attempts) > 1000:
+            _message_failover_attempts.clear()
+
+        # Retrieve message and verify it is indeed in failed state (state 24)
+        try:
+            msg_snapshot = bot.rpc.get_message(accid, msg_id)
+            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+            if state != 24:
+                return
+        except Exception:
+            return
+
+        # List all configured transports
+        try:
+            transports = bot.rpc.list_transports(accid)
+        except Exception:
+            transports = []
+
+        if len(transports) <= 1:
+            bot.logger.info(f"Message {msg_id} failed to send, but only {len(transports)} transport(s) configured. Cannot failover.")
+            return
+
+        current_addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+        if not current_addr:
+            return
+
+        # Find current transport index
+        current_idx = -1
+        for idx, t in enumerate(transports):
+            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+            if t_addr and t_addr.lower() == current_addr.lower():
+                current_idx = idx
+                break
+
+        if current_idx == -1:
+            bot.logger.warning(f"Current transport {current_addr} not found in transports list.")
+            current_idx = 0
+
+        # Try to find the next transport
+        next_idx = (current_idx + 1) % len(transports)
+        next_t = transports[next_idx]
+        next_addr = next_t.get('addr') if isinstance(next_t, dict) else getattr(next_t, 'addr', None)
+
+        if not next_addr or next_addr.lower() == current_addr.lower():
+            bot.logger.info("No alternative transport available for failover.")
+            return
+
+        # Check attempt limits for this message
+        attempts = _message_failover_attempts.get(msg_id, set())
+        if next_addr.lower() in attempts:
+            bot.logger.warning(f"Already attempted to send message {msg_id} via {next_addr}. Stopping failover to prevent loop.")
+            return
+
+        attempts.add(current_addr.lower())
+        _message_failover_attempts[msg_id] = attempts
+
+        bot.logger.warning(f"Resilient Failover: Message {msg_id} failed on {current_addr}. Switching primary transport to {next_addr} and resending.")
+        
+        # Switch configured_addr to next transport
+        bot.rpc.set_config(accid, "configured_addr", next_addr)
+        
+        # Resend the message
+        bot.rpc.resend_messages(accid, [msg_id])
+
+        # Send a warning message to the administrator about the failover
+        admin_email = database.get_config("admin_dc_email")
+        if admin_email:
+            try:
+                contact_id = bot.rpc.create_contact(accid, admin_email)
+                chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
+                if chat_id:
+                    _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nSwitched primary active transport to `{next_addr}`."))
+            except Exception as admin_err:
+                bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
+
+    except Exception as e:
+        bot.logger.error(f"Error handling message failover for message {msg_id}: {e}")
+
+
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
