@@ -1,5 +1,14 @@
 ## [2026-06-16]
+- **Robust E2E Failover Loops & Key Fallbacks**:
+  - Added fallback support for both `chat_id` and `chatId` keys when extracting details from raw RPC message snapshots.
+  - Downgraded permanent E2E failure and resend logs to `WARNING` to prevent them from triggering the admin error email handler.
+  - Filtered out loop-prone failover keywords from `AdminLogHandler.emit()` to completely avoid infinite logging/emailing loops when the admin's E2E key is missing.
+  - Blocked sending of admin failover alerts if the failed message itself was sent to the admin chat to prevent recursion.
+- **Telegram Startup Resilience**:
+  - Configured custom HTTPX request timeouts (30s) and pool sizes to handle API congestion.
+  - Wrapped the startup `tg_app.initialize()` call in a 5-attempt retry loop with backoff to handle transient network hiccups on boot.
 - **Automatic Transport Failover:** Implemented a robust, event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically switches `configured_addr` to the next configured backup transport, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread. The failover process is limited to a maximum of 10 attempts per message to prevent infinite loops, and the administrator is alerted only on the first failure.
+
 
 ## [2026-06-09]
 - **Animation Relay Fix**: Corrected forwarding of Telegram animation/GIF files. Telegram encodes animations as silent MP4 video files under the hood. By changing the temporary file suffix from `.gif` to `.mp4`, the files are correctly identified as `video/mp4` in Delta Chat, allowing clients to play them rather than displaying a broken image.

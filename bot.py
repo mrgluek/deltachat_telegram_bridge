@@ -102,6 +102,13 @@ class AdminLogHandler(logging.Handler):
             msg_str = record.getMessage()
             if any(pat in exc_str or pat in msg_str for pat in _TRANSIENT_POLLING_ERRORS):
                 return
+            
+            # Prevent E2E/failover/sending error logging loops by ignoring failover-related errors.
+            msg_lower = msg_str.lower()
+            exc_lower = exc_str.lower()
+            loop_patterns = ["encryption", "failover", "resend", "msg_failed", "failed to send dc message", "error executing scheduled resend"]
+            if any(pat in msg_lower or pat in exc_lower for pat in loop_patterns):
+                return
         except Exception:
             pass
             
@@ -736,8 +743,13 @@ def on_msg_failed(bot, accid, event):
         except Exception:
             return
 
-        # Fetch chat details to include in logs
-        chat_id = msg_snapshot.get('chat_id') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'chat_id', None)
+        # Fetch chat details to include in logs (checking both snake_case and camelCase key fallbacks)
+        chat_id = None
+        if isinstance(msg_snapshot, dict):
+            chat_id = msg_snapshot.get('chat_id') or msg_snapshot.get('chatId')
+        else:
+            chat_id = getattr(msg_snapshot, 'chat_id', getattr(msg_snapshot, 'chatId', None))
+        
         chat_name = "Unknown"
 
         if chat_id:
@@ -755,7 +767,7 @@ def on_msg_failed(bot, accid, event):
         if msg_error:
             msg_error_lower = msg_error.lower()
             if "encryption" in msg_error_lower or "unencrypted" in msg_error_lower or "шифр" in msg_error_lower or "зашифр" in msg_error_lower:
-                bot.logger.error(
+                bot.logger.warning(
                     f"Permanent E2E encryption failure for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {msg_error}. "
                     f"Stopping failover attempts immediately."
                 )
@@ -829,15 +841,18 @@ def on_msg_failed(bot, accid, event):
                     delivered = False
                     while time.time() - start_time < 10:
                         try:
-                            msg_snapshot = bot.rpc.get_message(accid, msg_id)
-                            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                            if state in (26, 28):
-                                bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
-                                delivered = True
-                                break
-                            if state == 24:
-                                bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
-                                break
+                            raw_msg = bot.rpc.get_message(accid, msg_id)
+                            if raw_msg:
+                                from deltachat2 import AttrDict
+                                msg_snapshot = AttrDict(raw_msg)
+                                state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                                if state in (26, 28):
+                                    bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
+                                    delivered = True
+                                    break
+                                if state == 24:
+                                    bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
+                                    break
                         except Exception as poll_err:
                             bot.logger.debug(f"Resilient Failover bg poll error: {poll_err}")
                         time.sleep(0.5)
@@ -846,10 +861,10 @@ def on_msg_failed(bot, accid, event):
                         bot.logger.warning(f"Resilient Failover bg: msg {msg_id} did not deliver on {next_addr} within timeout.")
 
             except Exception as resend_err:
-                bot.logger.error(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
+                bot.logger.warning(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
                 err_str = str(resend_err).lower()
                 if "e2e encryption" in err_str or "encryption" in err_str:
-                    bot.logger.error(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
+                    bot.logger.warning(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
                     try:
                         _message_failover_attempts[msg_id]['count'] = 10
                     except Exception:
@@ -871,9 +886,10 @@ def on_msg_failed(bot, accid, event):
             if admin_email:
                 try:
                     contact_id = bot.rpc.create_contact(accid, admin_email, "Admin")
-                    chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
-                    if chat_id:
-                        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
+                    admin_chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
+                    # Protect against infinite admin alert loops if the admin alert itself fails to send
+                    if admin_chat_id and chat_id != admin_chat_id:
+                        _dc_send_msg_with_stats(bot, accid, admin_chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
                 except Exception as admin_err:
                     bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
 
@@ -4895,8 +4911,16 @@ async def main():
 
     main_loop = asyncio.get_running_loop()
 
-    # 1. Setup Telegram Application
-    tg_app = Application.builder().token(token).build()
+    # 1. Setup Telegram Application with tuned HTTPX connection pool and timeouts
+    from telegram.request import HTTPXRequest
+    custom_request = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+    tg_app = Application.builder().token(token).request(custom_request).build()
     tg_app.add_error_handler(tg_error_handler)
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
@@ -4966,7 +4990,18 @@ async def main():
     # Handler for message reactions
     tg_app.add_handler(MessageReactionHandler(handle_tg_reaction))
 
-    await tg_app.initialize()
+    # Initialize Telegram Application with robust retry loop for start-up network/DNS resilience
+    for attempt in range(1, 6):
+        try:
+            bot.logger.info(f"Initializing Telegram Application (attempt {attempt}/5)...")
+            await tg_app.initialize()
+            break
+        except Exception as e:
+            if attempt == 5:
+                raise e
+            bot.logger.warning(f"Telegram Application initialization failed (attempt {attempt}/5): {e}. Retrying in 5s...")
+            await asyncio.sleep(5)
+
     await tg_app.start()
     
     # allowed_updates=Update.ALL_TYPES implicitly includes message_reaction
