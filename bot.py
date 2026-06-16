@@ -736,6 +736,35 @@ def on_msg_failed(bot, accid, event):
         except Exception:
             return
 
+        # Fetch chat details to include in logs
+        chat_id = None
+        chat_name = "Unknown"
+        if isinstance(msg_snapshot, dict):
+            chat_id = msg_snapshot.get('chatId')
+        else:
+            chat_id = getattr(msg_snapshot, 'chatId', getattr(msg_snapshot, 'chat_id', None))
+
+        if chat_id:
+            try:
+                chat_info = bot.rpc.get_full_chat_by_id(accid, chat_id)
+                if isinstance(chat_info, dict):
+                    chat_name = chat_info.get('name', 'Unknown')
+                else:
+                    chat_name = getattr(chat_info, 'name', 'Unknown')
+            except Exception:
+                pass
+
+        # Check if it's a permanent E2E encryption failure
+        msg_error = msg_snapshot.get('error') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'error', None)
+        if msg_error:
+            msg_error_lower = msg_error.lower()
+            if "encryption" in msg_error_lower or "unencrypted" in msg_error_lower or "шифр" in msg_error_lower or "зашифр" in msg_error_lower:
+                bot.logger.error(
+                    f"Permanent E2E encryption failure for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {msg_error}. "
+                    f"Stopping failover attempts immediately."
+                )
+                return
+
         # List all configured transports
         try:
             transports = bot.rpc.list_transports(accid)
@@ -782,7 +811,7 @@ def on_msg_failed(bot, accid, event):
         # Calculate exponential backoff delay: 5, 10, 20, 40, 80, 160... seconds (max 5 minutes)
         delay = min(300, 5 * (2 ** (state['count'] - 1)))
         bot.logger.warning(
-            f"Resilient Failover: Message {msg_id} failed on {current_addr} (attempt {state['count']}/10). "
+            f"Resilient Failover: Message {msg_id} (Chat: {chat_name}, ID: {chat_id}) failed on {current_addr} (attempt {state['count']}/10). "
             f"Switching primary transport to {next_addr} and scheduling resend in {delay}s."
         )
 
@@ -792,10 +821,17 @@ def on_msg_failed(bot, accid, event):
         # Schedule the resend asynchronously using a non-blocking Timer thread
         def delayed_resend():
             try:
-                bot.logger.info(f"Executing scheduled resend for message {msg_id} on transport {next_addr}...")
+                bot.logger.info(f"Executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}) on transport {next_addr}...")
                 bot.rpc.resend_messages(accid, [msg_id])
             except Exception as resend_err:
-                bot.logger.error(f"Error executing scheduled resend for message {msg_id}: {resend_err}")
+                bot.logger.error(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
+                err_str = str(resend_err).lower()
+                if "e2e encryption" in err_str or "encryption" in err_str:
+                    bot.logger.error(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
+                    try:
+                        _message_failover_attempts[msg_id]['count'] = 10
+                    except Exception:
+                        pass
 
         import threading
         threading.Timer(delay, delayed_resend).start()
