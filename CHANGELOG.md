@@ -1,5 +1,5 @@
 ## [2026-06-16]
-- **Automatic Transport Failover:** Implemented a robust, event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically switches `configured_addr` to the next configured backup transport, resends the message, and alerts the administrator.
+- **Automatic Transport Failover:** Implemented a robust, event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically switches `configured_addr` to the next configured backup transport, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread. The failover process is limited to a maximum of 10 attempts per message to prevent infinite loops, and the administrator is alerted only on the first failure.
 
 ## [2026-06-09]
 - **Animation Relay Fix**: Corrected forwarding of Telegram animation/GIF files. Telegram encodes animations as silent MP4 video files under the hood. By changing the temporary file suffix from `.gif` to `.mp4`, the files are correctly identified as `video/mp4` in Delta Chat, allowing clients to play them rather than displaying a broken image.

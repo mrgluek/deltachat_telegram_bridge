@@ -699,7 +699,7 @@ _message_failover_attempts = {}
 
 @dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))
 def on_msg_failed(bot, accid, event):
-    """Handle message sending failures by switching to a backup transport if available."""
+    """Handle message sending failures by switching to a backup transport if available with backoff."""
     msg_id = getattr(event, 'msg_id', None)
     if not msg_id:
         return
@@ -709,11 +709,23 @@ def on_msg_failed(bot, accid, event):
         if len(_message_failover_attempts) > 1000:
             _message_failover_attempts.clear()
 
+        # Retrieve or initialize tracking state for this message
+        state = _message_failover_attempts.get(msg_id)
+        if state is None:
+            state = {'count': 0, 'transports': set()}
+            _message_failover_attempts[msg_id] = state
+
+        # Stop retrying if we reached the maximum attempt limit (e.g. 10 attempts)
+        if state['count'] >= 10:
+            return
+
+        state['count'] += 1
+
         # Retrieve message and verify it is indeed in failed state (state 24)
         try:
             msg_snapshot = bot.rpc.get_message(accid, msg_id)
-            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-            if state != 24:
+            msg_state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+            if msg_state != 24:
                 return
         except Exception:
             return
@@ -753,33 +765,46 @@ def on_msg_failed(bot, accid, event):
             bot.logger.info("No alternative transport available for failover.")
             return
 
-        # Check attempt limits for this message
-        attempts = _message_failover_attempts.get(msg_id, set())
-        if next_addr.lower() in attempts:
-            bot.logger.warning(f"Already attempted to send message {msg_id} via {next_addr}. Stopping failover to prevent loop.")
-            return
+        # Check if we have already tried this transport for this message
+        if next_addr.lower() in state['transports']:
+            if len(state['transports']) >= len(transports):
+                bot.logger.warning(f"All available transports have been tried for message {msg_id}. Stopping failover.")
+                return
 
-        attempts.add(current_addr.lower())
-        _message_failover_attempts[msg_id] = attempts
+        state['transports'].add(current_addr.lower())
 
-        bot.logger.warning(f"Resilient Failover: Message {msg_id} failed on {current_addr}. Switching primary transport to {next_addr} and resending.")
-        
-        # Switch configured_addr to next transport
+        # Calculate exponential backoff delay: 5, 10, 20, 40, 80, 160... seconds (max 5 minutes)
+        delay = min(300, 5 * (2 ** (state['count'] - 1)))
+        bot.logger.warning(
+            f"Resilient Failover: Message {msg_id} failed on {current_addr} (attempt {state['count']}/10). "
+            f"Switching primary transport to {next_addr} and scheduling resend in {delay}s."
+        )
+
+        # Switch configured_addr to next transport immediately
         bot.rpc.set_config(accid, "configured_addr", next_addr)
-        
-        # Resend the message
-        bot.rpc.resend_messages(accid, [msg_id])
 
-        # Send a warning message to the administrator about the failover
-        admin_email = database.get_config("admin_dc_email")
-        if admin_email:
+        # Schedule the resend asynchronously using a non-blocking Timer thread
+        def delayed_resend():
             try:
-                contact_id = bot.rpc.create_contact(accid, admin_email)
-                chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
-                if chat_id:
-                    _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nSwitched primary active transport to `{next_addr}`."))
-            except Exception as admin_err:
-                bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
+                bot.logger.info(f"Executing scheduled resend for message {msg_id} on transport {next_addr}...")
+                bot.rpc.resend_messages(accid, [msg_id])
+            except Exception as resend_err:
+                bot.logger.error(f"Error executing scheduled resend for message {msg_id}: {resend_err}")
+
+        import threading
+        threading.Timer(delay, delayed_resend).start()
+
+        # Send a warning message to the administrator about the failover (only on the first failure)
+        if state['count'] == 1:
+            admin_email = database.get_config("admin_dc_email")
+            if admin_email:
+                try:
+                    contact_id = bot.rpc.create_contact(accid, admin_email)
+                    chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
+                    if chat_id:
+                        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nSwitched primary active transport to `{next_addr}`."))
+                except Exception as admin_err:
+                    bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
 
     except Exception as e:
         bot.logger.error(f"Error handling message failover for message {msg_id}: {e}")
