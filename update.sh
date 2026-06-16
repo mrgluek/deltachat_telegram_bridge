@@ -62,7 +62,7 @@ if [ "$LOCAL" != "$REMOTE" ] || [ "$FORCE" = true ]; then
         echo "🔄 Force update requested."
     else
         echo "🆕 New changes detected on $ACTIVE_REMOTE ($BRANCH_NAME). Updating..."
-        git pull $ACTIVE_REMOTE $BRANCH_NAME
+        git reset --hard $REMOTE_REF
     fi
     docker compose up -d --build
     docker image prune -f
