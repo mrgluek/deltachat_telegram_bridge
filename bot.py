@@ -700,6 +700,12 @@ _message_failover_attempts = {}
 @dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))
 def on_msg_failed(bot, accid, event):
     """Handle message sending failures by switching to a backup transport if available with backoff."""
+    try:
+        if database.get_config("resilient") == "1":
+            return
+    except Exception:
+        pass
+
     msg_id = getattr(event, 'msg_id', None)
     if not msg_id:
         return
@@ -799,7 +805,7 @@ def on_msg_failed(bot, accid, event):
             admin_email = database.get_config("admin_dc_email")
             if admin_email:
                 try:
-                    contact_id = bot.rpc.create_contact(accid, admin_email)
+                    contact_id = bot.rpc.create_contact(accid, admin_email, "Admin")
                     chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
                     if chat_id:
                         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nSwitched primary active transport to `{next_addr}`."))
