@@ -602,6 +602,76 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
     except Exception as e:
         logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}): {e}")
 
+async def async_update_channels_dc(bot, accid, reply_chat_id):
+    try:
+        # Send a starting status message
+        status_msg_id = _dc_send_msg_with_stats(bot, accid, reply_chat_id, MsgData(text="🔄 Updating channel names and avatars from Telegram..."))
+        if not status_msg_id:
+            logger.error("Could not send update status message to DC.")
+            return
+
+        channels = database.get_all_channels()
+        if not channels:
+            bot.rpc.send_edit_request(accid, status_msg_id, "❌ No bridged channels found.")
+            return
+
+        updated_count = 0
+        error_count = 0
+
+        for ch in channels:
+            dc_chat_id = ch['dc_chat_id']
+            tg_channel_id = ch['tg_channel_id']
+            tg_username = ch.get('tg_channel_username')
+            
+            if tg_username:
+                target_tg = f"@{tg_username}" if not tg_username.startswith("@") else tg_username
+            else:
+                target_tg = tg_channel_id
+
+            if not target_tg:
+                continue
+
+            try:
+                new_title = None
+                avatar_path = None
+
+                # Try fetching via Telegram Bot API first
+                try:
+                    chat = await tg_app.bot.get_chat(target_tg)
+                    new_title = chat.title
+                    if chat.photo:
+                        avatar_path = f"tmp_avatar_{tg_channel_id}.jpg"
+                        avatar_file = await chat.photo.get_big_file()
+                        await avatar_file.download_to_drive(custom_path=avatar_path)
+                except Exception as tg_err:
+                    logger.debug(f"Bot API failed for {target_tg}, trying userbot: {tg_err}")
+                    if userbot_client and userbot_client.is_connected():
+                        entity = await userbot_client.get_entity(tg_channel_id)
+                        new_title = entity.title
+                        avatar_path = await userbot_client.download_profile_photo(tg_channel_id)
+                    else:
+                        raise tg_err
+
+                # Apply updates to Delta Chat
+                if new_title:
+                    bot.rpc.set_chat_name(accid, dc_chat_id, new_title)
+                if avatar_path and os.path.exists(avatar_path):
+                    bot.rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                    try: os.unlink(avatar_path)
+                    except: pass
+                
+                updated_count += 1
+            except Exception as ch_err:
+                logger.error(f"Failed to update channel {target_tg}: {ch_err}")
+                error_count += 1
+
+        summary = f"✅ Channel update complete!\nUpdated: {updated_count}\nErrors: {error_count}"
+        bot.rpc.send_edit_request(accid, status_msg_id, summary)
+
+    except Exception as e:
+        logger.error(f"Failed to run channels update: {e}")
+
+
 # ---------------------------------------------------------
 # DELTA CHAT HANDLERS
 # ---------------------------------------------------------
@@ -977,6 +1047,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/channeladd @name or ID — Bridge a TG channel/group (bot as admin or Userbot)\n"
             f"/channelremove N — Remove a channel bridge\n"
             f"/channels — List bridged channels\n"
+            f"/channelssync — Refresh channel names & avatars from TG\n"
             f"/userbotjoin <link> — Join channel via Userbot (no admin needed)\n"
             f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
@@ -1872,12 +1943,25 @@ def handle_dc_info_message(bot, accid, event):
 
 @dc_cli.on(events.NewMessage(command="/channels"))
 def channels_command_dc(bot, accid, event):
-    """List public bridged channels to Delta Chat users."""
+    """List public bridged channels to Delta Chat users, or trigger sync if requested."""
     msg = event.msg
     chat_id = msg.chat_id
 
     # Check if requester is admin
     is_admin = _is_dc_admin(bot, accid, msg.from_id)
+
+    # Check for sync sub-commands
+    payload = event.payload.strip().lower()
+    if payload in ("sync", "update", "refresh"):
+        if not is_admin:
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only administrators can sync channels."))
+            return
+        if main_loop:
+            asyncio.run_coroutine_threadsafe(
+                async_update_channels_dc(bot, accid, chat_id),
+                main_loop
+            )
+        return
 
     channels = database.get_all_channels()
     if is_admin:
@@ -1918,6 +2002,25 @@ def channels_command_dc(bot, accid, event):
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
     _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
+
+
+@dc_cli.on(events.NewMessage(command="/channelssync"))
+def channelssync_command_dc(bot, accid, event):
+    """Sync/update bridged Telegram channel names and avatars in Delta Chat."""
+    msg = event.msg
+    chat_id = msg.chat_id
+
+    # Check if requester is admin
+    is_admin = _is_dc_admin(bot, accid, msg.from_id)
+    if not is_admin:
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only administrators can sync channels."))
+        return
+
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(
+            async_update_channels_dc(bot, accid, chat_id),
+            main_loop
+        )
 
 
 @dc_cli.on(events.NewMessage(is_info=False))

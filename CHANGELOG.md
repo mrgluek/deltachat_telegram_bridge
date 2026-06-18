@@ -3,6 +3,8 @@
   - Implemented bidirectional in-place message edits between Telegram and Delta Chat.
   - Telegram → Delta Chat edits are processed via `send_edit_request` (with delete-and-resend fallback). Fixed a bug where edits within 120s of creation were ignored due to processed cache duplication.
   - Delta Chat → Telegram edits are processed via the core's `MSGS_CHANGED` event, supporting both text and media captions (with text/caption editing failover).
+- **Admin Command `/channelssync`**:
+  - Added a dedicated `/channelssync` administrative command in Delta Chat to force-refresh all bridged channel names and avatars from Telegram (supporting fallback to Userbot API).
 
 ## [2026-06-16]
 - **Robust E2E Failover Loops & Key Fallbacks**:
