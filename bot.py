@@ -602,10 +602,26 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
     except Exception as e:
         logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}): {e}")
 
-async def async_update_channels_dc(bot, accid, reply_chat_id):
+def files_are_identical(file1: str, file2: str) -> bool:
+    if not file1 or not file2:
+        return False
+    if not os.path.exists(file1) or not os.path.exists(file2):
+        return False
+    # Check sizes first for speed
+    if os.path.getsize(file1) != os.path.getsize(file2):
+        return False
+    # Check contents
+    try:
+        with open(file1, "rb") as f1, open(file2, "rb") as f2:
+            return f1.read() == f2.read()
+    except Exception:
+        return False
+
+async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=None):
     try:
         # Send a starting status message
-        status_msg_id = _dc_send_msg_with_stats(bot, accid, reply_chat_id, MsgData(text="🔄 Updating channel names and avatars from Telegram..."))
+        target_str = f" channel #{target_channel_id}" if target_channel_id is not None else "s"
+        status_msg_id = _dc_send_msg_with_stats(bot, accid, reply_chat_id, MsgData(text=f"🔄 Updating{target_str} from Telegram..."))
         if not status_msg_id:
             logger.error("Could not send update status message to DC.")
             return
@@ -614,6 +630,12 @@ async def async_update_channels_dc(bot, accid, reply_chat_id):
         if not channels:
             bot.rpc.send_edit_request(accid, status_msg_id, "❌ No bridged channels found.")
             return
+
+        if target_channel_id is not None:
+            channels = [ch for ch in channels if ch['id'] == target_channel_id]
+            if not channels:
+                bot.rpc.send_edit_request(accid, status_msg_id, f"❌ Channel #{target_channel_id} not found in database.")
+                return
 
         updated_count = 0
         error_count = 0
@@ -652,11 +674,27 @@ async def async_update_channels_dc(bot, accid, reply_chat_id):
                     else:
                         raise tg_err
 
-                # Apply updates to Delta Chat
+                # Get current Delta Chat chat info to check name and avatar path
+                current_chat = None
+                try:
+                    current_chat = bot.rpc.get_full_chat_by_id(accid, dc_chat_id)
+                except Exception as e:
+                    logger.debug(f"Failed to get chat info for DC chat {dc_chat_id}: {e}")
+
+                # Apply updates to Delta Chat only if they changed
                 if new_title:
-                    bot.rpc.set_chat_name(accid, dc_chat_id, new_title)
+                    old_title = current_chat.get("name") if current_chat else None
+                    if new_title != old_title:
+                        bot.rpc.set_chat_name(accid, dc_chat_id, new_title)
+                        logger.info(f"Updated DC chat {dc_chat_id} name: {old_title} -> {new_title}")
+
                 if avatar_path and os.path.exists(avatar_path):
-                    bot.rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                    old_avatar_path = current_chat.get("profile_image") if current_chat else None
+                    if not files_are_identical(avatar_path, old_avatar_path):
+                        bot.rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                        logger.info(f"Updated DC chat {dc_chat_id} profile image")
+                    else:
+                        logger.debug(f"DC chat {dc_chat_id} profile image is already up-to-date")
                     try: os.unlink(avatar_path)
                     except: pass
                 
@@ -1950,15 +1988,21 @@ def channels_command_dc(bot, accid, event):
     # Check if requester is admin
     is_admin = _is_dc_admin(bot, accid, msg.from_id)
 
-    # Check for sync sub-commands
+    # Check for sync sub-commands (e.g. "/channels sync" or "/channels sync 14")
     payload = event.payload.strip().lower()
-    if payload in ("sync", "update", "refresh"):
+    if payload.startswith("sync") or payload.startswith("update") or payload.startswith("refresh"):
         if not is_admin:
             _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only administrators can sync channels."))
             return
+        
+        parts = payload.split()
+        target_channel_id = None
+        if len(parts) > 1 and parts[1].isdigit():
+            target_channel_id = int(parts[1])
+
         if main_loop:
             asyncio.run_coroutine_threadsafe(
-                async_update_channels_dc(bot, accid, chat_id),
+                async_update_channels_dc(bot, accid, chat_id, target_channel_id),
                 main_loop
             )
         return
@@ -1998,9 +2042,14 @@ def channels_command_dc(bot, accid, event):
         # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 👤 150k TG / 7 DC — 💬 1
         tg_ref = f"(t.me/{tg_username})" if tg_username else f"(ID: {tg_id})"
         stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
-        lines.append(f"/channel{ch['id']} — {title} {tg_ref} — {stats_str}")
+        line = f"/channel{ch['id']} — {title} {tg_ref} — {stats_str}"
+        if is_admin:
+            line += f" — /channelssync{ch['id']}"
+        lines.append(line)
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
+    if is_admin:
+        lines.append("Use /channelssyncN to refresh a specific channel's name and avatar.")
     _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
@@ -2016,9 +2065,14 @@ def channelssync_command_dc(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only administrators can sync channels."))
         return
 
+    payload = event.payload.strip()
+    target_channel_id = None
+    if payload.isdigit():
+        target_channel_id = int(payload)
+
     if main_loop:
         asyncio.run_coroutine_threadsafe(
-            async_update_channels_dc(bot, accid, chat_id),
+            async_update_channels_dc(bot, accid, chat_id, target_channel_id),
             main_loop
         )
 
@@ -2061,6 +2115,23 @@ def handle_dc_message(bot, accid, event):
     # Handle /channelN and /channelNqr commands for subscriptions
     text = msg.text or ""
     cmd = text.split()[0] if text else ""
+
+    # Handle /channelssyncN commands
+    if cmd.startswith("/channelssync") and any(c.isdigit() for c in cmd):
+        if not _is_dc_admin(bot, accid, msg.from_id):
+            _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text="❌ Only administrators can sync channels."))
+            return
+        
+        import re
+        match = re.search(r'(\d+)', cmd[13:])
+        if match:
+            channel_id = int(match.group(1))
+            if main_loop:
+                asyncio.run_coroutine_threadsafe(
+                    async_update_channels_dc(bot, accid, dc_chat_id, channel_id),
+                    main_loop
+                )
+            return
     
     if cmd.startswith("/channel") and any(c.isdigit() for c in cmd):
         try:
