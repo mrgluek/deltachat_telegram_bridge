@@ -580,6 +580,28 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
     except Exception as e:
         logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
 
+async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
+    try:
+        if is_media:
+            try:
+                await tg_app.bot.edit_message_caption(chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML')
+                logger.info(f"Edited media caption in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
+            except Exception as cap_err:
+                # Fallback to edit_message_text if it wasn't actually a media message on TG
+                logger.debug(f"Failed to edit caption, trying text: {cap_err}")
+                await tg_app.bot.edit_message_text(chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML')
+                logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id} (caption fallback)")
+        else:
+            try:
+                await tg_app.bot.edit_message_text(chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML')
+                logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
+            except Exception as txt_err:
+                logger.debug(f"Failed to edit text, trying caption: {txt_err}")
+                await tg_app.bot.edit_message_caption(chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML')
+                logger.info(f"Edited caption in TG chat {tg_chat_id} for TG msg {tg_msg_id} (text fallback)")
+    except Exception as e:
+        logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}): {e}")
+
 # ---------------------------------------------------------
 # DELTA CHAT HANDLERS
 # ---------------------------------------------------------
@@ -2138,6 +2160,100 @@ def handle_dc_message(bot, accid, event):
             bot.logger.info(f"Relayed DC msg {msg.id} to TG chat {tg_chat_id}")
         except Exception as e:
             bot.logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
+
+@dc_cli.on(events.RawEvent(EventType.MSGS_CHANGED))
+def handle_dc_message_changed(bot, accid, event):
+    """Detect when a Delta Chat message is edited and edit it on Telegram."""
+    global tg_app, main_loop
+    if not tg_app or not main_loop:
+        return
+
+    msg_id = getattr(event, 'msg_id', None)
+    chat_id = getattr(event, 'chat_id', None)
+    if not msg_id or not chat_id:
+        return
+
+    # Look up all TG mappings for this message
+    mappings = database.get_tg_mappings_with_hash_by_dc_msg_id(msg_id)
+    if not mappings:
+        return
+
+    try:
+        msg = bot.rpc.get_message(accid, msg_id)
+    except Exception as e:
+        logger.error(f"Failed to load DC message {msg_id} during edit check: {e}")
+        return
+
+    # Only process if it has actually been edited
+    is_edited = msg.get('is_edited') if isinstance(msg, dict) else getattr(msg, 'is_edited', False)
+    if not is_edited:
+        return
+
+    # Check if the content changed
+    new_hash = _get_content_hash(msg)
+
+    # We will build and dispatch edits for each mapped Telegram chat
+    for mapping in mappings:
+        tg_msg_id, tg_chat_id, dc_chat_id, created_at, old_hash = mapping
+
+        # If content hash is the same, no edit needed
+        if old_hash and old_hash == new_hash:
+            continue
+
+        # Re-build format of message
+        try:
+            sender_contact = bot.rpc.get_contact(accid, msg.from_id)
+            sender_name = msg.override_sender_name or sender_contact.display_name or sender_contact.address
+        except Exception:
+            sender_name = "Unknown"
+
+        text = msg.text or ""
+        text = DC_FALLBACK_PATTERN.sub('', text).strip()
+
+        # Do not relay command messages
+        if text.startswith('/'):
+            continue
+
+        safe_name = html.escape(sender_name)
+        safe_text = html.escape(text) if text else ""
+
+        # Check if reply quote is needed
+        reply_quote = None
+        if hasattr(msg, 'quote') and msg.quote:
+            quote_text = msg.quote.get('text', '') if isinstance(msg.quote, dict) else getattr(msg.quote, 'text', '')
+            quote_text = DC_FALLBACK_PATTERN.sub('', quote_text).strip()
+            if quote_text:
+                short_quote = _truncate(quote_text, 50)
+                reply_quote = f"<i>↩ {html.escape(short_quote)}</i>\n"
+
+        tg_reply_id = None
+        if hasattr(msg, 'quote') and msg.quote:
+            quote_msg_id = msg.quote.get('message_id') if isinstance(msg.quote, dict) else getattr(msg.quote, 'message_id', None)
+            if quote_msg_id:
+                tg_reply_id = database.get_tg_msg_id(quote_msg_id, dc_chat_id, tg_chat_id)
+        chat_reply_quote = reply_quote if not tg_reply_id else None
+
+        if safe_text:
+            if chat_reply_quote:
+                formatted_msg = f"{chat_reply_quote}<b>{safe_name}</b>: {safe_text}"
+            else:
+                formatted_msg = f"<b>{safe_name}</b>: {safe_text}"
+        else:
+            formatted_msg = f"<b>{safe_name}</b>"
+        formatted_msg = _truncate(formatted_msg, TG_MAX_MSG_LEN)
+
+        file_path = getattr(msg, 'file', None) or None
+        viewtype = getattr(msg, 'viewtype', None) or ''
+        is_media = viewtype in ('Image', 'Gif', 'Sticker', 'Video', 'Voice', 'Audio', 'Document', 'File') or file_path is not None
+
+        # Update database with new hash first to prevent duplicate edit events
+        database.save_message_map(msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash=new_hash)
+
+        # Dispatch async edit call
+        asyncio.run_coroutine_threadsafe(
+            async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media),
+            main_loop
+        )
 
 @dc_cli.on(events.RawEvent(EventType.MSG_DELETED))
 def handle_dc_msg_deleted(bot, accid, event):

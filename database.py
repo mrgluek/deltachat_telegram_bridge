@@ -316,6 +316,20 @@ def get_tg_mappings_by_dc_msg_id(dc_msg_id: int) -> list[tuple]:
         conn.close()
         return rows
 
+def get_tg_mappings_with_hash_by_dc_msg_id(dc_msg_id: int) -> list[tuple]:
+    """Look up all (tg_msg_id, tg_chat_id, dc_chat_id, created_at, content_hash) mappings for a given DC message."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tg_msg_id, tg_chat_id, dc_chat_id, created_at, content_hash FROM message_map WHERE dc_msg_id = ?",
+            (dc_msg_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+
 def get_dc_msg_id(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> int | None:
     """Look up the DC message ID for a given TG message."""
     with _lock:

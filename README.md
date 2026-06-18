@@ -8,7 +8,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 - **Bidirectional Group Bridging**: Sync messages between Telegram groups and Delta Chat groups.
 - **Bidirectional Deletion Sync**: Sync message deletions between both platforms with built-in safety guards.
-- **In-place Edit Handling**: Edits in Telegram are automatically updated in-place in Delta Chat using the message editing protocol, with a delete-and-resend fallback mechanism for uneditable messages (e.g., media messages with no caption) to prevent clutter.
+- **Bidirectional Edit Handling**: Edits are synced in-place in both directions. Telegram → Delta Chat edits are processed via the message editing protocol (with delete-and-resend fallback), and Delta Chat → Telegram edits are synced using Telegram's API for editing text and captions.
 - **Public Telegram Channels**: Bridge any public channel to a Delta Chat broadcast group.
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
