@@ -3867,25 +3867,43 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     try:
-        # Delete the old DC message before sending the updated version.
+        # Try to edit in-place first if possible
         old_dc_msg_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
+        edit_success = False
         if old_dc_msg_id:
             try:
-                _register_bot_initiated_delete(old_dc_msg_id)
-                dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
-            except Exception as del_e:
-                logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
-                _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+                old_msg = dc_bot_instance.rpc.get_message(dc_accid, old_dc_msg_id)
+                old_text = old_msg.get('text') if isinstance(old_msg, dict) else getattr(old_msg, 'text', '')
+                is_info = old_msg.get('isInfo') if isinstance(old_msg, dict) else getattr(old_msg, 'isInfo', False)
+                has_html = old_msg.get('hasHtml') if isinstance(old_msg, dict) else getattr(old_msg, 'hasHtml', False)
+                view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
+                
+                if old_text and not is_info and not has_html and view_type != 'Call':
+                    dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
+                    database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
+                    edit_success = True
+                    logger.info(f"Edited channel post {old_dc_msg_id} in-place for TG post {post.message_id}")
+            except Exception as edit_err:
+                logger.debug(f"Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
 
-        msg_data = MsgData(text=formatted_msg)
-        if author:
-            msg_data.override_sender_name = f"✏️ [Edited] {author}"
-        else:
-            msg_data.override_sender_name = "✏️ [Edited]"
-        dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
-        if dc_sent_id:
-            database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
-        logger.info(f"Relayed edited channel post from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
+        if not edit_success:
+            if old_dc_msg_id:
+                try:
+                    _register_bot_initiated_delete(old_dc_msg_id)
+                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
+                except Exception as del_e:
+                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
+                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+
+            msg_data = MsgData(text=formatted_msg)
+            if author:
+                msg_data.override_sender_name = f"✏️ [Edited] {author}"
+            else:
+                msg_data.override_sender_name = "✏️ [Edited]"
+            dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+            if dc_sent_id:
+                database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
+            logger.info(f"Relayed edited channel post (new msg) from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay edited channel post to DC: {e}")
 
@@ -3972,26 +3990,45 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
 
     formatted_msg = f"✏️ [Edited]:\n{text}"
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+    clean_msg = _truncate(text, DC_MAX_MSG_LEN)
 
     for dc_chat_id in dc_chats:
         try:
-            # Delete the old DC message before sending the updated version.
+            # Try to edit in-place first if possible
             old_dc_msg_id = database.get_dc_msg_id(msg.message_id, tg_chat_id, dc_chat_id)
+            edit_success = False
             if old_dc_msg_id:
                 try:
-                    _register_bot_initiated_delete(old_dc_msg_id)
-                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
-                except Exception as del_e:
-                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
-                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+                    old_msg = dc_bot_instance.rpc.get_message(dc_accid, old_dc_msg_id)
+                    old_text = old_msg.get('text') if isinstance(old_msg, dict) else getattr(old_msg, 'text', '')
+                    is_info = old_msg.get('isInfo') if isinstance(old_msg, dict) else getattr(old_msg, 'isInfo', False)
+                    has_html = old_msg.get('hasHtml') if isinstance(old_msg, dict) else getattr(old_msg, 'hasHtml', False)
+                    view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
+                    
+                    if old_text and not is_info and not has_html and view_type != 'Call':
+                        dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, clean_msg)
+                        database.save_message_map(old_dc_msg_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
+                        edit_success = True
+                        logger.info(f"Edited group msg {old_dc_msg_id} in-place for TG msg {msg.message_id} in chat {dc_chat_id}")
+                except Exception as edit_err:
+                    logger.debug(f"Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
 
-            msg_data = MsgData(text=formatted_msg)
-            msg_data.override_sender_name = sender_name
-            await _wait_for_global_dc_rate_limit()
-            dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
-            if dc_sent_id:
-                database.save_message_map(dc_sent_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
-            logger.info(f"Relayed edited TG msg to DC chat {dc_chat_id}")
+            if not edit_success:
+                if old_dc_msg_id:
+                    try:
+                        _register_bot_initiated_delete(old_dc_msg_id)
+                        dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
+                    except Exception as del_e:
+                        logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
+                        _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+
+                msg_data = MsgData(text=formatted_msg)
+                msg_data.override_sender_name = sender_name
+                await _wait_for_global_dc_rate_limit()
+                dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                if dc_sent_id:
+                    database.save_message_map(dc_sent_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
+                logger.info(f"Relayed edited TG msg (new msg) to DC chat {dc_chat_id}")
         except Exception as e:
             logger.error(f"Failed to relay edited msg to DC chat {dc_chat_id}: {e}")
 

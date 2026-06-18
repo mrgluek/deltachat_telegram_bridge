@@ -1,3 +1,9 @@
+## [2026-06-18]
+- **In-place Message Edits**:
+  - Implemented in-place message edits for both channel posts and group messages in Delta Chat using the `send_edit_request` JSON-RPC method.
+  - Added verification checks to ensure message editability (text exists, not an info/system message, not HTML, not a call).
+  - Added a fallback mechanism that deletes the old message and sends a new one if in-place editing is not supported or fails.
+
 ## [2026-06-16]
 - **Robust E2E Failover Loops & Key Fallbacks**:
   - Added fallback support for both `chat_id` and `chatId` keys when extracting details from raw RPC message snapshots.
