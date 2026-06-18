@@ -257,7 +257,7 @@ async def _wait_for_global_dc_rate_limit():
 
 
 # Double bridging protection
-_processed_tg_msgs: dict[tuple[int, int], float] = {}
+_processed_tg_msgs: dict[tuple[int, int, str], float] = {}
 
 # Cooldown for channel history relay (per DC chat_id)
 HISTORY_RELAY_COOLDOWN = 300  # 5 minutes
@@ -345,10 +345,10 @@ def _is_history_on_cooldown(dc_chat_id: int) -> bool:
     return False
 
 
-def _mark_processed(chat_id: int, msg_id: int) -> bool:
-    """Returns True if this message was already processed in the last 120 seconds."""
+def _mark_processed(chat_id: int, msg_id: int, event_type: str = 'new') -> bool:
+    """Returns True if this message event was already processed in the last 120 seconds."""
     now = time.time()
-    key = (chat_id, msg_id)
+    key = (chat_id, msg_id, event_type)
     last = _processed_tg_msgs.get(key, 0)
     if now - last < 120:
         return True
@@ -3793,7 +3793,8 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         return
 
     tg_channel_id = post.chat.id
-    if _mark_processed(tg_channel_id, post.message_id):
+    new_hash = _get_content_hash(post)
+    if _mark_processed(tg_channel_id, post.message_id, f"edit_{new_hash}"):
         return
     
     tg_username = post.chat.username
@@ -3839,7 +3840,6 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         return
 
     # Filter out updates where content (text/caption) hasn't changed (e.g. reactions or view count updates)
-    new_hash = _get_content_hash(post)
     old_hash = database.get_message_content_hash(post.message_id, tg_channel_id, dc_chat_id)
     if old_hash and old_hash == new_hash:
         # Content hasn't changed, ignore this "edit"
@@ -3917,7 +3917,8 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     tg_chat_id = msg.chat.id
-    if _mark_processed(tg_chat_id, msg.message_id):
+    new_hash = _get_content_hash(msg)
+    if _mark_processed(tg_chat_id, msg.message_id, f"edit_{new_hash}"):
         return
 
     # Check if this is a live location update
@@ -3961,7 +3962,6 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     # Filter out updates where content (text/caption) hasn't changed
-    new_hash = _get_content_hash(msg)
     # We check against the first bridged DC chat; usually hashes are sync'd.
     old_hash = database.get_message_content_hash(msg.message_id, tg_chat_id, dc_chats[0])
     if old_hash and old_hash == new_hash:
