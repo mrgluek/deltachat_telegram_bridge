@@ -4185,6 +4185,17 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if file_size > 1024 * 1024:
         logger.info(f"Skipping edit relay for post {post.message_id} in channel {tg_channel_id} because attached file size is {file_size} bytes (> 1MB).")
         return
+
+    # HACK: check message age (older than 7 days / 1 week)
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        age = now - post.date
+        if age.days > 7:
+            logger.info(f"Skipping edit relay for post {post.message_id} in channel {tg_channel_id} because it is older than 7 days ({age.days} days).")
+            return
+    except Exception as e:
+        logger.warning(f"Failed to check message age for post {post.message_id}: {e}")
     
     tg_username = post.chat.username
 
@@ -4333,6 +4344,17 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     if file_size > 1024 * 1024:
         logger.info(f"Skipping edit relay for message {msg.message_id} in chat/group {tg_chat_id} because attached file size is {file_size} bytes (> 1MB).")
         return
+
+    # HACK: check message age (older than 7 days / 1 week)
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        age = now - msg.date
+        if age.days > 7:
+            logger.info(f"Skipping edit relay for message {msg.message_id} in chat/group {tg_chat_id} because it is older than 7 days ({age.days} days).")
+            return
+    except Exception as e:
+        logger.warning(f"Failed to check message age for message {msg.message_id}: {e}")
 
     # Check if this is a live location update
     if msg.location:
