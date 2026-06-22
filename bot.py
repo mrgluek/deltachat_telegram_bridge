@@ -487,6 +487,33 @@ def _get_media_size(msg) -> int:
     return 0
 
 
+def _get_ptb_media_size(msg) -> int:
+    """Extract media file size from a python-telegram-bot Message object."""
+    if not msg:
+        return 0
+    tg_file = None
+    if getattr(msg, 'photo', None):
+        tg_file = msg.photo[-1]
+    elif getattr(msg, 'video', None):
+        tg_file = msg.video
+    elif getattr(msg, 'animation', None):
+        tg_file = msg.animation
+    elif getattr(msg, 'voice', None):
+        tg_file = msg.voice
+    elif getattr(msg, 'audio', None):
+        tg_file = msg.audio
+    elif getattr(msg, 'document', None):
+        tg_file = msg.document
+    elif getattr(msg, 'sticker', None):
+        tg_file = msg.sticker
+    elif getattr(msg, 'video_note', None):
+        tg_file = msg.video_note
+
+    if tg_file:
+        return getattr(tg_file, 'file_size', 0) or 0
+    return 0
+
+
 def _truncate(text: str, max_len: int) -> str:
     """Truncate text to max_len, appending '…' if truncated."""
     if len(text) <= max_len:
@@ -4086,6 +4113,30 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     new_hash = _get_content_hash(post)
     if _mark_processed(tg_channel_id, post.message_id, f"edit_{new_hash}"):
         return
+
+    # HACK: check subscriber count (> 10000)
+    try:
+        sub_count = 0
+        ch_row = database.get_channel_by_tg_id(tg_channel_id)
+        if ch_row and ch_row.get('tg_participants_count'):
+            sub_count = ch_row['tg_participants_count']
+        
+        if sub_count == 0:
+            sub_count = await tg_app.bot.get_chat_member_count(tg_channel_id)
+            if ch_row:
+                database.update_channel_info(ch_row['id'], participants_count=sub_count)
+        
+        if sub_count > 10000:
+            logger.info(f"Skipping edit relay for channel {tg_channel_id} because it has {sub_count} subscribers (> 10000).")
+            return
+    except Exception as e:
+        logger.warning(f"Failed to check subscriber count for channel {tg_channel_id}: {e}")
+
+    # HACK: check attached file size (> 1 MB)
+    file_size = _get_ptb_media_size(post)
+    if file_size > 1024 * 1024:
+        logger.info(f"Skipping edit relay for post {post.message_id} in channel {tg_channel_id} because attached file size is {file_size} bytes (> 1MB).")
+        return
     
     tg_username = post.chat.username
 
@@ -4209,6 +4260,30 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     tg_chat_id = msg.chat.id
     new_hash = _get_content_hash(msg)
     if _mark_processed(tg_chat_id, msg.message_id, f"edit_{new_hash}"):
+        return
+
+    # HACK: check subscriber count (> 10000)
+    try:
+        sub_count = 0
+        ch_row = database.get_channel_by_tg_id(tg_chat_id)
+        if ch_row and ch_row.get('tg_participants_count'):
+            sub_count = ch_row['tg_participants_count']
+        
+        if sub_count == 0:
+            sub_count = await tg_app.bot.get_chat_member_count(tg_chat_id)
+            if ch_row:
+                database.update_channel_info(ch_row['id'], participants_count=sub_count)
+        
+        if sub_count > 10000:
+            logger.info(f"Skipping edit relay for chat/group {tg_chat_id} because it has {sub_count} members (> 10000).")
+            return
+    except Exception as e:
+        logger.warning(f"Failed to check member count for chat/group {tg_chat_id}: {e}")
+
+    # HACK: check attached file size (> 1 MB)
+    file_size = _get_ptb_media_size(msg)
+    if file_size > 1024 * 1024:
+        logger.info(f"Skipping edit relay for message {msg.message_id} in chat/group {tg_chat_id} because attached file size is {file_size} bytes (> 1MB).")
         return
 
     # Check if this is a live location update

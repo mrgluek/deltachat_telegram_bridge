@@ -1,3 +1,8 @@
+## [2026-06-22]
+- **Edit Relay Optimizations**:
+  - Prevent edit relaying for channels/groups with more than 10,000 subscribers/members to save traffic.
+  - Skip edit relaying for messages with attached files larger than 1 MB.
+
 ## [2026-06-18]
 - **Bidirectional In-place Message Edits**:
   - Implemented bidirectional in-place message edits between Telegram and Delta Chat.
