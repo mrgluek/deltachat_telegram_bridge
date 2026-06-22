@@ -4,6 +4,8 @@
   - Skip edit relaying for messages with attached files larger than 1 MB.
 - **Subscriber Count Updates**:
   - Automatically update Telegram subscriber count in the database during `/channelssync` runs.
+- **Fix Subscriber Count Calculation**:
+  - Dynamically check if the bot's own contact ID is present in the group contacts list before subtracting 1, fixing the reporting of 0 subscribers for broadcast channels (where the bot's own contact is typically excluded from the contacts list).
 
 
 ## [2026-06-18]

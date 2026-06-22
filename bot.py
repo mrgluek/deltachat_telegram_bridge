@@ -2088,7 +2088,14 @@ def channels_command_dc(bot, accid, event):
             chat_info = bot.rpc.get_basic_chat_info(accid, dc_cid)
             title = chat_info.get("name", "Unknown Channel")
             contacts = bot.rpc.get_chat_contacts(accid, dc_cid)
-            dc_sub_count = len(contacts) - 1 if contacts else 0
+            if contacts:
+                try:
+                    self_id = bot.rpc.get_contact(accid, 1).id
+                except Exception:
+                    self_id = 1
+                dc_sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
+            else:
+                dc_sub_count = 0
         except Exception:
             title = "Unknown Channel"
             dc_sub_count = "?"
@@ -2834,7 +2841,14 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = chat_info.get("name", "Unknown Group")
                 # Get member count (minus the bot itself)
                 contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
-                sub_count = len(contacts) - 1 if contacts else 0
+                if contacts:
+                    try:
+                        self_id = dc_bot_instance.rpc.get_contact(dc_accid, 1).id
+                    except Exception:
+                        self_id = 1
+                    sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
+                else:
+                    sub_count = 0
             except Exception:
                 title = "Unknown Group"
                 sub_count = "?"
@@ -3792,7 +3806,14 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             title = chat_info.get("name", "Unknown Channel")
             # Get subscriber count (minus the bot itself)
             contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
-            dc_sub_count = len(contacts) - 1 if contacts else 0
+            if contacts:
+                try:
+                    self_id = dc_bot_instance.rpc.get_contact(dc_accid, 1).id
+                except Exception:
+                    self_id = 1
+                dc_sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
+            else:
+                dc_sub_count = 0
         except Exception:
             title = "Unknown Channel"
             dc_sub_count = "?"
