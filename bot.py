@@ -692,12 +692,39 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                         avatar_path = f"tmp_avatar_{tg_channel_id}.jpg"
                         avatar_file = await chat.photo.get_big_file()
                         await avatar_file.download_to_drive(custom_path=avatar_path)
+                    
+                    # Fetch and update subscriber count
+                    try:
+                        member_count = await tg_app.bot.get_chat_member_count(target_tg)
+                        database.update_channel_info(ch['id'], participants_count=member_count)
+                        logger.info(f"Updated subscriber count for channel {target_tg} to {member_count}")
+                    except Exception as mc_err:
+                        logger.debug(f"Failed to get member count for {target_tg}: {mc_err}")
                 except Exception as tg_err:
                     logger.debug(f"Bot API failed for {target_tg}, trying userbot: {tg_err}")
                     if userbot_client and userbot_client.is_connected():
                         entity = await userbot_client.get_entity(tg_channel_id)
                         new_title = entity.title
                         avatar_path = await userbot_client.download_profile_photo(tg_channel_id)
+                        
+                        # Fetch and update subscriber count via Userbot
+                        try:
+                            from telethon.tl.functions.channels import GetFullChannelRequest
+                            from telethon.tl.functions.messages import GetFullChatRequest
+                            from telethon.tl.types import Channel, Chat
+                            
+                            full = None
+                            if isinstance(entity, Channel):
+                                full = await userbot_client(GetFullChannelRequest(entity))
+                            elif isinstance(entity, Chat):
+                                full = await userbot_client(GetFullChatRequest(entity.id))
+                            
+                            if full and hasattr(full, 'full_chat'):
+                                member_count = getattr(full.full_chat, 'participants_count', 0)
+                                database.update_channel_info(ch['id'], participants_count=member_count)
+                                logger.info(f"Userbot updated subscriber count for channel {tg_channel_id} to {member_count}")
+                        except Exception as ub_mc_err:
+                            logger.debug(f"Userbot failed to get member count for {tg_channel_id}: {ub_mc_err}")
                     else:
                         raise tg_err
 
