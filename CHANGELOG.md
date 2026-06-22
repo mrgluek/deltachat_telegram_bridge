@@ -2,6 +2,9 @@
 - **Edit Relay Optimizations**:
   - Prevent edit relaying for channels/groups with more than 10,000 subscribers/members to save traffic.
   - Skip edit relaying for messages with attached files larger than 1 MB.
+- **Subscriber Count Updates**:
+  - Automatically update Telegram subscriber count in the database during `/channelssync` runs.
+
 
 ## [2026-06-18]
 - **Bidirectional In-place Message Edits**:
