@@ -13,7 +13,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Channel Sync Command (`/channelssync`)**: Force-refresh names and avatars of all bridged channels from Telegram (supports both Bot API and Userbot).
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
-- **Watchdog Protection**: Automatic detection and recovery from Userbot connection errors.
+- **Watchdog Protection**: Automatic detection and recovery from both Userbot and Telegram Bot API polling connection hangs/errors.
 - **Login Code Forwarding**: Automatic delivery of Telegram login codes to the admin.
 - **Automatic Transport Failover**: Link multiple mail relays to a single account. The bot automatically detects message delivery failures via raw core events, rotates `configured_addr` to the next transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
 - **Transport Statistics**: Detailed tracking of messages sent and received per relay, viewable via `/transports`.

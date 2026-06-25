@@ -1,3 +1,8 @@
+## [2026-06-25]
+- **Telegram Bot API Watchdog**:
+  - Implemented a liveness checker and watchdog for the Telegram Bot API polling loop.
+  - Automatically queries `get_me` every 60 seconds with a 10s timeout to detect hung polling connections, stopping and restarting the updater if unresponsive.
+
 ## [2026-06-22]
 - **Edit Relay Optimizations**:
   - Prevent edit relaying for channels/groups with more than 10,000 subscribers/members to save traffic.
