@@ -2,6 +2,7 @@
 - **Telegram Bot API Watchdog**:
   - Implemented a liveness checker and watchdog for the Telegram Bot API polling loop.
   - Automatically queries `get_me` every 60 seconds with a 10s timeout to detect hung polling connections, stopping and restarting the updater if unresponsive.
+  - Fixed an AttributeError (`'Updater' object has no attribute 'is_active'`) in python-telegram-bot v20 by using the correct `running` property.
 
 ## [2026-06-22]
 - **Edit Relay Optimizations**:

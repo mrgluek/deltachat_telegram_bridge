@@ -5516,7 +5516,7 @@ async def main():
             if (now - last_tg_bot_check) > 60:
                 is_tg_healthy = False
                 try:
-                    if tg_app and tg_app.updater and tg_app.updater.is_active:
+                    if tg_app and tg_app.updater and tg_app.updater.running:
                         # Trigger a cheap API request with a short timeout to ensure responsiveness
                         await asyncio.wait_for(tg_app.bot.get_me(), timeout=10.0)
                         is_tg_healthy = True
@@ -5527,7 +5527,7 @@ async def main():
                     logger.info("Telegram Bot API polling is offline or unhealthy. Restarting polling...")
                     try:
                         if tg_app and tg_app.updater:
-                            if tg_app.updater.is_active:
+                            if tg_app.updater.running:
                                 logger.info("Stopping active unhealthy updater...")
                                 try:
                                     await asyncio.wait_for(tg_app.updater.stop(), timeout=15.0)
