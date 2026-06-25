@@ -5066,12 +5066,14 @@ async def sync_userbot_channels(force=False):
                 entity = None
                 try:
                     entity = await userbot_client.get_entity(target)
+                    await asyncio.sleep(0.5)  # avoid ResolveUsername flood
                 except Exception as e:
                     # 2. Fallback to invite link if available
                     if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                         logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
                         try:
                             entity = await userbot_client.get_entity(invite_link)
+                            await asyncio.sleep(0.5)  # avoid ResolveUsername flood
                         except Exception as e2:
                             logger.debug(f"Sync: Could not resolve via link either: {e2}")
                     
@@ -5430,9 +5432,12 @@ async def start_userbot():
         if me:
             last_id = database.get_config("userbot_last_user_id")
             if last_id != str(me.id):
-                logger.info(f"New Userbot account detected ({me.id}). Triggering auto-sync...")
+                logger.info(f"New Userbot account detected ({me.id}). Scheduling auto-sync in 10s to allow connection to stabilize...")
                 database.set_config("userbot_last_user_id", str(me.id))
-                asyncio.create_task(sync_userbot_channels())
+                async def _delayed_sync():
+                    await asyncio.sleep(10)
+                    await sync_userbot_channels()
+                asyncio.create_task(_delayed_sync())
     except Exception as e:
         logger.error(f"Failed to start Userbot client: {e}")
         userbot_client = None
