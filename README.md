@@ -362,6 +362,12 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/resilient` — Toggle resilient sending mode across all relays (admin only).
 - `/help` — Show Delta Chat bot help.
 
+#### Target-Specific Commands in Group Chats
+
+In group chats where multiple bots are present, you can address this bot specifically to prevent other bots from responding. Append the `@tg` or `@tgbridge` suffix to any command, for example:
+- `/help@tg` or `/help@tgbridge`
+- `/stats@tg` or `/stats@tgbridge`
+
 ## Userbot Mode (Bridging without Admin permissions)
 
 If you want to bridge channels where you cannot add the bot as an administrator, you can configure **Userbot Mode**. This allows the bot daemon to act as a regular Telegram client using your personal account.

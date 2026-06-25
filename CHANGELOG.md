@@ -1,4 +1,6 @@
 ## [2026-06-25]
+- **Target-Specific Command Suffixes**:
+  - Added support for addressing this bot specifically in group chats using `/command@tg` or `/command@tgbridge` suffixes.
 - **Telegram Bot API Watchdog**:
   - Implemented a liveness checker and watchdog for the Telegram Bot API polling loop.
   - Automatically queries `get_me` every 60 seconds with a 10s timeout to detect hung polling connections, stopping and restarting the updater if unresponsive.
