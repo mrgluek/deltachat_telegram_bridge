@@ -2717,35 +2717,64 @@ def setup_custom_command_parser(bot, allowed_prefixes):
             cmd_name, suffix = cmd.split("@", 1)
             suffix_lower = suffix.lower()
             
-            try:
-                self_address = bot.rpc.get_contact(accid, 1).address.lower()
-            except Exception:
-                self_address = ""
-            
-            matched = False
-            for p in allowed_prefixes:
-                if suffix_lower.startswith(p.lower()):
-                    matched = True
-                    break
-            if not matched and self_address and suffix_lower == self_address:
-                matched = True
-            
-            if matched:
-                new_text = cmd_name
-                if len(parts) > 1:
-                    new_text += " " + parts[1]
-                
-                original_text = event.msg.text
-                event.msg["text"] = new_text
+            if suffix_lower:
                 try:
-                    original_parse_command(accid, event)
-                finally:
-                    event.msg["text"] = original_text
+                    self_address = bot.rpc.get_contact(accid, 1).address.lower()
+                except Exception:
+                    self_address = ""
+                
+                matched = False
+                for p in allowed_prefixes:
+                    if suffix_lower.startswith(p.lower()) or p.lower().startswith(suffix_lower):
+                        matched = True
+                        break
+                if not matched and self_address and suffix_lower == self_address:
+                    matched = True
+                
+                if matched:
+                    new_text = cmd_name
+                    if len(parts) > 1:
+                        new_text += " " + parts[1]
+                    
+                    original_text = event.msg.text
+                    event.msg["text"] = new_text
+                    try:
+                        original_parse_command(accid, event)
+                    finally:
+                        event.msg["text"] = original_text
+                else:
+                    event.command = ""
+                    event.payload = ""
             else:
-                event.command = ""
-                event.payload = ""
+                original_parse_command(accid, event)
         else:
             original_parse_command(accid, event)
+            
+            if event.command in ("/help", "/stats"):
+                try:
+                    chat = bot.rpc.get_chat(accid, event.msg.chat_id)
+                    is_group = getattr(chat, "chat_type", "Single") != "Single"
+                except Exception:
+                    is_group = False
+                
+                if is_group:
+                    try:
+                        contacts = bot.rpc.get_chat_contacts(accid, event.msg.chat_id)
+                        bot_count = 0
+                        for contact_id in contacts:
+                            if contact_id == 1:
+                                bot_count += 1
+                                continue
+                            c = bot.rpc.get_contact(accid, contact_id)
+                            if getattr(c, "is_bot", False):
+                                bot_count += 1
+                                if bot_count > 1:
+                                    break
+                        if bot_count > 1:
+                            event.command = ""
+                            event.payload = ""
+                    except Exception:
+                        pass
 
     bot._parse_command = custom_parse_command
 

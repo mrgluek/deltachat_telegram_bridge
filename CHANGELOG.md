@@ -1,4 +1,8 @@
 ## [2026-06-25]
+- **Bidirectional Suffix Matching**:
+  - Suffix matching is now bidirectional (e.g. `@tg` or `@tgbridge` will match TG Bridge bot, even with partial entries).
+- **Smart Group Chat Command Filtering**:
+  - The bot now automatically ignores unaddressed general `/help` and `/stats` commands in group chats if other bots are present in the chat.
 - **Target-Specific Command Suffixes**:
   - Added support for addressing this bot specifically in group chats using `/command@tg` or `/command@tgbridge` suffixes.
 - **Telegram Bot API Watchdog**:
