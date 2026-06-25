@@ -69,6 +69,13 @@ _TRANSIENT_POLLING_ERRORS = (
     "Unexpected exception reconnecting",
     "Automatic reconnection failed",
     "AttributeError: 'NoneType' object has no attribute 'connect'",
+    "ReadError",
+    "httpcore.ReadError",
+    "httpx.ReadError",
+    "RemoteProtocolError",
+    "ProxyError",
+    "NetworkError",
+    "Exception happened while polling for updates",
 )
 
 class PollingErrorFilter(logging.Filter):
