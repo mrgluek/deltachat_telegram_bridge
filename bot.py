@@ -5064,10 +5064,12 @@ async def sync_userbot_channels(force=False):
             try:
                 # 1. Try to get entity normally (via @username or numeric ID if seen before)
                 entity = None
+                orig_err = None
                 try:
                     entity = await userbot_client.get_entity(target)
                     await asyncio.sleep(0.5)  # avoid ResolveUsername flood
                 except Exception as e:
+                    orig_err = e
                     # 2. Fallback to invite link if available
                     if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                         logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
@@ -5079,7 +5081,7 @@ async def sync_userbot_channels(force=False):
                     
                 if not entity:
                     # Reraise original exception if both failed
-                    raise Exception(f"Could not resolve {target} (and no working invite link)")
+                    raise Exception(f"Could not resolve {target} (and no working invite link). Original error: {orig_err}")
                 
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")

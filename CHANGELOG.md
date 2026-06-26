@@ -2,6 +2,8 @@
 - **Userbot Sync Stabilization**:
   - Added a 10-second delay before auto-sync triggers after a new userbot account is detected, allowing the Telethon connection to fully stabilize after a reconnect (fixes `Could not resolve @username` errors caused by reconnects).
   - Added a 0.5-second delay between each `get_entity()` call in the sync loop to avoid `ResolveUsername` rate-limiting.
+  - Preserved the original Telethon exception when resolution fails to make debugging easier instead of swallowing it.
+
 
 ## [2026-06-25]
 - **Bidirectional Suffix Matching**:
