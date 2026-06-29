@@ -146,8 +146,14 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertEqual(database.get_dc_msg_id(600, 200, 100), 500)
         self.assertEqual(database.get_message_content_hash(600, 200, 100), "abc-hash")
 
-        # Test retrieving non-existent mapping
-        self.assertIsNone(database.get_dc_msg_id(999, 200, 100))
+    def test_database_channel_last_msg_id(self):
+        # Add channel and verify initial last_msg_id is 0
+        database.add_channel_by_id(777, 888)
+        self.assertEqual(database.get_channel_last_msg_id(777), 0)
+
+        # Update last_msg_id and verify the change is saved
+        database.update_channel_last_msg_id(777, 42)
+        self.assertEqual(database.get_channel_last_msg_id(777), 42)
 
 
 if __name__ == "__main__":

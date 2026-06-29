@@ -214,7 +214,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 
 
@@ -4119,6 +4119,12 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
         return
 
+    # De-duplication by sequential message ID
+    last_msg_id = database.get_channel_last_msg_id(tg_channel_id)
+    if last_msg_id > 0 and post.message_id <= last_msg_id:
+        logger.info(f"Bot API: Skipping already relayed/old post {post.message_id} in channel {tg_channel_id} (last_msg_id is {last_msg_id})")
+        return
+
     # Rate limit
     if _is_rate_limited(tg_channel_id):
         return
@@ -4225,6 +4231,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         if dc_msg_id:
             c_hash = _get_content_hash(post)
             database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=c_hash)
+            database.update_channel_last_msg_id(tg_channel_id, post.message_id)
         # Register in edit debounce so link-preview "edits" within 60s are suppressed
         _edit_timestamps[(tg_channel_id, post.message_id)] = time.time()
         
@@ -5236,6 +5243,10 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if sent_id:
             c_hash = _get_content_hash(msg)
             database.save_message_map(sent_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+            if not is_edit:
+                channel_dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+                if channel_dc_chat_id == dc_chat_id:
+                    database.update_channel_last_msg_id(tg_channel_id, msg.id)
         logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC chat {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay userbot message: {e}")
@@ -5370,6 +5381,13 @@ async def _process_userbot_event_internal(event, is_edit=False):
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
         return
+
+    # De-duplication by sequential message ID (skip for edits)
+    if not is_edit:
+        last_msg_id = database.get_channel_last_msg_id(tg_channel_id)
+        if last_msg_id > 0 and msg.id <= last_msg_id:
+            logger.info(f"USERBOT: Skipping already relayed/old post {msg.id} in channel {tg_channel_id} (last_msg_id is {last_msg_id})")
+            return
 
     # Content-based change detection (prevent ghost edits from reactions/views)
     new_hash = _get_content_hash(msg)

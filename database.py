@@ -68,7 +68,8 @@ def init_db():
                 invite_link TEXT,
                 reactions_count INTEGER DEFAULT 0,
                 created_at INTEGER DEFAULT (strftime('%s','now')),
-                created_by_tg_id INTEGER
+                created_by_tg_id INTEGER,
+                last_msg_id INTEGER DEFAULT 0
             )
         ''')
         # Migrate old channels table: allow NULL username and add UNIQUE on tg_channel_id
@@ -116,6 +117,13 @@ def init_db():
             col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
             if 'created_by_tg_id' not in col_names:
                 cursor.execute("ALTER TABLE channels ADD COLUMN created_by_tg_id INTEGER")
+        except Exception:
+            pass
+        # Migration: add last_msg_id to channels
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
+            if 'last_msg_id' not in col_names:
+                cursor.execute("ALTER TABLE channels ADD COLUMN last_msg_id INTEGER DEFAULT 0")
         except Exception:
             pass
         # Migration: add reactions_count to bridges
@@ -659,6 +667,26 @@ def get_channel_by_dc_chat_id(dc_chat_id: int) -> dict | None:
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
+
+
+def get_channel_last_msg_id(tg_channel_id: int) -> int:
+    """Get the message ID of the last post forwarded to Delta Chat for a channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_msg_id FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else 0
+
+def update_channel_last_msg_id(tg_channel_id: int, last_msg_id: int):
+    """Update the message ID of the last post forwarded to Delta Chat for a channel."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE channels SET last_msg_id = ? WHERE tg_channel_id = ?", (last_msg_id, tg_channel_id))
+        conn.commit()
+        conn.close()
 
 
 # ---------------------------------------------------------

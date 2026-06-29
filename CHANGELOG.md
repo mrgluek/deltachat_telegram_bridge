@@ -1,3 +1,11 @@
+## [2.6.0] - 2026-06-30
+- **Sequential Message ID Deduplication for Channels**:
+  - Added `last_msg_id` column to `channels` database table and automatic SQLite migration.
+  - Track the highest relayed Telegram message ID for each channel.
+  - Automatically discard incoming old/duplicate channel posts (both from Bot API and Userbot event polling) if their message ID is less than or equal to the last forwarded message ID.
+  - Exclude edits and history previews from deduplication checks to ensure updates and queries remain functional.
+  - Added database helper functions and unit tests verifying the deduplication state persistence.
+
 ## [2.5.0] - 2026-06-29
 - **Versioning, Unit Tests, and GitHub Actions CI**:
   - Added unit test suite in `tests/test_bridge.py` covering database operations, rate limits, and formatting/truncation helper functions.
