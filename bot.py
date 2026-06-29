@@ -213,6 +213,8 @@ dc_accid = None
 main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
+_is_starting_userbot = False
+
 
 # Global rate limiting for Delta Chat (e.g. chatmail limits)
 GLOBAL_DC_RATE_LIMIT = 60    # messages
@@ -300,15 +302,15 @@ async def _userbot_leave_chat(tg_chat_id: int):
 
     try:
         from telethon.tl.types import Channel, Chat
-        entity = await userbot_client.get_entity(tg_chat_id)
+        entity = await asyncio.wait_for(userbot_client.get_entity(tg_chat_id), timeout=15.0)
         if isinstance(entity, Channel):
-             await userbot_client(LeaveChannelRequest(entity))
+             await asyncio.wait_for(userbot_client(LeaveChannelRequest(entity)), timeout=15.0)
              logger.info(f"Userbot: Left Telegram channel/supergroup {tg_chat_id}")
         elif isinstance(entity, Chat):
              # For legacy small groups
-             me = await userbot_client.get_me()
+             me = await asyncio.wait_for(userbot_client.get_me(), timeout=15.0)
              from telethon.tl.functions.messages import DeleteChatUserRequest
-             await userbot_client(DeleteChatUserRequest(chat_id=entity.id, user_id=me.id))
+             await asyncio.wait_for(userbot_client(DeleteChatUserRequest(chat_id=entity.id, user_id=me.id)), timeout=15.0)
              logger.info(f"Userbot: Left Telegram group {tg_chat_id}")
     except Exception as e:
         logger.debug(f"Userbot: Could not leave chat {tg_chat_id} (maybe already left): {e}")
@@ -390,7 +392,7 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
         return None
     try:
         # Telethon get_messages can fetch by ID
-        msg = await userbot_client.get_messages(chat_id, ids=msg_id)
+        msg = await asyncio.wait_for(userbot_client.get_messages(chat_id, ids=msg_id), timeout=15.0)
         if not (msg and msg.media) or type(msg.media).__name__ == 'MessageMediaWebPage':
             return None
         
@@ -405,7 +407,7 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
         os.close(tmp_fd)
         logger.info(f"Userbot downloading media from {chat_id}:{msg_id} (size: {size // 1024 // 1024} MB)...")
         async with _get_download_semaphore():
-            path = await userbot_client.download_media(msg.media, file=tmp_path)
+            path = await asyncio.wait_for(userbot_client.download_media(msg.media, file=tmp_path), timeout=300.0)
         return path
 
     except Exception as e:
@@ -710,9 +712,9 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                 except Exception as tg_err:
                     logger.debug(f"Bot API failed for {target_tg}, trying userbot: {tg_err}")
                     if userbot_client and userbot_client.is_connected():
-                        entity = await userbot_client.get_entity(tg_channel_id)
+                        entity = await asyncio.wait_for(userbot_client.get_entity(tg_channel_id), timeout=15.0)
                         new_title = entity.title
-                        avatar_path = await userbot_client.download_profile_photo(tg_channel_id)
+                        avatar_path = await asyncio.wait_for(userbot_client.download_profile_photo(tg_channel_id), timeout=30.0)
                         
                         # Fetch and update subscriber count via Userbot
                         try:
@@ -722,9 +724,9 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                             
                             full = None
                             if isinstance(entity, Channel):
-                                full = await userbot_client(GetFullChannelRequest(entity))
+                                full = await asyncio.wait_for(userbot_client(GetFullChannelRequest(entity)), timeout=15.0)
                             elif isinstance(entity, Chat):
-                                full = await userbot_client(GetFullChatRequest(entity.id))
+                                full = await asyncio.wait_for(userbot_client(GetFullChatRequest(entity.id)), timeout=15.0)
                             
                             if full and hasattr(full, 'full_chat'):
                                 member_count = getattr(full.full_chat, 'participants_count', 0)
@@ -1868,19 +1870,19 @@ def dc_userbotjoin_command(bot, accid, event):
                     return
 
                 try:
-                    check = await userbot_client(CheckChatInviteRequest(invite_hash))
+                    check = await asyncio.wait_for(userbot_client(CheckChatInviteRequest(invite_hash)), timeout=15.0)
                     if hasattr(check, 'chat'):
                         joined_entity = check.chat
                         joined_title = getattr(joined_entity, 'title', 'Unknown')
                     else:
-                        result = await userbot_client(ImportChatInviteRequest(invite_hash))
+                        result = await asyncio.wait_for(userbot_client(ImportChatInviteRequest(invite_hash)), timeout=15.0)
                         if hasattr(result, 'chats') and result.chats:
                             joined_entity = result.chats[0]
                             joined_title = getattr(joined_entity, 'title', 'Unknown')
                 except Exception as e:
                     if "already" in str(e).lower() or "USER_ALREADY_PARTICIPANT" in str(e):
                         try:
-                            joined_entity = await userbot_client.get_entity(link)
+                            joined_entity = await asyncio.wait_for(userbot_client.get_entity(link), timeout=15.0)
                             joined_title = getattr(joined_entity, 'title', 'Unknown')
                         except Exception:
                             pass
@@ -1893,10 +1895,10 @@ def dc_userbotjoin_command(bot, accid, event):
                     if m:
                         target = f"@{m.group(1)}"
 
-                entity = await userbot_client.get_entity(target)
+                entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
                 if getattr(entity, 'left', True):
                     if JoinChannelRequest:
-                        await userbot_client(JoinChannelRequest(entity))
+                        await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
                 joined_entity = entity
                 joined_title = getattr(entity, 'title', 'Unknown')
 
@@ -2633,8 +2635,8 @@ async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int, info_text: str = "
 
     if not deleted and userbot_client and userbot_client.is_connected():
         try:
-            entity = await userbot_client.get_entity(tg_chat_id)
-            await userbot_client.delete_messages(entity, [tg_msg_id])
+            entity = await asyncio.wait_for(userbot_client.get_entity(tg_chat_id), timeout=15.0)
+            await asyncio.wait_for(userbot_client.delete_messages(entity, [tg_msg_id]), timeout=15.0)
             logger.info(f"DC→TG: Deleted TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot")
         except Exception as e:
             e_str = str(e).lower()
@@ -3379,12 +3381,12 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
             # Ensure we have an entity Telethon can work with
             ub_entity = None
             try:
-                ub_entity = await userbot_client.get_entity(ub_target)
+                ub_entity = await asyncio.wait_for(userbot_client.get_entity(ub_target), timeout=15.0)
             except Exception as e:
                 if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                     logger.debug(f"Could not resolve {ub_target} by ID, trying invite link: {e}")
                     try:
-                        ub_entity = await userbot_client.get_entity(invite_link)
+                        ub_entity = await asyncio.wait_for(userbot_client.get_entity(invite_link), timeout=15.0)
                     except Exception as e2:
                         logger.debug(f"Could not resolve via link either: {e2}")
                 else:
@@ -3443,11 +3445,11 @@ async def _relay_channel_history_to_chat(target_dc_chat_id: int, tg_channel_id: 
         else:
             ub_entity = None
             try:
-                ub_entity = await userbot_client.get_entity(ub_target)
+                ub_entity = await asyncio.wait_for(userbot_client.get_entity(ub_target), timeout=15.0)
             except Exception as e:
                 if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                     try:
-                        ub_entity = await userbot_client.get_entity(invite_link)
+                        ub_entity = await asyncio.wait_for(userbot_client.get_entity(invite_link), timeout=15.0)
                     except Exception as e2:
                         logger.debug(f"History preview: could not resolve entity: {e2}")
                 if not ub_entity:
@@ -3528,11 +3530,11 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             try:
                 # Use resolved username if available, fallback to original input
                 ub_arg = numeric_id if is_numeric else (resolved_username or username)
-                entity = await userbot_client.get_entity(ub_arg)
+                entity = await asyncio.wait_for(userbot_client.get_entity(ub_arg), timeout=15.0)
                 if getattr(entity, 'left', True):
                     if JoinChannelRequest:
                         logger.info(f"Userbot: Joining {channel_title or display_name} for history/relay...")
-                        await userbot_client(JoinChannelRequest(entity))
+                        await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
                 
                 # If Bot API failed, use Userbot info
                 if not bot_api_ok:
@@ -3566,7 +3568,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 try: os.unlink(avatar_path)
                 except: pass
             elif userbot_client:
-                photo = await userbot_client.download_profile_photo(tg_channel_id)
+                photo = await asyncio.wait_for(userbot_client.download_profile_photo(tg_channel_id), timeout=30.0)
                 if photo:
                     dc_bot_instance.rpc.set_chat_profile_image(dc_accid, dc_chat_id, photo)
                     try: os.unlink(photo)
@@ -3597,7 +3599,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             try:
                 # Use cached username or ID to resolve entity correctly
                 ub_target = resolved_username if resolved_username else tg_channel_id
-                ub_entity = await userbot_client.get_entity(ub_target)
+                ub_entity = await asyncio.wait_for(userbot_client.get_entity(ub_target), timeout=15.0)
                 await update_tg_channel_stats(row_id, ub_entity)
             except Exception as e:
                 logger.debug(f"Failed to sync immediate stats for {channel_title}: {e}")
@@ -3701,7 +3703,7 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
 
             # First check what we're joining
             try:
-                check = await userbot_client(CheckChatInviteRequest(invite_hash))
+                check = await asyncio.wait_for(userbot_client(CheckChatInviteRequest(invite_hash)), timeout=15.0)
                 if hasattr(check, 'chat'):
                     # Already a member
                     joined_entity = check.chat
@@ -3712,7 +3714,7 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
                     )
                 else:
                     # Not a member yet — join
-                    result = await userbot_client(ImportChatInviteRequest(invite_hash))
+                    result = await asyncio.wait_for(userbot_client(ImportChatInviteRequest(invite_hash)), timeout=15.0)
                     if hasattr(result, 'chats') and result.chats:
                         joined_entity = result.chats[0]
                         joined_title = getattr(joined_entity, 'title', 'Unknown')
@@ -3720,7 +3722,7 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
                 if "already" in str(e).lower() or "USER_ALREADY_PARTICIPANT" in str(e):
                     # Try to resolve via the link to get the entity
                     try:
-                        joined_entity = await userbot_client.get_entity(link)
+                        joined_entity = await asyncio.wait_for(userbot_client.get_entity(link), timeout=15.0)
                         joined_title = getattr(joined_entity, 'title', 'Unknown')
                     except Exception:
                         pass
@@ -3740,10 +3742,10 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
                 if m:
                     target = f"@{m.group(1)}"
 
-            entity = await userbot_client.get_entity(target)
+            entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
             if getattr(entity, 'left', True):
                 if JoinChannelRequest:
-                    await userbot_client(JoinChannelRequest(entity))
+                    await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
             joined_entity = entity
             joined_title = getattr(entity, 'title', 'Unknown')
 
@@ -5009,9 +5011,9 @@ async def update_tg_channel_stats(channel_id: int, tg_peer):
         username = getattr(tg_peer, 'username', None)
         
         if isinstance(tg_peer, Channel):
-             full = await userbot_client(GetFullChannelRequest(tg_peer))
+             full = await asyncio.wait_for(userbot_client(GetFullChannelRequest(tg_peer)), timeout=15.0)
         elif isinstance(tg_peer, Chat):
-             full = await userbot_client(GetFullChatRequest(tg_peer.id))
+             full = await asyncio.wait_for(userbot_client(GetFullChatRequest(tg_peer.id)), timeout=15.0)
         
         count = 0
         if full and hasattr(full, 'full_chat'):
@@ -5039,7 +5041,7 @@ async def sync_userbot_channels(force=False):
 
     _is_syncing_userbot = True
     try:
-        me = await userbot_client.get_me()
+        me = await asyncio.wait_for(userbot_client.get_me(), timeout=15.0)
         if not me:
             return
 
@@ -5066,7 +5068,7 @@ async def sync_userbot_channels(force=False):
                 entity = None
                 orig_err = None
                 try:
-                    entity = await userbot_client.get_entity(target)
+                    entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
                     await asyncio.sleep(0.5)  # avoid ResolveUsername flood
                 except Exception as e:
                     orig_err = e
@@ -5074,7 +5076,7 @@ async def sync_userbot_channels(force=False):
                     if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
                         logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
                         try:
-                            entity = await userbot_client.get_entity(invite_link)
+                            entity = await asyncio.wait_for(userbot_client.get_entity(invite_link), timeout=15.0)
                             await asyncio.sleep(0.5)  # avoid ResolveUsername flood
                         except Exception as e2:
                             logger.debug(f"Sync: Could not resolve via link either: {e2}")
@@ -5086,7 +5088,7 @@ async def sync_userbot_channels(force=False):
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
                     if JoinChannelRequest:
-                        await userbot_client(JoinChannelRequest(entity))
+                        await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
                         joined_count += 1
                         # Update stats after joining
                         chan_id = chan.get('id')
@@ -5189,7 +5191,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
                 os.close(tmp_fd)
                 async with _get_download_semaphore():
-                    file_path = await userbot_client.download_media(msg.media, file=file_path_tmp)
+                    file_path = await asyncio.wait_for(userbot_client.download_media(msg.media, file=file_path_tmp), timeout=300.0)
         except Exception as e:
             logger.error(f"Failed to download userbot media: {e}")
 
@@ -5201,7 +5203,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             if hasattr(msg, 'post_author') and msg.post_author:
                 display_author = msg.post_author
             else:
-                sender = await msg.get_sender()
+                sender = await asyncio.wait_for(msg.get_sender(), timeout=15.0)
                 if sender:
                     if hasattr(sender, 'first_name'):
                         display_author = f"{sender.first_name} {getattr(sender, 'last_name', '') or ''}".strip()
@@ -5380,13 +5382,19 @@ async def _process_userbot_event_internal(event, is_edit=False):
 
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""
-    global userbot_client, _userbot_tasks
+    global userbot_client, _userbot_tasks, _is_starting_userbot
     if not TelegramClient:
         return
     
+    if _is_starting_userbot:
+        logger.info("Userbot start/restart is already in progress, skipping.")
+        return
+
+    _is_starting_userbot = True
     api_id = database.get_config("api_id")
     api_hash = database.get_config("api_hash")
     if not (api_id and api_hash):
+        _is_starting_userbot = False
         return
 
     try:
@@ -5426,11 +5434,11 @@ async def start_userbot():
         async def on_deleted_userbot_msg(event):
             asyncio.create_task(_process_userbot_deletion(event))
 
-        await userbot_client.start()
+        await asyncio.wait_for(userbot_client.start(), timeout=60.0)
         logger.info("Telethon Userbot client started successfully.")
         
         # Auto-sync detection
-        me = await userbot_client.get_me()
+        me = await asyncio.wait_for(userbot_client.get_me(), timeout=15.0)
         if me:
             last_id = database.get_config("userbot_last_user_id")
             if last_id != str(me.id):
@@ -5443,6 +5451,8 @@ async def start_userbot():
     except Exception as e:
         logger.error(f"Failed to start Userbot client: {e}")
         userbot_client = None
+    finally:
+        _is_starting_userbot = False
 
 async def main():
     global tg_app, main_loop
@@ -5592,10 +5602,14 @@ async def main():
                     is_healthy = False
                     try:
                         # Improved health check: also ensure we can call an API method
-                        if userbot_client and userbot_client.is_connected() and await userbot_client.is_user_authorized():
-                            # Trigger a very cheap request to ensure connection is actually responding
-                            await userbot_client.get_me() 
-                            is_healthy = True
+                        async def check_health():
+                            if userbot_client and userbot_client.is_connected() and await userbot_client.is_user_authorized():
+                                # Trigger a very cheap request to ensure connection is actually responding
+                                await userbot_client.get_me() 
+                                return True
+                            return False
+                        
+                        is_healthy = await asyncio.wait_for(check_health(), timeout=15.0)
                     except (AttributeError, Exception) as e:
                         logger.warning(f"Userbot health check failed: {e}. Attempting restart...")
                     

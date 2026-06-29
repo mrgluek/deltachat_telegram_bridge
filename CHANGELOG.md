@@ -1,3 +1,11 @@
+## [2026-06-29]
+- **Robust Userbot watchdog and timeout protection**:
+  - Added a concurrency guard (`_is_starting_userbot`) to prevent overlapping userbot client startups.
+  - Wrapped `userbot_client.start()` in a 60-second timeout to handle socket/handshake hangs.
+  - Wrapped the watchdog's API health check in a 15-second timeout, preventing connection hangs from freezing the entire bridge's main loop.
+  - Applied `asyncio.wait_for` timeouts to all direct Telethon client calls (including `get_me`, `get_entity`, `get_messages`, `download_media`, `download_profile_photo`, `LeaveChannelRequest`, `JoinChannelRequest`, `CheckChatInviteRequest`, `ImportChatInviteRequest`, `DeleteChatUserRequest`, `GetFullChannelRequest`, and `GetFullChatRequest`) to ensure the bridge remains fully responsive and self-heals under MTProto security desync errors.
+
+
 ## [2026-06-25] (2)
 - **Userbot Sync Stabilization**:
   - Added a 10-second delay before auto-sync triggers after a new userbot account is detected, allowing the Telethon connection to fully stabilize after a reconnect (fixes `Could not resolve @username` errors caused by reconnects).
