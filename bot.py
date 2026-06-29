@@ -214,6 +214,8 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
+VERSION = "2.5.0"
+
 
 
 # Global rate limiting for Delta Chat (e.g. chatmail limits)
@@ -5457,6 +5459,8 @@ async def start_userbot():
 async def main():
     global tg_app, main_loop
 
+    logger.info(f"Initializing Telegram Bridge Bot v{VERSION}...")
+
     args = sys.argv[:]
     is_serve = "serve" in args
 
@@ -5587,7 +5591,7 @@ async def main():
     last_userbot_check = time.time()
     last_tg_bot_check = time.time()
     
-    logger.info("Bridge is now fully running. Waiting for events...")
+    logger.info(f"Bridge v{VERSION} is now fully running. Waiting for events...")
     try:
         while True:
             await asyncio.sleep(10)

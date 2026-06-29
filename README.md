@@ -423,6 +423,17 @@ Once the Userbot is configured and has joined the channel (via `/userbotjoin`):
 
 If a channel is bridged via both the core bot (as admin) and Userbot Mode, the bridge will automatically deduplicate messages, ensuring Delta Chat users receive only one copy of each post.
 
+## Development and Testing
+
+The repository contains a unit test suite covering database operations, rate limits, and helper logic. Since native Delta Chat C-libraries and account setups are mocked, the tests can be run locally in any standard Python environment.
+
+To run tests locally:
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Tests are also executed automatically via GitHub Actions on every push to the `master` branch.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
