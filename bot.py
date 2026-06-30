@@ -214,7 +214,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 
 
 
@@ -5065,35 +5065,42 @@ async def sync_userbot_channels(force=False):
             username = chan.get('tg_channel_username')
             invite_link = chan.get('invite_link')
             
-            # For a new account, we MUST use the @username if available, 
-            # because numeric IDs are not resolvable until the account "sees" the channel.
-            target = (f"@{username}" if username else None) or tg_id
-            
-            if not target:
-                continue
+            entity = None
+            orig_err = None
 
             try:
-                # 1. Try to get entity normally (via @username or numeric ID if seen before)
-                entity = None
-                orig_err = None
-                try:
-                    entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
-                    await asyncio.sleep(0.5)  # avoid ResolveUsername flood
-                except Exception as e:
-                    orig_err = e
-                    # 2. Fallback to invite link if available
-                    if invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
-                        logger.debug(f"Sync: Could not resolve {target} by ID, trying invite link: {e}")
-                        try:
-                            entity = await asyncio.wait_for(userbot_client.get_entity(invite_link), timeout=15.0)
-                            await asyncio.sleep(0.5)  # avoid ResolveUsername flood
-                        except Exception as e2:
-                            logger.debug(f"Sync: Could not resolve via link either: {e2}")
-                    
+                # 1. Try numeric ID first (uses local session cache if already seen, avoiding API rate limit)
+                if tg_id:
+                    try:
+                        entity = await asyncio.wait_for(userbot_client.get_entity(tg_id), timeout=15.0)
+                    except Exception as e:
+                        orig_err = e
+
+                # 2. Fallback to @username if numeric ID lookup failed or wasn't available
+                if not entity and username:
+                    try:
+                        target = f"@{username}"
+                        logger.debug(f"Sync: Resolving username {target}...")
+                        entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
+                        await asyncio.sleep(2.0)  # avoid ResolveUsername flood
+                    except Exception as e:
+                        if not orig_err:
+                            orig_err = e
+
+                # 3. Fallback to invite link if username resolution failed
+                if not entity and invite_link and ("t.me/" in invite_link or "telegram.me/" in invite_link):
+                    try:
+                        logger.debug(f"Sync: Trying invite link: {invite_link}")
+                        entity = await asyncio.wait_for(userbot_client.get_entity(invite_link), timeout=15.0)
+                        await asyncio.sleep(2.0)  # avoid ResolveUsername flood
+                    except Exception as e:
+                        logger.debug(f"Sync: Could not resolve via invite link: {e}")
+
                 if not entity:
-                    # Reraise original exception if both failed
-                    raise Exception(f"Could not resolve {target} (and no working invite link). Original error: {orig_err}")
-                
+                    target_desc = f"@{username}" if username else str(tg_id)
+                    raise Exception(f"Could not resolve {target_desc} (and no working invite link). Original error: {orig_err}")
+
+                target = f"@{username}" if username else str(tg_id)
                 if getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
                     if JoinChannelRequest:

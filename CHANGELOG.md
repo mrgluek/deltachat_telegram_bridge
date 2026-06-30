@@ -1,3 +1,9 @@
+## [2.6.1] - 2026-06-30
+- **Resolve Telegram Username Resolution API Flood limits**:
+  - Restructured the Userbot channel synchronization loop in `bot.py` to prioritize numeric ID lookups.
+  - Avoid redundant API calls (`ResolveUsernameRequest`) on Telegram servers for already joined/cached channels, preventing account rate limits (`FloodWaitError` / Connect limits).
+  - Added a larger (2.0s) delay between fallback username resolution attempts.
+
 ## [2.6.0] - 2026-06-30
 - **Sequential Message ID Deduplication for Channels**:
   - Added `last_msg_id` column to `channels` database table and automatic SQLite migration.
