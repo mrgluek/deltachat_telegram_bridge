@@ -1,3 +1,6 @@
+## [2.6.2] - 2026-07-03
+- **Zombie Process Reaping:** Enabled `init: true` in Docker Compose to automatically reap zombie processes in the bot container, preventing PID limit exhaustion.
+
 ## [2.6.1] - 2026-06-30
 - **Resolve Telegram Username Resolution API Flood limits**:
   - Restructured the Userbot channel synchronization loop in `bot.py` to prioritize numeric ID lookups.

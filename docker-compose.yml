@@ -4,6 +4,7 @@ services:
     build:
       context: .
     container_name: tg_dc_bridge
+    init: true
     restart: unless-stopped
     logging:
       driver: json-file
