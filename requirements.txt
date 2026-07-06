@@ -1,4 +1,4 @@
-deltabot-cli @ git+https://github.com/deltachat-bot/deltabot-cli-py.git
+deltabot-cli==8.1.2
 deltachat2[full]<1.0.0
 python-telegram-bot==22.7
 qrcode==7.4.2
