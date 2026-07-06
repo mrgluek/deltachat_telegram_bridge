@@ -1,3 +1,6 @@
+## [2.6.4] - 2026-07-06
+- **Fix Dependency Conflict/NameError:** Pinned `deltachat2[full]>=1.0.3` to avoid NameError bug on `ChatType` in intermediate/broken `deltachat2` package versions.
+
 ## [2.6.3] - 2026-07-06
 - **Fix Userbot Zombie Reconnect Hangs**:
   - Modified the watchdog health check in `bot.py` to trigger a real, non-cached updates state request (`GetStateRequest`) instead of using cached `get_me()`.
