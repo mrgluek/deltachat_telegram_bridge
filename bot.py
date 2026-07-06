@@ -214,7 +214,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.6.1"
+VERSION = "2.6.3"
 
 
 
@@ -5633,8 +5633,9 @@ async def main():
                         # Improved health check: also ensure we can call an API method
                         async def check_health():
                             if userbot_client and userbot_client.is_connected() and await userbot_client.is_user_authorized():
-                                # Trigger a very cheap request to ensure connection is actually responding
-                                await userbot_client.get_me() 
+                                # Trigger a real updates state request to ensure connection is actually responding and not cached
+                                from telethon.tl.functions.updates import GetStateRequest
+                                await userbot_client(GetStateRequest())
                                 return True
                             return False
                         

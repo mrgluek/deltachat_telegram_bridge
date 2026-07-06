@@ -1,3 +1,8 @@
+## [2.6.3] - 2026-07-06
+- **Fix Userbot Zombie Reconnect Hangs**:
+  - Modified the watchdog health check in `bot.py` to trigger a real, non-cached updates state request (`GetStateRequest`) instead of using cached `get_me()`.
+  - This ensures that if the Telethon client is in a zombie state (connected to `None` or has a destroyed sender task loop), the API call will time out, allowing the watchdog to correctly detect the unhealthy status and restart the client.
+
 ## [2.6.2] - 2026-07-03
 - **Zombie Process Reaping:** Enabled `init: true` in Docker Compose to automatically reap zombie processes in the bot container, preventing PID limit exhaustion.
 
