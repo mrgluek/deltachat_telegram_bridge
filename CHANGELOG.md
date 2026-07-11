@@ -1,3 +1,9 @@
+## [2.6.5] - 2026-07-11
+- **Fix Userbot Session DB Lock Leak and Silence Forbidden/BadRequest Telegram Errors**:
+  - Explicitly close the SQLite session database connection via `session.close()` and trigger Python garbage collection (`gc.collect()`) when disconnecting or restarting the Telethon client, preventing loop hangs from causing persistent `database is locked` error loops.
+  - Downgraded `telegram.error.Forbidden` (e.g., bot blocked by user) and `telegram.error.BadRequest` exceptions in `tg_error_handler` from `logger.error` to `logger.warning` to stop unnecessary email alert spam.
+  - Logged userbot client startup failures as warning instead of error since they are safely retried by the watchdog.
+
 ## [2.6.4] - 2026-07-06
 - **Fix Dependency Conflict/NameError:** Pinned `deltabot-cli==8.1.2` and `deltachat2[full]<1.0.0` in `requirements.txt` to resolve dependency conflicts and avoid the `ChatType` NameError/ImportError bugs introduced in newer, incompatible versions of `deltachat2`.
 

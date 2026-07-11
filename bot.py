@@ -214,7 +214,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.6.3"
+VERSION = "2.6.5"
 
 
 
@@ -4958,7 +4958,7 @@ async def tg_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -
     exc_type = type(exc).__name__
 
     # Handle group -> supergroup migration errors
-    from telegram.error import ChatMigrated
+    from telegram.error import ChatMigrated, Forbidden, BadRequest
     if isinstance(exc, ChatMigrated):
         new_id = exc.new_chat_id
         old_id = None
@@ -4969,6 +4969,14 @@ async def tg_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -
             database.update_bridge_tg_chat_id(old_id, new_id)
         else:
             logger.warning(f"ChatMigrated error but could not determine old chat ID: {exc_str}")
+        return
+
+    # Silence normal API response errors like blocked by user or message not modified
+    if isinstance(exc, Forbidden):
+        logger.warning(f"Telegram Bot Forbidden action (e.g. blocked by user): {exc_str}")
+        return
+    if isinstance(exc, BadRequest):
+        logger.warning(f"Telegram Bot BadRequest (e.g. message already modified/deleted): {exc_str}")
         return
 
     # Common network/timeout errors that we handle via retries or just want to log less noisily
@@ -5439,12 +5447,27 @@ async def start_userbot():
         # 2. Disconnect existing client
         if userbot_client:
             try:
+                session = getattr(userbot_client, 'session', None)
                 # Use a timeout to ensure we don't hang during shutdown
                 await asyncio.wait_for(userbot_client.disconnect(), timeout=10)
+                if session and hasattr(session, 'close'):
+                    session.close()
             except Exception as e:
                 logger.warning(f"Error disconnecting old Userbot client: {e}")
+                # Force close the SQLite session database connection if it exists
+                session = getattr(userbot_client, 'session', None)
+                if session and hasattr(session, 'close'):
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
             finally:
                 userbot_client = None
+
+        # Force garbage collection to clean up any unreferenced client/connection tasks
+        import gc
+        gc.collect()
+        await asyncio.sleep(1.0)
         
         logger.info("Initializing new Telethon Userbot client...")
         userbot_client = TelegramClient(USERBOT_SESSION_PATH, int(api_id), api_hash, sequential_updates=False)
@@ -5476,7 +5499,15 @@ async def start_userbot():
                     await sync_userbot_channels()
                 asyncio.create_task(_delayed_sync())
     except Exception as e:
-        logger.error(f"Failed to start Userbot client: {e}")
+        logger.warning(f"Failed to start Userbot client: {e}")
+        # Explicitly close the new client's session to release the lock!
+        if userbot_client:
+            session = getattr(userbot_client, 'session', None)
+            if session and hasattr(session, 'close'):
+                try:
+                    session.close()
+                except Exception:
+                    pass
         userbot_client = None
     finally:
         _is_starting_userbot = False
