@@ -52,6 +52,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Global tracker for Userbot background tasks
 _userbot_tasks: set[asyncio.Task] = set()
+_channel_queues: dict[int, asyncio.Queue] = {}
+_channel_workers: dict[int, asyncio.Task] = {}
 
 # Transient network error patterns that should be suppressed/downgraded during polling.
 # These are expected during brief connectivity interruptions and resolve automatically.
@@ -214,7 +216,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.6.5"
+VERSION = "2.7.0"
 
 
 
@@ -5272,7 +5274,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             except Exception:
                 pass
 
-async def _process_userbot_deletion(event):
+async def _process_userbot_deletion_internal(event):
     """Handle Telethon MessageDeleted events and sync deletions to Delta Chat."""
     global dc_bot_instance, dc_accid
 
@@ -5321,20 +5323,60 @@ async def _process_userbot_deletion(event):
                 logger.warning(f"TG→DC: Could not delete DC msg {dc_msg_id}: {e}")
 
 
-async def _process_userbot_event(event, is_edit=False):
-    """Common logic for userbot new and edited posts."""
-    global dc_bot_instance, dc_accid, _userbot_tasks
+async def _queue_userbot_event(tg_channel_id: int, event_type: str, event_data: any):
+    """Queue a channel event to process it sequentially."""
+    global _channel_queues, _channel_workers
+    if tg_channel_id not in _channel_queues:
+        _channel_queues[tg_channel_id] = asyncio.Queue()
     
-    # Track this task to allow cancellation on restart
-    current_task = asyncio.current_task()
-    if current_task:
-        _userbot_tasks.add(current_task)
-    
+    if tg_channel_id not in _channel_workers or _channel_workers[tg_channel_id].done():
+        worker_task = asyncio.create_task(_channel_queue_worker(tg_channel_id))
+        _channel_workers[tg_channel_id] = worker_task
+        
+    await _channel_queues[tg_channel_id].put((event_type, event_data))
+
+
+async def _channel_queue_worker(tg_channel_id: int):
+    """Worker task that processes a single channel's events sequentially."""
+    global _channel_queues, _userbot_tasks
+    queue = _channel_queues.get(tg_channel_id)
+    if not queue:
+        return
     try:
-        await _process_userbot_event_internal(event, is_edit)
-    finally:
-        if current_task:
-            _userbot_tasks.discard(current_task)
+        while True:
+            event_type, event_data = await queue.get()
+            current_task = asyncio.current_task()
+            if current_task:
+                _userbot_tasks.add(current_task)
+            try:
+                if event_type == 'new':
+                    await _process_userbot_event_internal(event_data, is_edit=False)
+                elif event_type == 'edit':
+                    await _process_userbot_event_internal(event_data, is_edit=True)
+                elif event_type == 'delete':
+                    await _process_userbot_deletion_internal(event_data)
+            except Exception as e:
+                logger.error(f"Error processing queued event for channel {tg_channel_id}: {e}")
+            finally:
+                if current_task:
+                    _userbot_tasks.discard(current_task)
+                queue.task_done()
+    except asyncio.CancelledError:
+        pass
+
+
+async def _process_userbot_deletion(event):
+    """Handle Telethon MessageDeleted events and sync deletions to Delta Chat (queues events)."""
+    chat_id = getattr(event, 'chat_id', None)
+    if chat_id:
+        await _queue_userbot_event(chat_id, 'delete', event)
+
+
+async def _process_userbot_event(event, is_edit=False):
+    """Common logic for userbot new and edited posts (queues events per channel)."""
+    chat_id = getattr(event, 'chat_id', None)
+    if chat_id:
+        await _queue_userbot_event(chat_id, 'edit' if is_edit else 'new', event)
 
 async def _process_userbot_event_internal(event, is_edit=False):
     """Internal logic for userbot events."""
@@ -5417,7 +5459,7 @@ async def _process_userbot_event_internal(event, is_edit=False):
 
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""
-    global userbot_client, _userbot_tasks, _is_starting_userbot
+    global userbot_client, _userbot_tasks, _is_starting_userbot, _channel_workers, _channel_queues
     if not TelegramClient:
         return
     
@@ -5433,7 +5475,16 @@ async def start_userbot():
         return
 
     try:
-        # 1. Stop and clear all pending tasks from the old client
+        # 1. Stop and clear all pending tasks and queues from the old client
+        if _channel_workers:
+            logger.info(f"Cancelling {len(_channel_workers)} active channel queue worker tasks...")
+            for task in _channel_workers.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*_channel_workers.values(), return_exceptions=True)
+            _channel_workers.clear()
+            _channel_queues.clear()
+
         if _userbot_tasks:
             logger.info(f"Cancelling {len(_userbot_tasks)} pending Userbot tasks during restart...")
             for task in _userbot_tasks:

@@ -1,3 +1,9 @@
+## [2.7.0] - 2026-07-11
+- **Sequential Channel Event Queuing (Perfect Order Delivery)**:
+  - Implemented per-channel event queues (`_channel_queues`) and sequential background workers (`_channel_queue_worker`) in `bot.py` for processing new messages, edits, and deletions.
+  - This ensures that posts from each channel are processed and delivered to Delta Chat in the exact chronological order they occurred in Telegram (e.g. text-only posts are no longer sent before media-heavy posts that take longer to download).
+  - Queue worker tasks are correctly tracked and cancelled during userbot client restarts to prevent memory leaks and zombie processes.
+
 ## [2.6.5] - 2026-07-11
 - **Fix Userbot Session DB Lock Leak and Silence Forbidden/BadRequest Telegram Errors**:
   - Explicitly close the SQLite session database connection via `session.close()` and trigger Python garbage collection (`gc.collect()`) when disconnecting or restarting the Telethon client, preventing loop hangs from causing persistent `database is locked` error loops.
