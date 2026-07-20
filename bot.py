@@ -5357,6 +5357,21 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     tg_channel_id = msg.chat_id
     text = msg.text or ""
     
+    # Extract webpage preview text if actual message text is empty
+    if not text and msg.media and type(msg.media).__name__ == 'MessageMediaWebPage':
+        webpage = msg.media.webpage
+        if webpage and type(webpage).__name__ != 'WebPageEmpty':
+            parts = []
+            if getattr(webpage, 'site_name', None):
+                parts.append(f"🌐 **{webpage.site_name}**")
+            if getattr(webpage, 'title', None):
+                parts.append(f"**{webpage.title}**" if not getattr(webpage, 'site_name', None) else webpage.title)
+            if getattr(webpage, 'description', None):
+                parts.append(webpage.description)
+            if getattr(webpage, 'url', None):
+                parts.append(webpage.url)
+            text = "\n\n".join(parts)
+
     # Filter out commands in Userbot mode
     if text.startswith('/') and not msg.media:
         return
@@ -5376,18 +5391,27 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
 
     # Note: downloading media with Telethon if needed
     file_path = None
-    if msg.media and type(msg.media).__name__ != 'MessageMediaWebPage':
+    media_to_download = None
+    if msg.media:
+        if type(msg.media).__name__ != 'MessageMediaWebPage':
+            media_to_download = msg.media
+        else:
+            webpage = msg.media.webpage
+            if webpage and type(webpage).__name__ != 'WebPageEmpty' and getattr(webpage, 'photo', None):
+                media_to_download = webpage.photo
+
+    if media_to_download:
         try:
             media_size = _get_media_size(msg)
             if media_size > MAX_ATTACHMENT_SIZE:
                 logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB")
                 formatted_msg += f"\n\n[Media is too large to be forwarded (limit {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB)]"
             else:
-                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ""
+                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg"
                 tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
                 os.close(tmp_fd)
                 async with _get_download_semaphore():
-                    file_path = await asyncio.wait_for(userbot_client.download_media(msg.media, file=file_path_tmp), timeout=300.0)
+                    file_path = await asyncio.wait_for(userbot_client.download_media(media_to_download, file=file_path_tmp), timeout=300.0)
         except Exception as e:
             logger.error(f"Failed to download userbot media: {e}")
 

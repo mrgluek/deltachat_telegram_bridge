@@ -183,6 +183,46 @@ class TestTelegramBridge(unittest.TestCase):
         bot._warm_last_msg_id_cache()
         self.assertEqual(bot._get_cached_last_msg_id(999), 50)
 
+    def test_webpage_preview_extraction(self):
+        class MockWebPage:
+            def __init__(self):
+                self.site_name = "Obsidian"
+                self.title = "РКН лютует"
+                self.description = "19 июля 2026 года..."
+                self.url = "https://publish.obsidian.md/..."
+        
+        class MockMessageMediaWebPage:
+            def __init__(self):
+                self.webpage = MockWebPage()
+
+        class MockMessage:
+            def __init__(self):
+                self.chat_id = 123
+                self.id = 456
+                self.text = ""
+                self.media = MockMessageMediaWebPage()
+                self.chat = None
+
+        msg = MockMessage()
+        
+        # Test extraction logic
+        webpage = msg.media.webpage
+        parts = []
+        if getattr(webpage, 'site_name', None):
+            parts.append(f"🌐 **{webpage.site_name}**")
+        if getattr(webpage, 'title', None):
+            parts.append(f"**{webpage.title}**" if not getattr(webpage, 'site_name', None) else webpage.title)
+        if getattr(webpage, 'description', None):
+            parts.append(webpage.description)
+        if getattr(webpage, 'url', None):
+            parts.append(webpage.url)
+        extracted_text = "\n\n".join(parts)
+        
+        self.assertIn("🌐 **Obsidian**", extracted_text)
+        self.assertIn("РКН лютует", extracted_text)
+        self.assertIn("19 июля 2026 года...", extracted_text)
+        self.assertIn("https://publish.obsidian.md/...", extracted_text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,10 @@
   - The status report displays active Telegram Bot API status, Userbot connection details, Delta Chat primary account settings, active message queue worker states, and recent activity stats (last 5 transfers with relative time formats).
   - Displays each bridged channel's last post number and direct link (e.g. `https://t.me/channel/27`) for easy monitoring.
 
+- **Fix for Hidden-Link/Webpage-Only Posts**:
+  - Implemented automatic title, description, and link extraction from webpage previews (`MessageMediaWebPage`) when the message text is empty (useful for native articles and hidden link posts in channels).
+  - Automatically downloads and relays the webpage preview photo to Delta Chat to match the Telegram visual layout.
+
 ## [2.7.0] - 2026-07-11
 - **Sequential Channel Event Queuing (Perfect Order Delivery)**:
   - Implemented per-channel event queues (`_channel_queues`) and sequential background workers (`_channel_queue_worker`) in `bot.py` for processing new messages, edits, and deletions.
