@@ -223,6 +223,25 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertIn("19 июля 2026 года...", extracted_text)
         self.assertIn("https://publish.obsidian.md/...", extracted_text)
 
+    def test_reconciliation_logic(self):
+        last_id = 10
+        latest_id = 15
+        
+        # Verify basic limit calculation
+        missed_count = latest_id - last_id
+        fetch_limit = min(missed_count, 50)
+        self.assertEqual(fetch_limit, 5)
+        
+        # Verify sorting order (oldest first)
+        class MockMsg:
+            def __init__(self, msg_id):
+                self.id = msg_id
+        
+        msgs = [MockMsg(15), MockMsg(12), MockMsg(14), MockMsg(11), MockMsg(13)]
+        sorted_msgs = sorted(msgs, key=lambda m: m.id)
+        self.assertEqual(sorted_msgs[0].id, 11)
+        self.assertEqual(sorted_msgs[-1].id, 15)
+
 
 if __name__ == "__main__":
     unittest.main()

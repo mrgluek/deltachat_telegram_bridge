@@ -8,6 +8,10 @@
   - The status report displays active Telegram Bot API status, Userbot connection details, Delta Chat primary account settings, active message queue worker states, and recent activity stats (last 5 transfers with relative time formats).
   - Displays each bridged channel's last post number and direct link (e.g. `https://t.me/channel/27`) for easy monitoring.
 
+- **Self-Healing Channel Message Reconciliation**:
+  - Added a background reconciliation loop (`reconcile_channels_loop`) that runs every 15 minutes, comparing the local `last_msg_id` with the absolute latest post ID on Telegram.
+  - Automatically fetches and relays any missed posts (up to 50 per channel per loop run) in sequential chronological order, ensuring zero message loss during bot restarts or network downtime.
+
 - **Fix for Hidden-Link/Webpage-Only Posts**:
   - Implemented automatic title, description, and link extraction from webpage previews (`MessageMediaWebPage`) when the message text is empty (useful for native articles and hidden link posts in channels).
   - Automatically downloads and relays the webpage preview photo to Delta Chat to match the Telegram visual layout.

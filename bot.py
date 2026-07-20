@@ -5180,6 +5180,61 @@ async def db_cleanup_loop():
             logger.error(f"Cleanup error: {e}")
             await asyncio.sleep(60)
 
+
+async def reconcile_channels_loop():
+    """Periodically check all bridged channels for any missed messages."""
+    await asyncio.sleep(60)  # Wait 60 seconds on startup
+    while True:
+        try:
+            if userbot_client and userbot_client.is_connected():
+                channels = database.get_all_channels()
+                for chan in channels:
+                    tg_id = chan.get('tg_channel_id')
+                    dc_chat_id = chan.get('dc_chat_id')
+                    if not tg_id or not dc_chat_id:
+                        continue
+                    
+                    last_id = _get_cached_last_msg_id(tg_id)
+                    if last_id <= 0:
+                        continue
+
+                    try:
+                        entity = await asyncio.wait_for(userbot_client.get_entity(tg_id), timeout=5.0)
+                        history = await asyncio.wait_for(userbot_client.get_messages(entity, limit=1), timeout=10.0)
+                        if history:
+                            latest_msg = history[0]
+                            latest_id = latest_msg.id
+                            if latest_id > last_id:
+                                missed_count = latest_id - last_id
+                                fetch_limit = min(missed_count, 50)
+                                logger.info(f"Reconciliation: Channel {tg_id} missed {missed_count} messages. Fetching last {fetch_limit}.")
+                                
+                                missed_msgs = await asyncio.wait_for(
+                                    userbot_client.get_messages(entity, min_id=last_id, limit=fetch_limit),
+                                    timeout=15.0
+                                )
+                                if missed_msgs:
+                                    # Process oldest first
+                                    for msg in sorted(missed_msgs, key=lambda m: m.id):
+                                        # Queue sequential event
+                                        class MockEvent:
+                                            def __init__(self, message):
+                                                self.message = message
+                                                self.chat_id = tg_id
+                                        
+                                        await _queue_userbot_event(tg_id, 'new', MockEvent(msg))
+                    except Exception as e:
+                        logger.warning(f"Reconciliation failed for channel {tg_id}: {e}")
+                    
+                    # Small delay between channels to avoid rate limits
+                    await asyncio.sleep(2.0)
+            
+            # Sleep 15 minutes before checking again
+            await asyncio.sleep(900)
+        except Exception as e:
+            logger.error(f"Reconciliation loop error: {e}")
+            await asyncio.sleep(60)
+
 # ---------------------------------------------------------
 # TELETHON USERBOT HANDLERS
 # ---------------------------------------------------------
@@ -5898,6 +5953,7 @@ async def main():
 
     # Start DB cleanup loop
     asyncio.create_task(db_cleanup_loop())
+    asyncio.create_task(reconcile_channels_loop())
 
     # Start Userbot if configured
     await start_userbot()
