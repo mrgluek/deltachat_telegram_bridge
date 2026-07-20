@@ -155,6 +155,34 @@ class TestTelegramBridge(unittest.TestCase):
         database.update_channel_last_msg_id(777, 42)
         self.assertEqual(database.get_channel_last_msg_id(777), 42)
 
+    def test_database_get_recent_message_maps(self):
+        # Insert a few maps
+        database.save_message_map(501, 100, 601, 200, "hash1")
+        database.save_message_map(502, 100, 602, 200, "hash2")
+        
+        recent = database.get_recent_message_maps(limit=5)
+        self.assertTrue(len(recent) >= 2)
+        # Check order (most recent first)
+        self.assertEqual(recent[0]['dc_msg_id'], 502)
+        self.assertEqual(recent[1]['dc_msg_id'], 501)
+
+    def test_cached_last_msg_id(self):
+        # Setup channel
+        database.add_channel_by_id(999, 888)
+        
+        # Verify initial
+        self.assertEqual(bot._get_cached_last_msg_id(999), 0)
+        
+        # Update cache
+        bot._update_cached_last_msg_id(999, 50)
+        self.assertEqual(bot._get_cached_last_msg_id(999), 50)
+        self.assertEqual(database.get_channel_last_msg_id(999), 50)
+        
+        # Test warm function
+        bot._last_msg_id_cache.clear()
+        bot._warm_last_msg_id_cache()
+        self.assertEqual(bot._get_cached_last_msg_id(999), 50)
+
 
 if __name__ == "__main__":
     unittest.main()

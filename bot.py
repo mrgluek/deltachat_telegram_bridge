@@ -216,7 +216,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 
 
@@ -279,6 +279,47 @@ _history_cooldowns: dict[int, float] = {}
 # Cache for channel history messages (per DC chat_id)
 # Stores: {dc_chat_id: {"timestamp": float, "messages": list[TelethonMessage]}}
 _history_cache: dict[int, dict] = {}
+
+# Cache for channel last message IDs
+_last_msg_id_cache: dict[int, int] = {}
+_last_msg_id_cache_lock = threading.Lock()
+
+def _get_cached_last_msg_id(tg_channel_id: int) -> int:
+    """Get last relayed post ID from cache, falling back to database."""
+    with _last_msg_id_cache_lock:
+        if tg_channel_id in _last_msg_id_cache:
+            return _last_msg_id_cache[tg_channel_id]
+    
+    # Fallback to database
+    val = database.get_channel_last_msg_id(tg_channel_id)
+    
+    with _last_msg_id_cache_lock:
+        _last_msg_id_cache[tg_channel_id] = val
+    return val
+
+def _update_cached_last_msg_id(tg_channel_id: int, msg_id: int):
+    """Update last relayed post ID in memory cache and database."""
+    with _last_msg_id_cache_lock:
+        current = _last_msg_id_cache.get(tg_channel_id, 0)
+        if msg_id > current:
+            _last_msg_id_cache[tg_channel_id] = msg_id
+    
+    database.update_channel_last_msg_id(tg_channel_id, msg_id)
+
+def _warm_last_msg_id_cache():
+    """Load all channels and populate the last_msg_id cache."""
+    try:
+        channels = database.get_all_channels()
+        with _last_msg_id_cache_lock:
+            for ch in channels:
+                tg_id = ch.get('tg_channel_id')
+                last_msg_id = ch.get('last_msg_id', 0) or 0
+                if tg_id:
+                    _last_msg_id_cache[tg_id] = last_msg_id
+    except Exception as e:
+        logger.error(f"Error warming last_msg_id cache: {e}")
+
+_warm_last_msg_id_cache()
 
 # Deletion sync safety: max deletions per window to avoid accidental bulk-delete
 DELETE_SYNC_MAX = 10          # max messages to auto-delete
@@ -1158,6 +1199,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
             f"/userbotsync — Force Userbot re-sync\n"
+            f"/status — Show detailed bot and userbot status\n"
             f"/transports — Show configured mail relays & stats\n"
             f"/addtransport — Add a backup mail relay\n"
             f"/rmtransport <addr> — Remove a mail relay\n"
@@ -1198,6 +1240,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/channelqr N — Get channel QR invite")
         lines.append(f"/channelremove N — Remove a channel bridge")
         lines.append(f"/userbotsync — Force Userbot re-sync")
+        lines.append(f"/status — Show detailed bot and userbot status")
         
         lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
         lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
@@ -1953,6 +1996,173 @@ def dc_userbotjoin_command(bot, accid, event):
         asyncio.run_coroutine_threadsafe(do_join(), main_loop)
     else:
         logger.error("Main loop not found, cannot run userbotjoin")
+
+
+def _format_relative_time(timestamp: int) -> str:
+    if not timestamp:
+        return "unknown time"
+    diff = int(time.time() - timestamp)
+    if diff < 0:
+        return "just now"
+    if diff < 10:
+        return "just now"
+    elif diff < 60:
+        return f"{diff}s ago"
+    elif diff < 3600:
+        return f"{diff // 60}m ago"
+    elif diff < 86400:
+        return f"{diff // 3600}h ago"
+    else:
+        return f"{diff // 86400}d ago"
+
+
+async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
+    # 1. Telegram Bot API
+    tg_bot_status = "🔴 Off"
+    if tg_app:
+        try:
+            bot_me = await tg_app.bot.get_me()
+            tg_bot_status = f"🟢 Connected (as @{bot_me.username})"
+        except Exception as e:
+            tg_bot_status = f"🟡 Connected (error fetching info: {e})"
+    
+    # 2. Userbot Status
+    ub_status = "🔴 Disconnected"
+    if userbot_client:
+        if userbot_client.is_connected():
+            try:
+                ub_me = await asyncio.wait_for(userbot_client.get_me(), timeout=3.0)
+                ub_username = getattr(ub_me, 'username', None)
+                ub_name = f"@{ub_username}" if ub_username else f"ID {ub_me.id}"
+                ub_status = f"🟢 Connected (as {ub_name})"
+            except Exception as e:
+                ub_status = f"🟢 Connected (error fetching info: {e})"
+        else:
+            ub_status = "🔴 Disconnected (client exists)"
+    
+    # 3. Delta Chat Status
+    dc_status = "🔴 Not initialized"
+    dc_addr = "Unknown"
+    if bot_ref and accid:
+        try:
+            dc_addr = bot_ref.rpc.get_config(accid, "configured_addr") or bot_ref.rpc.get_config(accid, "addr") or "Unknown"
+            dc_status = f"🟢 Connected (as {dc_addr})"
+        except Exception as e:
+            dc_status = f"🟡 Connected (error: {e})"
+    elif dc_bot_instance and dc_accid:
+        try:
+            dc_addr = dc_bot_instance.rpc.get_config(dc_accid, "configured_addr") or dc_bot_instance.rpc.get_config(dc_accid, "addr") or "Unknown"
+            dc_status = f"🟢 Connected (as {dc_addr})"
+        except Exception:
+            pass
+
+    # 4. Global Rate Limit & Message Queue Workers
+    active_workers = len([w for w, task in _channel_workers.items() if not task.done()])
+    queue_lines = []
+    for cid, q in _channel_queues.items():
+        qsize = q.qsize()
+        if qsize > 0:
+            ch_data = database.get_channel_by_tg_id(cid)
+            ch_name = ch_data.get('tg_channel_username') if ch_data else None
+            ch_name = f"@{ch_name}" if ch_name else f"ID {cid}"
+            queue_lines.append(f"  • {ch_name}: {qsize} pending")
+    
+    queue_status = "All workers idle"
+    if active_workers > 0 or queue_lines:
+        queue_status = f"{active_workers} active workers"
+        if queue_lines:
+            queue_status += "\n" + "\n".join(queue_lines)
+
+    # 5. Channel status
+    channels = database.get_all_channels()
+    chan_lines = []
+    for ch in channels:
+        ch_id = ch['tg_channel_id']
+        username = ch.get('tg_channel_username')
+        # Look up cached or database last_msg_id
+        last_id = _get_cached_last_msg_id(ch_id)
+        
+        # Link construction
+        if username:
+            link = f"https://t.me/{username}/{last_id}" if last_id > 0 else f"https://t.me/{username}"
+            display_name = f"@{username}"
+        else:
+            clean_id = str(ch_id)
+            if clean_id.startswith("-100"):
+                clean_id = clean_id[4:]
+            elif clean_id.startswith("-"):
+                clean_id = clean_id[1:]
+            link = f"https://t.me/c/{clean_id}/{last_id}" if last_id > 0 else f"https://t.me/c/{clean_id}"
+            display_name = f"ID {ch_id}"
+        
+        if is_html:
+            chan_lines.append(f"• <a href='{link}'>{display_name}</a> (Last post: #{last_id if last_id > 0 else 'None'})")
+        else:
+            chan_lines.append(f"• {display_name} [Post #{last_id if last_id > 0 else 'None'}]({link})")
+            
+    # 6. Recent activity
+    recent_maps = database.get_recent_message_maps(5)
+    activity_lines = []
+    for r in recent_maps:
+        username = r.get('tg_channel_username')
+        ch_display = f"@{username}" if username else f"ID {r['tg_chat_id']}"
+        t_str = _format_relative_time(r['created_at']) if r.get('created_at') else "unknown time"
+        
+        if is_html:
+            activity_lines.append(f"• TG msg <code>{r['tg_msg_id']}</code> in {ch_display} ➔ DC msg <code>{r['dc_msg_id']}</code> ({t_str})")
+        else:
+            activity_lines.append(f"• TG msg `{r['tg_msg_id']}` in {ch_display} ➔ DC msg `{r['dc_msg_id']}` ({t_str})")
+
+    # Format output
+    if is_html:
+        report = (
+            "🤖 <b>Telegram Bridge Bot Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"🔌 <b>Bot API:</b> {tg_bot_status}\n"
+            f"👤 <b>Userbot:</b> {ub_status}\n"
+            f"📧 <b>Delta Chat:</b> {dc_status}\n\n"
+            f"📊 <b>Queue Workers:</b>\n{queue_status}\n\n"
+            f"📡 <b>Channels ({len(channels)}):</b>\n" + ("\n".join(chan_lines) if chan_lines else "None") + "\n\n"
+            f"📝 <b>Recent Activity:</b>\n" + ("\n".join(activity_lines) if activity_lines else "None")
+        )
+    else:
+        report = (
+            "🤖 **Telegram Bridge Bot Status**\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"🔌 **Bot API:** {tg_bot_status}\n"
+            f"👤 **Userbot:** {ub_status}\n"
+            f"📧 **Delta Chat:** {dc_status}\n\n"
+            f"📊 **Queue Workers:**\n{queue_status}\n\n"
+            f"📡 **Channels ({len(channels)}):**\n" + ("\n".join(chan_lines) if chan_lines else "None") + "\n\n"
+            f"📝 **Recent Activity:**\n" + ("\n".join(activity_lines) if activity_lines else "None")
+        )
+    return report
+
+
+@dc_cli.on(events.NewMessage(command="/status"))
+def dc_status_command(bot, accid, event):
+    """Show detailed bot and userbot status (admin only)."""
+    msg = event.msg
+    chat_id = msg.chat_id
+
+    # Check if sender is admin
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot administrator can use /status."))
+        return
+
+    async def do_status():
+        try:
+            report = await generate_status_report(is_html=False, bot_ref=bot, accid=accid)
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=report))
+        except Exception as e:
+            logger.error(f"Error generating status report for DC: {e}")
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Error generating status report: {e}"))
+
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(do_status(), main_loop)
+    else:
+        logger.error("Main loop not found, cannot run /status")
+
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
@@ -2980,6 +3190,30 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = "this group"
             lines.append(f"• DC <code>{dc_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
         await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
+
+async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detailed bot and userbot status on Telegram (admin only)."""
+    user = update.effective_user
+    chat = update.effective_chat
+
+    # Only allow in private chat, and only for owner or admin
+    if chat.type != "private":
+        await update.message.reply_text("❌ For security reasons, the /status command can only be used in a private chat.")
+        return
+
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id:
+        if not database.is_owner_or_admin(user.id):
+            await update.message.reply_text("❌ Only the bot admin can view status.")
+            return
+
+    try:
+        report = await generate_status_report(is_html=True)
+        await update.message.reply_text(report, parse_mode='HTML', disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Error generating status report for TG: {e}")
+        await update.message.reply_text(f"❌ Error generating status report: {e}")
 
 
 # ---------------------------------------------------------
@@ -4122,7 +4356,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # De-duplication by sequential message ID
-    last_msg_id = database.get_channel_last_msg_id(tg_channel_id)
+    last_msg_id = _get_cached_last_msg_id(tg_channel_id)
     if last_msg_id > 0 and post.message_id <= last_msg_id:
         logger.info(f"Bot API: Skipping already relayed/old post {post.message_id} in channel {tg_channel_id} (last_msg_id is {last_msg_id})")
         return
@@ -4233,7 +4467,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         if dc_msg_id:
             c_hash = _get_content_hash(post)
             database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=c_hash)
-            database.update_channel_last_msg_id(tg_channel_id, post.message_id)
+            _update_cached_last_msg_id(tg_channel_id, post.message_id)
         # Register in edit debounce so link-preview "edits" within 60s are suppressed
         _edit_timestamps[(tg_channel_id, post.message_id)] = time.time()
         
@@ -5228,8 +5462,27 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if not display_author:
             if hasattr(msg, 'post_author') and msg.post_author:
                 display_author = msg.post_author
+            elif msg.is_channel and not msg.is_group:
+                # For channels, the sender is the channel itself
+                if msg.chat and hasattr(msg.chat, 'title'):
+                    display_author = msg.chat.title
+                else:
+                    ch_info = database.get_channel_by_tg_id(tg_channel_id)
+                    if ch_info:
+                        try:
+                            dc_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, ch_info['dc_chat_id'])
+                            display_author = dc_info.get("name")
+                        except Exception:
+                            display_author = None
+                    if not display_author:
+                        display_author = "Channel"
             else:
-                sender = await asyncio.wait_for(msg.get_sender(), timeout=15.0)
+                sender = getattr(msg, 'sender', None)
+                if not sender:
+                    try:
+                        sender = await asyncio.wait_for(msg.get_sender(), timeout=3.0)
+                    except Exception as e:
+                        logger.warning(f"Failed to get sender for userbot message {msg.id}: {e}")
                 if sender:
                     if hasattr(sender, 'first_name'):
                         display_author = f"{sender.first_name} {getattr(sender, 'last_name', '') or ''}".strip()
@@ -5263,7 +5516,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             if not is_edit:
                 channel_dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
                 if channel_dc_chat_id == dc_chat_id:
-                    database.update_channel_last_msg_id(tg_channel_id, msg.id)
+                    _update_cached_last_msg_id(tg_channel_id, msg.id)
         logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC chat {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay userbot message: {e}")
@@ -5441,7 +5694,7 @@ async def _process_userbot_event_internal(event, is_edit=False):
 
     # De-duplication by sequential message ID (skip for edits)
     if not is_edit:
-        last_msg_id = database.get_channel_last_msg_id(tg_channel_id)
+        last_msg_id = _get_cached_last_msg_id(tg_channel_id)
         if last_msg_id > 0 and msg.id <= last_msg_id:
             logger.info(f"USERBOT: Skipping already relayed/old post {msg.id} in channel {tg_channel_id} (last_msg_id is {last_msg_id})")
             return
@@ -5602,6 +5855,7 @@ async def main():
     tg_app.add_handler(CommandHandler("donate", tg_donate_command))
     tg_app.add_handler(CommandHandler("id", tg_id_command))
     tg_app.add_handler(CommandHandler("stats", tg_stats_command))
+    tg_app.add_handler(CommandHandler("status", tg_status_command))
     tg_app.add_handler(CommandHandler("invite", tg_invite_command))
     tg_app.add_handler(CommandHandler("inviteqr", tg_inviteqr_command))
     # Bridge commands (TG side)

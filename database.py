@@ -848,5 +848,23 @@ def get_all_transport_stats() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_recent_message_maps(limit: int = 5) -> list[dict]:
+    """Get the most recent message map entries with channel username if available."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, c.tg_channel_username 
+            FROM message_map m
+            LEFT JOIN channels c ON m.tg_chat_id = c.tg_channel_id
+            ORDER BY m.created_at DESC, m.rowid DESC 
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
 
 init_db()
+

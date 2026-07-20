@@ -1,3 +1,12 @@
+## [2.8.0] - 2026-07-20
+- **Latency Optimization & last_msg_id Caching**:
+  - Implemented in-memory caching (`_last_msg_id_cache`) for the last relayed post ID of each bridged channel, dramatically reducing SQLite database reads/writes during message relay and de-duplication checks.
+  - Optimized the Telethon author lookup mechanism inside `_relay_userbot_message`: for channel messages, the sender title is resolved without slow, blocking MTProto network calls (`msg.get_sender()`), and for group messages, a quick 3.0s timeout is enforced. This prevents channel history and event processing queues from stalling.
+- **Admin Command `/status`**:
+  - Added a new `/status` administrative command for both Delta Chat and Telegram (private chat, admin-only).
+  - The status report displays active Telegram Bot API status, Userbot connection details, Delta Chat primary account settings, active message queue worker states, and recent activity stats (last 5 transfers with relative time formats).
+  - Displays each bridged channel's last post number and direct link (e.g. `https://t.me/channel/27`) for easy monitoring.
+
 ## [2.7.0] - 2026-07-11
 - **Sequential Channel Event Queuing (Perfect Order Delivery)**:
   - Implemented per-channel event queues (`_channel_queues`) and sequential background workers (`_channel_queue_worker`) in `bot.py` for processing new messages, edits, and deletions.
