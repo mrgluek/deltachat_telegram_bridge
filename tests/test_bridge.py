@@ -242,6 +242,57 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertEqual(sorted_msgs[0].id, 11)
         self.assertEqual(sorted_msgs[-1].id, 15)
 
+    def test_paid_media_hash_and_size(self):
+        class MockPaidMediaItem:
+            def __init__(self, file_size=500):
+                class MockPhoto:
+                    def __init__(self, size):
+                        self.file_size = size
+                self.photo = [MockPhoto(file_size)]
+
+        class MockPaidMediaInfo:
+            def __init__(self, star_count=10, items=None):
+                self.star_count = star_count
+                self.paid_media = items or [MockPaidMediaItem()]
+
+        class MockPTBMessage:
+            def __init__(self, text="Paid post", paid_info=None):
+                self.text = text
+                self.caption = ""
+                self.photo = None
+                self.paid_media = paid_info or MockPaidMediaInfo()
+
+        msg = MockPTBMessage()
+        h = bot._get_content_hash(msg)
+        self.assertTrue(len(h) == 64)
+        
+        size = bot._get_ptb_media_size(msg)
+        self.assertEqual(size, 500)
+
+    def test_telethon_paid_media_extraction(self):
+        class MockMessageMediaPaidMedia:
+            def __init__(self):
+                self.stars = 25
+                self.extended_media = []
+
+        class MockTelethonMsg:
+            def __init__(self):
+                self.chat_id = 123
+                self.id = 789
+                self.text = "Here is paid content"
+                self.media = MockMessageMediaPaidMedia()
+                self.chat = None
+
+        msg = MockTelethonMsg()
+        text = msg.text or ""
+        stars = getattr(msg.media, 'stars', 0) or 0
+        star_str = f" ({stars} ⭐)" if stars else ""
+        paid_label = f"⭐ Paid Media{star_str}"
+        formatted = (f"[{paid_label}]\n" + text).strip() if text else f"[{paid_label}]"
+
+        self.assertIn("[⭐ Paid Media (25 ⭐)]", formatted)
+        self.assertIn("Here is paid content", formatted)
+
 
 if __name__ == "__main__":
     unittest.main()

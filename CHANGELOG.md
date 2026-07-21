@@ -1,3 +1,9 @@
+## [2.9.0] - 2026-07-21
+- **Telegram Paid Media & Extended Post Types Support**:
+  - Added support for Telegram Paid Media (`paid_media` / `MessageMediaPaidMedia` — posts/photos/videos locked with Telegram Stars, like https://t.me/Finindie/2874). The bot now relays the text, caption, star price label (`[⭐ Paid Media (X ⭐)]`), and downloadable media/previews instead of skipping the post.
+  - Added full support for Stories (`story` / `MessageMediaStory`), Giveaways (`giveaway` / `MessageMediaGiveaway`), Polls (`poll` / `MessageMediaPoll`), Contacts (`contact` / `MessageMediaContact`), Invoices (`invoice`), and fallback handling for unrecognized Telegram media types.
+  - Updated content hashing (`_get_content_hash`) and media size calculation (`_get_ptb_media_size`, `_get_media_size`) for both Bot API and Telethon userbot modes.
+
 ## [2.8.0] - 2026-07-20
 - **Latency Optimization & last_msg_id Caching**:
   - Implemented in-memory caching (`_last_msg_id_cache`) for the last relayed post ID of each bridged channel, dramatically reducing SQLite database reads/writes during message relay and de-duplication checks.

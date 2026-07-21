@@ -496,6 +496,9 @@ def _get_content_hash(msg) -> str:
     text = getattr(msg, 'text', "") or ""
     caption = getattr(msg, 'caption', "") or ""
     content = text or caption or ""
+    paid = getattr(msg, 'paid_media', None)
+    if paid:
+        content += f"_paid_{getattr(paid, 'star_count', 0)}"
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
@@ -506,6 +509,15 @@ def _get_media_size(msg) -> int:
     if type(msg.media).__name__ == 'MessageMediaWebPage':
         return 0
     
+    if type(msg.media).__name__ == 'MessageMediaPaidMedia':
+        ext_media = getattr(msg.media, 'extended_media', []) or []
+        for item in ext_media:
+            sub = getattr(item, 'media', None) or getattr(item, 'photo', None) or getattr(item, 'video', None)
+            if sub and hasattr(sub, 'size') and sub.size is not None:
+                return sub.size
+            if hasattr(item, 'video') and item.video and hasattr(item.video, 'size') and item.video.size is not None:
+                return item.video.size
+
     # Try msg.document (most reliable for documents/videos/audios)
     try:
         if hasattr(msg, 'document') and msg.document and msg.document.size is not None:
@@ -548,6 +560,15 @@ def _get_ptb_media_size(msg) -> int:
     tg_file = None
     if getattr(msg, 'photo', None):
         tg_file = msg.photo[-1]
+    elif getattr(msg, 'paid_media', None):
+        paid_items = getattr(msg.paid_media, 'paid_media', []) or []
+        for item in paid_items:
+            if getattr(item, 'photo', None) and item.photo:
+                tg_file = item.photo[-1]
+                break
+            elif getattr(item, 'video', None) and item.video:
+                tg_file = item.video
+                break
     elif getattr(msg, 'video', None):
         tg_file = msg.video
     elif getattr(msg, 'animation', None):
@@ -4312,7 +4333,24 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     # Detect media
     tg_file = None
     file_name = None
-    if post.photo:
+    if getattr(post, 'paid_media', None):
+        star_count = getattr(post.paid_media, 'star_count', 0) or 0
+        star_str = f" ({star_count} ⭐)" if star_count else ""
+        paid_label = f"⭐ Paid Media{star_str}"
+        text = (f"[{paid_label}]\n" + text).strip() if text else f"[{paid_label}]"
+        
+        paid_items = getattr(post.paid_media, 'paid_media', []) or []
+        for item in paid_items:
+            if getattr(item, 'photo', None) and item.photo:
+                tg_file = item.photo[-1]
+                file_name = "paid_photo.jpg"
+                break
+            elif getattr(item, 'video', None) and item.video:
+                v = item.video
+                tg_file = v
+                file_name = getattr(v, 'file_name', None) or "paid_video.mp4"
+                break
+    elif post.photo:
         tg_file = post.photo[-1]
         file_name = "photo.jpg"
     elif post.video:
@@ -4348,6 +4386,34 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     elif post.video_note:
         tg_file = post.video_note
         file_name = "video_note.mp4"
+
+    # Additional message types (Story, Giveaway, Poll, Contact, Invoice)
+    if getattr(post, 'story', None):
+        story_label = "📖 Story"
+        text = (f"[{story_label}]\n" + text).strip() if text else f"[{story_label}]"
+
+    if getattr(post, 'giveaway', None):
+        winner_count = getattr(post.giveaway, 'winner_count', None)
+        gw_label = f"🎁 Giveaway ({winner_count} winners)" if winner_count else "🎁 Giveaway"
+        text = (f"[{gw_label}]\n" + text).strip() if text else f"[{gw_label}]"
+
+    if getattr(post, 'poll', None):
+        poll = post.poll
+        poll_text = f"📊 {poll.question}\n"
+        for option in poll.options:
+            poll_text += f"▫️ {option.text}\n"
+        text = (text + "\n\n" + poll_text).strip()
+
+    if getattr(post, 'contact', None):
+        c = post.contact
+        c_name = f"{c.first_name or ''} {c.last_name or ''}".strip()
+        c_text = f"👤 Contact: {c_name} ({c.phone_number})"
+        text = (text + "\n\n" + c_text).strip()
+
+    if getattr(post, 'invoice', None):
+        inv = post.invoice
+        inv_text = f"💳 Invoice: {inv.title} ({inv.total_amount} {inv.currency})"
+        text = (text + "\n\n" + inv_text).strip()
 
     # Handle location / venue
     if post.venue:
@@ -4794,7 +4860,24 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Detect media
     tg_file = None
     file_name = None
-    if update.message.photo:
+    if getattr(update.message, 'paid_media', None):
+        star_count = getattr(update.message.paid_media, 'star_count', 0) or 0
+        star_str = f" ({star_count} ⭐)" if star_count else ""
+        paid_label = f"⭐ Paid Media{star_str}"
+        text = (f"[{paid_label}]\n" + text).strip() if text else f"[{paid_label}]"
+        
+        paid_items = getattr(update.message.paid_media, 'paid_media', []) or []
+        for item in paid_items:
+            if getattr(item, 'photo', None) and item.photo:
+                tg_file = item.photo[-1]
+                file_name = "paid_photo.jpg"
+                break
+            elif getattr(item, 'video', None) and item.video:
+                v = item.video
+                tg_file = v
+                file_name = getattr(v, 'file_name', None) or "paid_video.mp4"
+                break
+    elif update.message.photo:
         tg_file = update.message.photo[-1]  # Largest resolution
         file_name = "photo.jpg"
     elif update.message.video:
@@ -4830,6 +4913,27 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.video_note:
         tg_file = update.message.video_note
         file_name = "video_note.mp4"
+
+    # Additional message types (Story, Giveaway, Contact, Invoice)
+    if getattr(update.message, 'story', None):
+        story_label = "📖 Story"
+        text = (f"[{story_label}]\n" + text).strip() if text else f"[{story_label}]"
+
+    if getattr(update.message, 'giveaway', None):
+        winner_count = getattr(update.message.giveaway, 'winner_count', None)
+        gw_label = f"🎁 Giveaway ({winner_count} winners)" if winner_count else "🎁 Giveaway"
+        text = (f"[{gw_label}]\n" + text).strip() if text else f"[{gw_label}]"
+
+    if getattr(update.message, 'contact', None):
+        c = update.message.contact
+        c_name = f"{c.first_name or ''} {c.last_name or ''}".strip()
+        c_text = f"👤 Contact: {c_name} ({c.phone_number})"
+        text = (text + "\n\n" + c_text).strip()
+
+    if getattr(update.message, 'invoice', None):
+        inv = update.message.invoice
+        inv_text = f"💳 Invoice: {inv.title} ({inv.total_amount} {inv.currency})"
+        text = (text + "\n\n" + inv_text).strip()
 
     # Handle location / venue
     if update.message.venue:
@@ -5412,20 +5516,53 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     tg_channel_id = msg.chat_id
     text = msg.text or ""
     
-    # Extract webpage preview text if actual message text is empty
-    if not text and msg.media and type(msg.media).__name__ == 'MessageMediaWebPage':
-        webpage = msg.media.webpage
-        if webpage and type(webpage).__name__ != 'WebPageEmpty':
-            parts = []
-            if getattr(webpage, 'site_name', None):
-                parts.append(f"🌐 **{webpage.site_name}**")
-            if getattr(webpage, 'title', None):
-                parts.append(f"**{webpage.title}**" if not getattr(webpage, 'site_name', None) else webpage.title)
-            if getattr(webpage, 'description', None):
-                parts.append(webpage.description)
-            if getattr(webpage, 'url', None):
-                parts.append(webpage.url)
-            text = "\n\n".join(parts)
+    # Extract media text and descriptions for Telethon media types
+    if msg.media:
+        m_type = type(msg.media).__name__
+        if m_type == 'MessageMediaWebPage' and not text:
+            webpage = msg.media.webpage
+            if webpage and type(webpage).__name__ != 'WebPageEmpty':
+                parts = []
+                if getattr(webpage, 'site_name', None):
+                    parts.append(f"🌐 **{webpage.site_name}**")
+                if getattr(webpage, 'title', None):
+                    parts.append(f"**{webpage.title}**" if not getattr(webpage, 'site_name', None) else webpage.title)
+                if getattr(webpage, 'description', None):
+                    parts.append(webpage.description)
+                if getattr(webpage, 'url', None):
+                    parts.append(webpage.url)
+                text = "\n\n".join(parts)
+        elif m_type == 'MessageMediaPaidMedia':
+            stars = getattr(msg.media, 'stars', 0) or 0
+            star_str = f" ({stars} ⭐)" if stars else ""
+            paid_label = f"⭐ Paid Media{star_str}"
+            text = (f"[{paid_label}]\n" + text).strip() if text else f"[{paid_label}]"
+        elif m_type == 'MessageMediaStory':
+            text = (f"[📖 Story]\n" + text).strip() if text else "[📖 Story]"
+        elif m_type in ('MessageMediaGiveaway', 'MessageMediaGiveawayResults'):
+            text = (f"[🎁 Giveaway]\n" + text).strip() if text else "[🎁 Giveaway]"
+        elif m_type == 'MessageMediaPoll':
+            poll = getattr(msg.media, 'poll', None)
+            if poll:
+                poll_text = f"📊 {getattr(poll, 'question', 'Poll')}\n"
+                answers = getattr(poll, 'answers', []) or []
+                for ans in answers:
+                    ans_text = getattr(ans, 'text', '')
+                    if isinstance(ans_text, str):
+                        poll_text += f"▫️ {ans_text}\n"
+                    elif hasattr(ans_text, 'text'):
+                        poll_text += f"▫️ {ans_text.text}\n"
+                text = (text + "\n\n" + poll_text).strip()
+        elif m_type == 'MessageMediaContact':
+            c_name = f"{getattr(msg.media, 'first_name', '')} {getattr(msg.media, 'last_name', '')}".strip()
+            c_phone = getattr(msg.media, 'phone_number', '')
+            text = (text + f"\n\n👤 Contact: {c_name} ({c_phone})").strip()
+        elif m_type in ('MessageMediaGeo', 'MessageMediaGeoLive'):
+            geo = getattr(msg.media, 'geo', None)
+            if geo and getattr(geo, 'lat', None) is not None:
+                text = (text + f"\n\n📍 Location: https://maps.google.com/?q={geo.lat},{geo.long}").strip()
+        elif not text and m_type not in ('MessageMediaPhoto', 'MessageMediaDocument'):
+            text = f"[{m_type}]"
 
     # Filter out commands in Userbot mode
     if text.startswith('/') and not msg.media:
@@ -5448,7 +5585,15 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     file_path = None
     media_to_download = None
     if msg.media:
-        if type(msg.media).__name__ != 'MessageMediaWebPage':
+        m_type = type(msg.media).__name__
+        if m_type == 'MessageMediaPaidMedia':
+            ext_media = getattr(msg.media, 'extended_media', []) or []
+            for item in ext_media:
+                sub = getattr(item, 'media', None) or getattr(item, 'photo', None) or getattr(item, 'video', None)
+                if sub:
+                    media_to_download = sub
+                    break
+        elif m_type != 'MessageMediaWebPage':
             media_to_download = msg.media
         else:
             webpage = msg.media.webpage
