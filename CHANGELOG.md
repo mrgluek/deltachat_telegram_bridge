@@ -1,3 +1,7 @@
+## [2.9.1] - 2026-07-29
+- **Silence Asyncio Task Destruction Warnings**:
+  - Added `"Task was destroyed but it is pending"` to `_TRANSIENT_POLLING_ERRORS` in `bot.py` to suppress harmless asyncio / Telethon garbage collection logs from spamming the admin error log channel during reconnects.
+
 ## [2.9.0] - 2026-07-21
 - **Telegram Paid Media & Extended Post Types Support**:
   - Added support for Telegram Paid Media (`paid_media` / `MessageMediaPaidMedia` — posts/photos/videos locked with Telegram Stars, like https://t.me/Finindie/2874). The bot now relays the text, caption, star price label (`[⭐ Paid Media (X ⭐)]`), and downloadable media/previews instead of skipping the post.

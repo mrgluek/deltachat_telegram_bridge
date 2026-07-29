@@ -78,6 +78,7 @@ _TRANSIENT_POLLING_ERRORS = (
     "ProxyError",
     "NetworkError",
     "Exception happened while polling for updates",
+    "Task was destroyed but it is pending",
 )
 
 class PollingErrorFilter(logging.Filter):

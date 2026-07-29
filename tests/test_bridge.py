@@ -293,6 +293,20 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertIn("[⭐ Paid Media (25 ⭐)]", formatted)
         self.assertIn("Here is paid content", formatted)
 
+    def test_transient_error_suppression(self):
+        handler = bot.AdminLogHandler()
+        record = bot.logging.LogRecord(
+            name="asyncio",
+            level=bot.logging.ERROR,
+            pathname="connection.py",
+            lineno=355,
+            msg="Task was destroyed but it is pending!\ntask: <Task pending name='Task-8717' coro=<Connection._recv_loop()>",
+            args=(),
+            exc_info=None
+        )
+        # Should be filtered out without exception
+        handler.emit(record)
+
 
 if __name__ == "__main__":
     unittest.main()
