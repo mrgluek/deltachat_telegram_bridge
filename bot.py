@@ -217,7 +217,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.8.0"
+VERSION = "2.9.1"
 
 
 
