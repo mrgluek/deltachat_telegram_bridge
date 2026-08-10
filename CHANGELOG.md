@@ -1,3 +1,8 @@
+## [2.9.8] - 2026-08-10
+- **Asynchronous `/channels` Command Data Gathering & Reply Retries**:
+  - Offloaded the 53-channel synchronous RPC query loop (`get_basic_chat_info` & `get_chat_contacts`) in `tg_channels_command` to a background thread pool executor (`loop.run_in_executor`), completely eliminating main asyncio event loop freezing and socket timeouts.
+  - Wrapped Telegram command reply calls (`reply_text`) in `retry_async` (up to 3 retries with 2s delay) to safely handle transient network connection timeouts.
+
 ## [2.9.7] - 2026-08-10
 - **Fix `Updater.start_polling` Unexpected Keyword Argument**:
   - Removed invalid `read_timeout` argument from `Updater.start_polling()` calls (in PTB v20+, `read_timeout` is configured on `get_updates_request` via `ApplicationBuilder`).

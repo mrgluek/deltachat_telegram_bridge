@@ -240,7 +240,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.7"
+VERSION = "2.9.8"
 
 
 
@@ -3146,14 +3146,14 @@ async def tg_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = html.escape(user.first_name)
     greeting = get_tg_help_text(name, user.id)
-    await update.message.reply_text(greeting, parse_mode='HTML')
+    await retry_async(update.message.reply_text, greeting, parse_mode='HTML', max_retries=3, delay=2.0)
 
 async def tg_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reply to /help with help text."""
     user = update.effective_user
     name = html.escape(user.first_name)
     help_msg = get_tg_help_text(name, user.id)
-    await update.message.reply_text(help_msg, parse_mode='HTML')
+    await retry_async(update.message.reply_text, help_msg, parse_mode='HTML', max_retries=3, delay=2.0)
 
 async def tg_donate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reply with donate link."""
@@ -3286,10 +3286,10 @@ async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         report = await generate_status_report(is_html=True)
-        await update.message.reply_text(report, parse_mode='HTML', disable_web_page_preview=True)
+        await retry_async(update.message.reply_text, report, parse_mode='HTML', disable_web_page_preview=True, max_retries=3, delay=2.0)
     except Exception as e:
         logger.error(f"Error generating status report for TG: {e}")
-        await update.message.reply_text(f"❌ Error generating status report: {e}")
+        await retry_async(update.message.reply_text, f"❌ Error generating status report: {e}", max_retries=3, delay=2.0)
 
 
 # ---------------------------------------------------------
@@ -4140,40 +4140,45 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         channels = database.get_channels_by_creator(user.id)
 
     if not channels:
-        await update.message.reply_text("📺 No channels are bridged.")
+        await retry_async(update.message.reply_text, "📺 No channels are bridged.", max_retries=3, delay=2.0)
         return
 
-    lines = [f"📺 <b>Bridged Channels</b> ({len(channels)})\n"]
-    for ch in channels:
-        dc_cid = ch['dc_chat_id']
-        tg_id = ch.get('tg_channel_id', 0)
-        r_count = ch.get('reactions_count', 0)
-        r_count = ch.get('reactions_count', 0)
-        m_count = database.get_bridge_message_count(dc_cid, tg_id)
-        tg_sub_count = ch.get('tg_participants_count', 0)
-        
-        try:
-            chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
-            title = chat_info.get("name", "Unknown Channel")
-            # Get subscriber count (minus the bot itself)
-            contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
-            if contacts:
-                try:
-                    self_id = dc_bot_instance.rpc.get_contact(dc_accid, 1).id
-                except Exception:
-                    self_id = 1
-                dc_sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
-            else:
-                dc_sub_count = 0
-        except Exception:
+    loop = asyncio.get_running_loop()
+
+    def _build_channels_text():
+        lines = [f"📺 <b>Bridged Channels</b> ({len(channels)})\n"]
+        for ch in channels:
+            dc_cid = ch['dc_chat_id']
+            tg_id = ch.get('tg_channel_id', 0)
+            m_count = database.get_bridge_message_count(dc_cid, tg_id)
+            tg_sub_count = ch.get('tg_participants_count', 0)
             title = "Unknown Channel"
             dc_sub_count = "?"
+            
+            if dc_bot_instance and dc_accid:
+                try:
+                    chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
+                    title = chat_info.get("name", "Unknown Channel")
+                    contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
+                    if contacts:
+                        try:
+                            self_id = dc_bot_instance.rpc.get_contact(dc_accid, 1).id
+                        except Exception:
+                            self_id = 1
+                        dc_sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
+                    else:
+                        dc_sub_count = 0
+                except Exception:
+                    pass
 
-        tg_ref = f"t.me/{ch['tg_channel_username']}" if ch['tg_channel_username'] else f"ID: {ch['tg_channel_id']}"
-        stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
-        lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {stats_str}")
-    lines.append(f"\nUse <code>/channel N</code> for invite link")
-    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+            tg_ref = f"t.me/{ch['tg_channel_username']}" if ch['tg_channel_username'] else f"ID: {ch['tg_channel_id']}"
+            stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
+            lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {stats_str}")
+        lines.append(f"\nUse <code>/channel N</code> for invite link")
+        return "\n".join(lines)
+
+    text_to_send = await loop.run_in_executor(None, _build_channels_text)
+    await retry_async(update.message.reply_text, text_to_send, parse_mode='HTML', max_retries=3, delay=2.0)
 
 
 async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
