@@ -1,3 +1,8 @@
+## [2.9.6] - 2026-08-10
+- **Asynchronous Delta Chat Admin Alert Delivery**:
+  - Offloaded Delta Chat log notification sending in `AdminLogHandler` to non-blocking background threads (`_send_admin_dc_message_bg`) to prevent JSON-RPC pipe lock deadlocks (`RpcProxy._lock`).
+  - Added thread-safe in-memory caching (`_admin_dc_chat_id_cache`) for the administrator chat ID, eliminating redundant `create_contact` and `create_chat_by_contact_id` RPC calls on every log emission.
+
 ## [2.9.5] - 2026-08-10
 - **Watchdog Telegram Polling Restart Retry Loop**:
   - Added automatic retry loop (3 attempts with 5s delay) when the Watchdog detects an offline/unhealthy Telegram Bot API polling connection and initiates `start_polling()`.

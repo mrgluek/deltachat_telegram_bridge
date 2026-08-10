@@ -99,6 +99,32 @@ logging.getLogger("telegram.ext.Application").addFilter(PollingErrorFilter())
 logging.getLogger("httpx").addFilter(PollingErrorFilter())
 logging.getLogger("httpcore").addFilter(PollingErrorFilter())
 
+_admin_dc_chat_id_cache = None
+_admin_dc_chat_id_lock = threading.Lock()
+
+def _send_admin_dc_message_bg(text: str):
+    global _admin_dc_chat_id_cache, dc_bot_instance, dc_accid
+    admin_dc_email = database.get_config("admin_dc_email")
+    if not (admin_dc_email and dc_bot_instance and dc_accid):
+        return
+
+    with _admin_dc_chat_id_lock:
+        try:
+            if _admin_dc_chat_id_cache is None:
+                contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
+                _admin_dc_chat_id_cache = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
+            
+            dc_bot_instance.rpc.send_msg(dc_accid, _admin_dc_chat_id_cache, MsgData(text=text))
+        except Exception:
+            _admin_dc_chat_id_cache = None
+            try:
+                contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
+                chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
+                _admin_dc_chat_id_cache = chat_id
+                dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=text))
+            except Exception:
+                pass
+
 class AdminLogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
@@ -150,16 +176,11 @@ class AdminLogHandler(logging.Handler):
                 except Exception:
                     pass
 
-            # Send to DC
+            # Send to DC (offloaded to non-blocking background thread to prevent JSON-RPC pipe deadlocks)
             admin_dc_email = database.get_config("admin_dc_email")
             if admin_dc_email and local_dc_bot and local_dc_accid:
-                try:
-                    dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
-                    contact_id = local_dc_bot.rpc.create_contact(local_dc_accid, admin_dc_email, "Admin")
-                    chat_id = local_dc_bot.rpc.create_chat_by_contact_id(local_dc_accid, contact_id)
-                    local_dc_bot.rpc.send_msg(local_dc_accid, chat_id, MsgData(text=dc_msg_text))
-                except Exception:
-                    pass
+                dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
+                threading.Thread(target=_send_admin_dc_message_bg, args=(dc_msg_text,), daemon=True).start()
         finally:
             self._is_emitting.flag = False
 
@@ -219,7 +240,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.5"
+VERSION = "2.9.6"
 
 
 
@@ -5898,13 +5919,8 @@ async def _process_userbot_event_internal(event, is_edit=False):
         # Also send to DC admin
         admin_dc_email = database.get_config("admin_dc_email")
         if admin_dc_email and dc_bot_instance and dc_accid:
-            try:
-                dc_code_text = f"🔐 Login code for technical account:\n\n{msg.text}"
-                contact_id = dc_bot_instance.rpc.create_contact(dc_accid, admin_dc_email, "Admin")
-                chat_id = dc_bot_instance.rpc.create_chat_by_contact_id(dc_accid, contact_id)
-                dc_bot_instance.rpc.send_msg(dc_accid, chat_id, MsgData(text=dc_code_text))
-            except Exception as e:
-                logger.error(f"Failed to forward login code to DC admin: {e}")
+            dc_code_text = f"🔐 Login code for technical account:\n\n{msg.text}"
+            threading.Thread(target=_send_admin_dc_message_bg, args=(dc_code_text,), daemon=True).start()
         return  # Don't process further
 
     tg_channel_id = msg.chat_id
