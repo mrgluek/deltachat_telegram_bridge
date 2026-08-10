@@ -219,7 +219,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.2"
+VERSION = "2.9.3"
 
 
 
@@ -438,6 +438,8 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
     global userbot_client
     if not (userbot_client and userbot_client.is_connected()):
         return None
+    size = 0
+    tmp_path = None
     try:
         # Telethon get_messages can fetch by ID
         msg = await asyncio.wait_for(userbot_client.get_messages(chat_id, ids=msg_id), timeout=15.0)
@@ -446,20 +448,33 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
         
         # Check size limit
         size = _get_media_size(msg)
+        m_type = type(msg.media).__name__
+        file_name = getattr(msg.file, 'name', '') if hasattr(msg, 'file') and msg.file else ""
+        if not file_name:
+            file_name = f"media_{msg_id}{suffix}"
 
         if size > MAX_ATTACHMENT_SIZE:
-            logger.warning(f"Userbot: Media in {chat_id}:{msg_id} is too large ({size // 1024 // 1024} MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024} MB)")
+            logger.warning(f"Userbot: Media in {chat_id}:{msg_id} ({file_name}) is too large ({size // 1024 // 1024} MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024} MB)")
             return None
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         os.close(tmp_fd)
-        logger.info(f"Userbot downloading media from {chat_id}:{msg_id} (size: {size // 1024 // 1024} MB)...")
-        async with _get_download_semaphore():
-            path = await asyncio.wait_for(userbot_client.download_media(msg.media, file=tmp_path), timeout=300.0)
+
+        async def _do_download():
+            async with _get_download_semaphore():
+                return await asyncio.wait_for(userbot_client.download_media(msg.media, file=tmp_path), timeout=300.0)
+
+        logger.info(f"Userbot downloading {m_type} '{file_name}' ({size // 1024} KB) from chat {chat_id} msg {msg_id}...")
+        path = await retry_async(_do_download, max_retries=3, delay=3.0, backoff=2.0)
         return path
 
     except Exception as e:
-        logger.error(f"Userbot download failed for {chat_id}:{msg_id}: {e}")
+        logger.error(f"Userbot download failed for chat {chat_id} msg {msg_id} (size: {size} B) after 3 retries: {e}")
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     return None
 
 # Simple per-chat rate limiter
@@ -4453,14 +4468,25 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             suffix = os.path.splitext(file_name)[1] if file_name else ""
             tmp_fd, local_file_path = tempfile.mkstemp(suffix=suffix)
             os.close(tmp_fd)
-            await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path)
+            await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path, max_retries=3, delay=3.0, backoff=2.0)
         except (TimeoutError, asyncio.TimeoutError):
-            logger.error(f"Timeout downloading channel media {file_name}")
+            logger.error(f"Timeout downloading channel {tg_channel_id} post {tg_post_id} media '{file_name}' after 3 retries")
+            if local_file_path and os.path.exists(local_file_path):
+                try:
+                    os.unlink(local_file_path)
+                except OSError:
+                    pass
+            local_file_path = None
+            formatted_msg += f"\n\n[Failed to download media (timeout after 3 retries): {file_name}]"
+        except Exception as e:
+            logger.error(f"Failed to download channel {tg_channel_id} post {tg_post_id} media '{file_name}' after retries: {e}")
+            if local_file_path and os.path.exists(local_file_path):
+                try:
+                    os.unlink(local_file_path)
+                except OSError:
+                    pass
             local_file_path = None
             formatted_msg += f"\n\n[Failed to download media: {file_name}]"
-        except Exception as e:
-            logger.error(f"Failed to download channel media: {e}")
-            local_file_path = None
 
     try:
         msg_data = MsgData(text=formatted_msg)
@@ -5604,19 +5630,39 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 media_to_download = webpage.photo
 
     if media_to_download:
-        try:
-            media_size = _get_media_size(msg)
-            if media_size > MAX_ATTACHMENT_SIZE:
-                logger.warning(f"Userbot: Media in channel {tg_channel_id} is too large: {media_size // 1024 // 1024}MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB")
-                formatted_msg += f"\n\n[Media is too large to be forwarded (limit {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB)]"
-            else:
-                suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg"
-                tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
-                os.close(tmp_fd)
+        media_size = _get_media_size(msg)
+        m_type = type(media_to_download).__name__
+        file_name = getattr(msg.file, 'name', '') if hasattr(msg, 'file') and msg.file else ""
+        if not file_name:
+            file_name = f"media_{msg.id}" + (getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg")
+
+        if media_size > MAX_ATTACHMENT_SIZE:
+            logger.warning(f"Userbot: Media in channel {tg_channel_id} (msg {msg.id}, file '{file_name}') is too large: {media_size // 1024 // 1024}MB > {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB")
+            formatted_msg += f"\n\n[Media is too large to be forwarded (limit {MAX_ATTACHMENT_SIZE // 1024 // 1024}MB)]"
+        else:
+            suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg"
+            tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
+            os.close(tmp_fd)
+
+            async def _do_download_userbot():
                 async with _get_download_semaphore():
-                    file_path = await asyncio.wait_for(userbot_client.download_media(media_to_download, file=file_path_tmp), timeout=300.0)
-        except Exception as e:
-            logger.error(f"Failed to download userbot media: {e}")
+                    return await asyncio.wait_for(userbot_client.download_media(media_to_download, file=file_path_tmp), timeout=300.0)
+
+            try:
+                logger.info(f"Userbot downloading {m_type} '{file_name}' ({media_size // 1024} KB) for channel {tg_channel_id} msg {msg.id}...")
+                file_path = await retry_async(_do_download_userbot, max_retries=3, delay=3.0, backoff=2.0)
+            except Exception as e:
+                logger.error(
+                    f"Failed to download userbot media for channel {tg_channel_id} msg {msg.id} "
+                    f"('{file_name}', type={m_type}, size={media_size} B) after 3 retries: {e}"
+                )
+                if os.path.exists(file_path_tmp):
+                    try:
+                        os.unlink(file_path_tmp)
+                    except OSError:
+                        pass
+                file_path = None
+                formatted_msg += f"\n\n[Failed to download media after retries: {file_name}]"
 
     try:
         msg_data = MsgData(text=formatted_msg)

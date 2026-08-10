@@ -1,3 +1,9 @@
+## [2.9.3] - 2026-08-10
+- **Userbot Media Download Retries & Contextual Error Reporting**:
+  - Added exponential backoff retries (`retry_async`, up to 3 attempts) for Telethon/Userbot and Bot API media downloads.
+  - Enhanced media download error logs with full context details: channel/chat ID, post/message ID, file name, media type, and size in bytes.
+  - Added automatic cleanup of orphaned temporary files (`unlink`) when media downloads fail mid-way.
+
 ## [2.9.2] - 2026-08-10
 - **Tuned `get_updates_request` Timeouts and Suppressed `get_updates` Shutdown Errors**:
   - Explicitly configured `get_updates_request` via `ApplicationBuilder` with dedicated HTTPX timeouts (`read_timeout=60s`, `connect_timeout=30s`) and passed `read_timeout=30s` to `start_polling` calls to match long-polling cycles and avoid TCP `httpcore.ConnectTimeout` exceptions.
