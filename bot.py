@@ -79,6 +79,8 @@ _TRANSIENT_POLLING_ERRORS = (
     "NetworkError",
     "Exception happened while polling for updates",
     "Task was destroyed but it is pending",
+    "Error while calling `get_updates`",
+    "Error while calling get_updates",
 )
 
 class PollingErrorFilter(logging.Filter):
@@ -217,7 +219,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.1"
+VERSION = "2.9.2"
 
 
 
@@ -6009,7 +6011,20 @@ async def main():
         write_timeout=30.0,
         pool_timeout=30.0
     )
-    tg_app = Application.builder().token(token).request(custom_request).build()
+    custom_get_updates_request = HTTPXRequest(
+        connection_pool_size=10,
+        connect_timeout=30.0,
+        read_timeout=60.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+    tg_app = (
+        Application.builder()
+        .token(token)
+        .request(custom_request)
+        .get_updates_request(custom_get_updates_request)
+        .build()
+    )
     tg_app.add_error_handler(tg_error_handler)
     tg_app.add_handler(CommandHandler("start", tg_start_command))
     tg_app.add_handler(CommandHandler("help", tg_help_command))
@@ -6095,7 +6110,7 @@ async def main():
     await tg_app.start()
     
     # allowed_updates=Update.ALL_TYPES implicitly includes message_reaction
-    await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
 
     # Start DB cleanup loop
     asyncio.create_task(db_cleanup_loop())
@@ -6170,7 +6185,7 @@ async def main():
                                     logger.warning(f"Error/Timeout stopping updater: {stop_e}")
                             
                             logger.info("Starting updater polling...")
-                            await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+                            await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
                             logger.info("Telegram Bot API polling restarted successfully.")
                     except Exception as restart_err:
                         logger.error(f"Failed to restart Telegram Bot polling: {restart_err}")

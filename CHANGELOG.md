@@ -1,3 +1,8 @@
+## [2.9.2] - 2026-08-10
+- **Tuned `get_updates_request` Timeouts and Suppressed `get_updates` Shutdown Errors**:
+  - Explicitly configured `get_updates_request` via `ApplicationBuilder` with dedicated HTTPX timeouts (`read_timeout=60s`, `connect_timeout=30s`) and passed `read_timeout=30s` to `start_polling` calls to match long-polling cycles and avoid TCP `httpcore.ConnectTimeout` exceptions.
+  - Added `"Error while calling \`get_updates\`"` and `"Error while calling get_updates"` to `_TRANSIENT_POLLING_ERRORS` log filters to suppress harmless python-telegram-bot cleanup warnings during network blips or updater restarts.
+
 ## [2.9.1] - 2026-07-29
 - **Silence Asyncio Task Destruction Warnings**:
   - Added `"Task was destroyed but it is pending"` to `_TRANSIENT_POLLING_ERRORS` in `bot.py` to suppress harmless asyncio / Telethon garbage collection logs from spamming the admin error log channel during reconnects.

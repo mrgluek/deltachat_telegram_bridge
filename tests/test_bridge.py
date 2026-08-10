@@ -307,6 +307,21 @@ class TestTelegramBridge(unittest.TestCase):
         # Should be filtered out without exception
         handler.emit(record)
 
+        get_updates_record = bot.logging.LogRecord(
+            name="telegram.ext.Updater",
+            level=bot.logging.ERROR,
+            pathname="updater.py",
+            lineno=100,
+            msg="Error while calling `get_updates` one more time to mark all fetched updates.",
+            args=(),
+            exc_info=None
+        )
+        handler.emit(get_updates_record)
+
+        # Test PollingErrorFilter
+        flt = bot.PollingErrorFilter()
+        self.assertFalse(flt.filter(get_updates_record))
+
 
 if __name__ == "__main__":
     unittest.main()
