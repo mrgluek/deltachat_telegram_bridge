@@ -1,3 +1,8 @@
+## [2.9.9] - 2026-08-10
+- **10-Minute In-Memory Caching for `/channels` Command**:
+  - Added 10-minute in-memory caching (`_channels_cache`) for the `/channels` report output per user. Repeated requests for `/channels` now respond instantly with 0ms delay.
+  - Automatic cache invalidation (`invalidate_channels_cache`) triggered whenever a channel bridge is added or removed (`/channeladd`, `/channelremove`).
+
 ## [2.9.8] - 2026-08-10
 - **Asynchronous `/channels` Command Data Gathering & Reply Retries**:
   - Offloaded the 53-channel synchronous RPC query loop (`get_basic_chat_info` & `get_chat_contacts`) in `tg_channels_command` to a background thread pool executor (`loop.run_in_executor`), completely eliminating main asyncio event loop freezing and socket timeouts.

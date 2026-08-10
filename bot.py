@@ -55,6 +55,14 @@ _userbot_tasks: set[asyncio.Task] = set()
 _channel_queues: dict[int, asyncio.Queue] = {}
 _channel_workers: dict[int, asyncio.Task] = {}
 
+# In-memory cache for /channels command report (TTL: 10 minutes)
+_channels_cache: dict[int, tuple[str, float]] = {}
+_CHANNELS_CACHE_TTL = 600.0  # 10 minutes
+
+def invalidate_channels_cache():
+    global _channels_cache
+    _channels_cache.clear()
+
 # Transient network error patterns that should be suppressed/downgraded during polling.
 # These are expected during brief connectivity interruptions and resolve automatically.
 _TRANSIENT_POLLING_ERRORS = (
@@ -240,7 +248,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.8"
+VERSION = "2.9.9"
 
 
 
@@ -3904,6 +3912,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
     status_msg = await update.message.reply_text("⏳ Processing bridge request...")
     
     result = await _add_channel_bridge(raw_arg, creator_tg_id=update.effective_user.id)
+    invalidate_channels_cache()
     await status_msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
     return
 
@@ -4134,6 +4143,15 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user = update.effective_user
+    now = time.time()
+
+    # Serve from 10-minute cache if available and fresh
+    if user.id in _channels_cache:
+        cached_text, cached_time = _channels_cache[user.id]
+        if (now - cached_time) < _CHANNELS_CACHE_TTL:
+            await retry_async(update.message.reply_text, cached_text, parse_mode='HTML', max_retries=3, delay=2.0)
+            return
+
     if database.is_owner(user.id):
         channels = database.get_all_channels()
     else:
@@ -4178,6 +4196,7 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return "\n".join(lines)
 
     text_to_send = await loop.run_in_executor(None, _build_channels_text)
+    _channels_cache[user.id] = (text_to_send, time.time())
     await retry_async(update.message.reply_text, text_to_send, parse_mode='HTML', max_retries=3, delay=2.0)
 
 
