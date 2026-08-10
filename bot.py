@@ -89,6 +89,9 @@ _TRANSIENT_POLLING_ERRORS = (
     "Task was destroyed but it is pending",
     "Error while calling `get_updates`",
     "Error while calling get_updates",
+    "Cannot send requests while disconnected",
+    "'NoneType' object has no attribute",
+    "Reconciliation failed",
 )
 
 class PollingErrorFilter(logging.Filter):
@@ -248,7 +251,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.9"
+VERSION = "2.10.0"
 
 
 
@@ -5396,6 +5399,10 @@ async def reconcile_channels_loop():
             if userbot_client and userbot_client.is_connected():
                 channels = database.get_all_channels()
                 for chan in channels:
+                    if not (userbot_client and userbot_client.is_connected()):
+                        logger.info("Userbot disconnected during channel reconciliation. Aborting pass.")
+                        break
+
                     tg_id = chan.get('tg_channel_id')
                     dc_chat_id = chan.get('dc_chat_id')
                     if not tg_id or not dc_chat_id:
@@ -5431,6 +5438,10 @@ async def reconcile_channels_loop():
                                         
                                         await _queue_userbot_event(tg_id, 'new', MockEvent(msg))
                     except Exception as e:
+                        err_str = str(e)
+                        if "NoneType" in err_str or "disconnected" in err_str.lower() or "not connected" in err_str.lower():
+                            logger.info(f"Userbot disconnected during channel reconciliation pass for channel {tg_id}: {e}. Aborting pass.")
+                            break
                         logger.warning(f"Reconciliation failed for channel {tg_id}: {e}")
                     
                     # Small delay between channels to avoid rate limits

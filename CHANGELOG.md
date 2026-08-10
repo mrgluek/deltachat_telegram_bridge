@@ -1,3 +1,8 @@
+## [2.10.0] - 2026-08-10
+- **Abort Reconciliation Loop on Userbot Disconnect**:
+  - Implemented immediate abort (`break`) of `reconcile_channels_loop` when `userbot_client` disconnects or is reconnecting, preventing 53 consecutive `'NoneType' object has no attribute 'get_entity'` warning messages.
+  - Added disconnection patterns (`Cannot send requests while disconnected`, `'NoneType' object has no attribute`) to `_TRANSIENT_POLLING_ERRORS` filters.
+
 ## [2.9.9] - 2026-08-10
 - **10-Minute In-Memory Caching for `/channels` Command**:
   - Added 10-minute in-memory caching (`_channels_cache`) for the `/channels` report output per user. Repeated requests for `/channels` now respond instantly with 0ms delay.
