@@ -240,7 +240,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.6"
+VERSION = "2.9.7"
 
 
 
@@ -6201,7 +6201,7 @@ async def main():
     await tg_app.start()
     
     # allowed_updates=Update.ALL_TYPES implicitly includes message_reaction
-    await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
+    await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
     # Start DB cleanup loop
     asyncio.create_task(db_cleanup_loop())
@@ -6277,7 +6277,7 @@ async def main():
                         for attempt in range(1, 4):
                             try:
                                 logger.info(f"Starting updater polling (attempt {attempt}/3)...")
-                                await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
+                                await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
                                 logger.info("Telegram Bot API polling restarted successfully.")
                                 break
                             except Exception as restart_err:

@@ -1,3 +1,7 @@
+## [2.9.7] - 2026-08-10
+- **Fix `Updater.start_polling` Unexpected Keyword Argument**:
+  - Removed invalid `read_timeout` argument from `Updater.start_polling()` calls (in PTB v20+, `read_timeout` is configured on `get_updates_request` via `ApplicationBuilder`).
+
 ## [2.9.6] - 2026-08-10
 - **Asynchronous Delta Chat Admin Alert Delivery**:
   - Offloaded Delta Chat log notification sending in `AdminLogHandler` to non-blocking background threads (`_send_admin_dc_message_bg`) to prevent JSON-RPC pipe lock deadlocks (`RpcProxy._lock`).
