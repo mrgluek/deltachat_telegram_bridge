@@ -1,3 +1,8 @@
+## [2.9.5] - 2026-08-10
+- **Watchdog Telegram Polling Restart Retry Loop**:
+  - Added automatic retry loop (3 attempts with 5s delay) when the Watchdog detects an offline/unhealthy Telegram Bot API polling connection and initiates `start_polling()`.
+  - Downgraded intermediate restart failures to `warning` and added explicit logging indicating that watchdog will retry on the next 60s cycle if the network is persistently down.
+
 ## [2.9.4] - 2026-08-10
 - **Retries and Contextual Error Reporting for DC → Telegram Relay**:
   - Wrapped text-only and media fallback `send_message` / `edit_message_*` calls to Telegram in `retry_async` (3 attempts with exponential backoff: 2s, 4s, 8s).

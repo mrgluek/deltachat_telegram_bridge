@@ -219,7 +219,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.4"
+VERSION = "2.9.5"
 
 
 
@@ -6250,20 +6250,26 @@ async def main():
                 
                 if not is_tg_healthy:
                     logger.info("Telegram Bot API polling is offline or unhealthy. Restarting polling...")
-                    try:
-                        if tg_app and tg_app.updater:
-                            if tg_app.updater.running:
-                                logger.info("Stopping active unhealthy updater...")
-                                try:
-                                    await asyncio.wait_for(tg_app.updater.stop(), timeout=15.0)
-                                except Exception as stop_e:
-                                    logger.warning(f"Error/Timeout stopping updater: {stop_e}")
-                            
-                            logger.info("Starting updater polling...")
-                            await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
-                            logger.info("Telegram Bot API polling restarted successfully.")
-                    except Exception as restart_err:
-                        logger.error(f"Failed to restart Telegram Bot polling: {restart_err}")
+                    if tg_app and tg_app.updater:
+                        if tg_app.updater.running:
+                            logger.info("Stopping active unhealthy updater...")
+                            try:
+                                await asyncio.wait_for(tg_app.updater.stop(), timeout=15.0)
+                            except Exception as stop_e:
+                                logger.warning(f"Error/Timeout stopping updater: {stop_e}")
+                        
+                        for attempt in range(1, 4):
+                            try:
+                                logger.info(f"Starting updater polling (attempt {attempt}/3)...")
+                                await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, read_timeout=30.0)
+                                logger.info("Telegram Bot API polling restarted successfully.")
+                                break
+                            except Exception as restart_err:
+                                logger.warning(f"Telegram Bot polling restart attempt {attempt}/3 failed: {restart_err}")
+                                if attempt < 3:
+                                    await asyncio.sleep(5)
+                                else:
+                                    logger.error(f"Failed to restart Telegram Bot polling after 3 attempts: {restart_err}. Will retry on next watchdog check in 60s.")
                 last_tg_bot_check = now
 
             if (now - last_sync) > 3600: # 1 hour interval
