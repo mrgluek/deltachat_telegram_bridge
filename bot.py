@@ -251,7 +251,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.10.0"
+VERSION = "2.10.1"
 
 
 
@@ -5447,8 +5447,8 @@ async def reconcile_channels_loop():
                     # Small delay between channels to avoid rate limits
                     await asyncio.sleep(2.0)
             
-            # Sleep 15 minutes before checking again
-            await asyncio.sleep(900)
+            # Sleep 10 minutes before checking again
+            await asyncio.sleep(600)
         except Exception as e:
             logger.error(f"Reconciliation loop error: {e}")
             await asyncio.sleep(60)

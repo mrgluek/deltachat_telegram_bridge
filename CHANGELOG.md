@@ -1,3 +1,7 @@
+## [2.10.1] - 2026-08-10
+- **Reduced Channel Reconciliation Interval to 10 Minutes**:
+  - Decreased `reconcile_channels_loop` check interval from 15 minutes (900s) to 10 minutes (600s), ensuring faster recovery of missed posts after temporary outages or restarts.
+
 ## [2.10.0] - 2026-08-10
 - **Abort Reconciliation Loop on Userbot Disconnect**:
   - Implemented immediate abort (`break`) of `reconcile_channels_loop` when `userbot_client` disconnects or is reconnecting, preventing 53 consecutive `'NoneType' object has no attribute 'get_entity'` warning messages.
