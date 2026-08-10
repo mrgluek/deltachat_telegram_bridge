@@ -219,7 +219,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.9.3"
+VERSION = "2.9.4"
 
 
 
@@ -661,7 +661,7 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                 except Exception:
                     pass
             if not file_path:
-                logger.warning(f"Timeout waiting for media to download for DC msg {msg_id}")
+                logger.warning(f"Timeout waiting for media to download for DC msg {msg_id} (chat {dc_chat_id})")
                 formatted_msg += "\n\n*[Failed to relay media: timeout waiting for DC download]*"
 
         if file_path and os.path.exists(file_path):
@@ -684,43 +684,73 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                     func = tg_app.bot.send_document
                     kwargs = {'chat_id': tg_chat_id, 'document': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 
-                # using retry_async with a longer overall timeout
-                tg_msg = await retry_async(func, **kwargs)
+                # using retry_async with exponential backoff (up to 3 retries)
+                tg_msg = await retry_async(func, max_retries=3, delay=2.0, backoff=2.0, **kwargs)
             except (TimeoutError, asyncio.TimeoutError):
-                fallback_text = formatted_msg + f"\n\n*[Failed to relay media: {html.escape(filename)} - timeout exceeded after retries]*"
-                tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                logger.error(f"Timeout uploading media '{filename}' for DC msg {msg_id} to TG chat {tg_chat_id} after 3 retries")
+                fallback_text = formatted_msg + f"\n\n*[Failed to relay media: {html.escape(filename)} - timeout exceeded after 3 retries]*"
+                tg_msg = await retry_async(
+                    tg_app.bot.send_message,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id
+                )
             except Exception as e:
-                logger.error(f"Error uploading media to TG: {e}")
-                tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+                logger.error(f"Error uploading media '{filename}' for DC msg {msg_id} to TG chat {tg_chat_id}: {e}. Retrying text fallback...")
+                tg_msg = await retry_async(
+                    tg_app.bot.send_message,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, text=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id
+                )
         else:
-            tg_msg = await tg_app.bot.send_message(chat_id=tg_chat_id, text=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id)
+            tg_msg = await retry_async(
+                tg_app.bot.send_message,
+                max_retries=3, delay=2.0, backoff=2.0,
+                chat_id=tg_chat_id, text=formatted_msg, parse_mode='HTML', reply_to_message_id=tg_reply_id
+            )
             
         if tg_msg:
             database.save_message_map(msg_id, dc_chat_id, tg_msg.message_id, tg_chat_id)
+            logger.info(f"Relayed DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {tg_chat_id} (TG msg {tg_msg.message_id})")
     except Exception as e:
-        logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
+        logger.error(f"Failed to relay DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {tg_chat_id} after 3 retries: {e}")
 
 async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
     try:
         if is_media:
             try:
-                await tg_app.bot.edit_message_caption(chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML')
+                await retry_async(
+                    tg_app.bot.edit_message_caption,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML'
+                )
                 logger.info(f"Edited media caption in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
             except Exception as cap_err:
                 # Fallback to edit_message_text if it wasn't actually a media message on TG
                 logger.debug(f"Failed to edit caption, trying text: {cap_err}")
-                await tg_app.bot.edit_message_text(chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML')
+                await retry_async(
+                    tg_app.bot.edit_message_text,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML'
+                )
                 logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id} (caption fallback)")
         else:
             try:
-                await tg_app.bot.edit_message_text(chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML')
+                await retry_async(
+                    tg_app.bot.edit_message_text,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML'
+                )
                 logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
             except Exception as txt_err:
                 logger.debug(f"Failed to edit text, trying caption: {txt_err}")
-                await tg_app.bot.edit_message_caption(chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML')
+                await retry_async(
+                    tg_app.bot.edit_message_caption,
+                    max_retries=3, delay=2.0, backoff=2.0,
+                    chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML'
+                )
                 logger.info(f"Edited caption in TG chat {tg_chat_id} for TG msg {tg_msg_id} (text fallback)")
     except Exception as e:
-        logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}): {e}")
+        logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}) after 3 retries: {e}")
 
 def files_are_identical(file1: str, file2: str) -> bool:
     if not file1 or not file2:
@@ -2641,9 +2671,8 @@ def handle_dc_message(bot, accid, event):
                     async_relay_to_tg(tg_chat_id, dc_chat_id, msg.id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype),
                     main_loop
                 )
-            bot.logger.info(f"Relayed DC msg {msg.id} to TG chat {tg_chat_id}")
         except Exception as e:
-            bot.logger.error(f"Failed to relay msg to TG chat {tg_chat_id}: {e}")
+            bot.logger.error(f"Error scheduling relay of DC msg {msg.id} to TG chat {tg_chat_id}: {e}")
 
 @dc_cli.on(events.RawEvent(EventType.MSGS_CHANGED))
 def handle_dc_message_changed(bot, accid, event):

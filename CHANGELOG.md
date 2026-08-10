@@ -1,3 +1,9 @@
+## [2.9.4] - 2026-08-10
+- **Retries and Contextual Error Reporting for DC → Telegram Relay**:
+  - Wrapped text-only and media fallback `send_message` / `edit_message_*` calls to Telegram in `retry_async` (3 attempts with exponential backoff: 2s, 4s, 8s).
+  - Enhanced Telegram relay error logs with full context: Delta Chat message ID (`msg_id`), Delta Chat chat ID (`dc_chat_id`), Telegram chat ID (`tg_chat_id`), and explicit mention of retries attempted ("after 3 retries").
+  - Moved success logging inside `async_relay_to_tg` after confirmation of message transmission and DB mapping.
+
 ## [2.9.3] - 2026-08-10
 - **Userbot Media Download Retries & Contextual Error Reporting**:
   - Added exponential backoff retries (`retry_async`, up to 3 attempts) for Telethon/Userbot and Bot API media downloads.
