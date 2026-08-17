@@ -10,7 +10,9 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Bidirectional Deletion Sync**: Sync message deletions between both platforms with built-in safety guards.
 - **Bidirectional Edit Handling**: Edits are synced in-place in both directions. Telegram → Delta Chat edits are processed via the message editing protocol (with delete-and-resend fallback), and Delta Chat → Telegram edits are synced using Telegram's API for editing text and captions.
 - **Public Telegram Channels**: Bridge any public channel to a Delta Chat broadcast group.
-- **Telegram Paid Media & Extended Post Types**: Full support for relaying Telegram Paid Media (posts/photos/videos locked with Telegram Stars), Stories, Giveaways, Polls, Contacts, Invoices, and other new Telegram post types to Delta Chat without skipping posts.
+- **Rich Text & Advanced Formatting Support**: Full conversion of Telegram's rich text formatting (bold `**text**`, italic `*text*`, underline `__text__`, strikethrough `~text~`, spoiler `||text||`, inline code `` `code` ``, code blocks ```` ```lang\ncode\n``` ````, blockquotes `> text`, expandable blockquotes, hyperlinks `[text](url)`, and headers) into native Delta Chat Markdown.
+- **Telegram Paid Media & Extended Post Types**: Full support for relaying Telegram Paid Media (posts/photos/videos locked with Telegram Stars), Stories, Giveaways, Polls, Contacts, Invoices, and new Telegram post formats without skipping posts.
+- **Public Post Web Recovery & Unsupported Media Handling**: Automatic fallback extraction of public channel posts when Telegram MTProto returns unsupported media objects or rich post containers, preventing cryptic `[MessageMediaUnsupported]` placeholders.
 - **Channel Sync Command (`/channelssync`)**: Force-refresh names and avatars of all bridged channels from Telegram (supports both Bot API and Userbot).
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.

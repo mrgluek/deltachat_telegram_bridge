@@ -251,7 +251,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.10.1"
+VERSION = "2.11.0"
 
 
 
@@ -475,7 +475,7 @@ async def _download_via_userbot(chat_id: int, msg_id: int, suffix: str = "") -> 
     try:
         # Telethon get_messages can fetch by ID
         msg = await asyncio.wait_for(userbot_client.get_messages(chat_id, ids=msg_id), timeout=15.0)
-        if not (msg and msg.media) or type(msg.media).__name__ == 'MessageMediaWebPage':
+        if not (msg and msg.media) or type(msg.media).__name__ in ('MessageMediaWebPage', 'MessageMediaUnsupported'):
             return None
         
         # Check size limit
@@ -556,7 +556,7 @@ def _get_media_size(msg) -> int:
     """Helper to reliably extract media file size from a Telethon Message object."""
     if not (msg and msg.media):
         return 0
-    if type(msg.media).__name__ == 'MessageMediaWebPage':
+    if type(msg.media).__name__ in ('MessageMediaWebPage', 'MessageMediaUnsupported'):
         return 0
     
     if type(msg.media).__name__ == 'MessageMediaPaidMedia':
@@ -645,35 +645,235 @@ def _truncate(text: str, max_len: int) -> str:
         return text
     return text[:max_len - 1] + "…"
 
-def _inline_links(text: str, entities) -> str:
-    """Inline text_link URLs into plain text so hidden links are not lost.
+def _utf16_to_py_indices(text: str) -> list[int]:
+    """Map each UTF-16 code unit offset to the corresponding Python character index."""
+    utf16_map = []
+    for py_idx, ch in enumerate(text):
+        utf16_len = len(ch.encode('utf-16-le')) // 2
+        for _ in range(utf16_len):
+            utf16_map.append(py_idx)
+    utf16_map.append(len(text))
+    return utf16_map
 
-    Telegram 'text_link' entities have a display text and a hidden URL.
-    This function appends the URL after the display text, e.g.:
-      'Click here' -> 'Click here ( https://example.com )'
-    Plain 'url' entities are already visible in the text and left untouched.
-    """
+
+def _format_telegram_entities(text: str, entities) -> str:
+    """Format Telegram text with entities (from PTB or Telethon) into Delta Chat Markdown."""
     if not entities or not text:
-        return text
+        return text or ""
 
-    # Collect text_link entities, sorted by offset descending so we can
-    # insert from the end without shifting earlier offsets.
-    links = []
+    utf16_map = _utf16_to_py_indices(text)
+
+    def get_py_indices(u_offset, u_len):
+        start = utf16_map[u_offset] if u_offset < len(utf16_map) else len(text)
+        end_offset = u_offset + u_len
+        end = utf16_map[end_offset] if end_offset < len(utf16_map) else len(text)
+        return start, end
+
+    parsed = []
     for ent in entities:
-        if ent.type == "text_link" and ent.url:
-            links.append((ent.offset, ent.offset + ent.length, ent.url))
+        e_type = getattr(ent, 'type', None)
+        if e_type is None:
+            cls_name = type(ent).__name__
+            if cls_name.startswith('MessageEntity'):
+                e_type = cls_name[len('MessageEntity'):].lower()
+            else:
+                e_type = str(cls_name).lower()
+        else:
+            e_type = str(e_type).lower()
 
-    if not links:
+        offset = getattr(ent, 'offset', 0)
+        length = getattr(ent, 'length', 0)
+        url = getattr(ent, 'url', None)
+        lang = getattr(ent, 'language', None) or getattr(ent, 'lang', None)
+        user_id = getattr(ent, 'user_id', None) or (getattr(getattr(ent, 'user', None), 'id', None))
+
+        if e_type in ('text_link', 'texturl', 'text_url'):
+            e_type = 'text_link'
+        elif e_type in ('text_mention', 'mentionname', 'mention_name'):
+            e_type = 'text_mention'
+        elif e_type in ('bold',):
+            e_type = 'bold'
+        elif e_type in ('italic',):
+            e_type = 'italic'
+        elif e_type in ('underline',):
+            e_type = 'underline'
+        elif e_type in ('strikethrough', 'strike'):
+            e_type = 'strikethrough'
+        elif e_type in ('spoiler',):
+            e_type = 'spoiler'
+        elif e_type in ('code',):
+            e_type = 'code'
+        elif e_type in ('pre',):
+            e_type = 'pre'
+        elif e_type in ('blockquote',):
+            e_type = 'blockquote'
+        elif e_type in ('expandable_blockquote', 'expandableblockquote'):
+            e_type = 'expandable_blockquote'
+        elif e_type in ('header', 'heading'):
+            e_type = 'header'
+        else:
+            continue
+
+        py_start, py_end = get_py_indices(offset, length)
+        if py_start < py_end and py_start < len(text):
+            if e_type == 'text_link' and url and url.strip() == text[py_start:py_end].strip():
+                continue
+            parsed.append({
+                'type': e_type,
+                'start': py_start,
+                'end': py_end,
+                'url': url,
+                'lang': lang,
+                'user_id': user_id,
+            })
+
+    if not parsed:
         return text
 
-    links.sort(key=lambda x: x[0], reverse=True)
-    for start, end, url in links:
-        # Only insert if the URL isn't already in the display text
-        display_text = text[start:end]
-        if url not in display_text:
-            text = text[:end] + f" ( {url} )" + text[end:]
+    bq_spans = [e for e in parsed if e['type'] in ('blockquote', 'expandable_blockquote')]
+    inline_ents = [e for e in parsed if e['type'] not in ('blockquote', 'expandable_blockquote')]
 
-    return text
+    open_tags = {i: [] for i in range(len(text) + 1)}
+    close_tags = {i: [] for i in range(len(text) + 1)}
+
+    for ent in inline_ents:
+        open_tags[ent['start']].append(ent)
+        close_tags[ent['end']].append(ent)
+
+    for idx in open_tags:
+        open_tags[idx].sort(key=lambda x: -(x['end'] - x['start']))
+    for idx in close_tags:
+        close_tags[idx].sort(key=lambda x: (x['end'] - x['start']))
+
+    def get_open_str(ent):
+        t = ent['type']
+        if t == 'bold': return '**'
+        if t == 'italic': return '*'
+        if t == 'underline': return '__'
+        if t == 'strikethrough': return '~'
+        if t == 'spoiler': return '||'
+        if t == 'code': return '`'
+        if t == 'pre':
+            l = ent.get('lang') or ''
+            return f"```{l}\n"
+        if t in ('text_link', 'text_mention'):
+            return '['
+        if t == 'header':
+            return '# '
+        return ''
+
+    def get_close_str(ent):
+        t = ent['type']
+        if t == 'bold': return '**'
+        if t == 'italic': return '*'
+        if t == 'underline': return '__'
+        if t == 'strikethrough': return '~'
+        if t == 'spoiler': return '||'
+        if t == 'code': return '`'
+        if t == 'pre': return '\n```'
+        if t == 'text_link':
+            url = ent.get('url') or ''
+            return f"]({url})"
+        if t == 'text_mention':
+            uid = ent.get('user_id') or ''
+            return f"](tg://user?id={uid})"
+        return ''
+
+    res = []
+    for i in range(len(text) + 1):
+        for ent in close_tags[i]:
+            res.append(get_close_str(ent))
+        for ent in open_tags[i]:
+            res.append(get_open_str(ent))
+        if i < len(text):
+            res.append(text[i])
+
+    formatted = ''.join(res)
+
+    if bq_spans:
+        lines = formatted.split('\n')
+        new_lines = []
+        for line in lines:
+            if line.strip():
+                new_lines.append(f"> {line}" if not line.startswith('> ') else line)
+            else:
+                new_lines.append(">")
+        formatted = '\n'.join(new_lines)
+
+    return formatted
+
+
+async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional[str], Optional[str]]:
+    """Fetch public Telegram channel post preview and extract formatted text and high-res media URL."""
+    if not username or not post_id:
+        return None, None
+    url = f"https://t.me/{username}/{post_id}?embed=1"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            if resp.status_code != 200 or not resp.text:
+                return None, None
+            content = resp.text
+
+            text = None
+            text_match = re.search(r'<div class="tgme_widget_message_text[^"]*js-message_text[^"]*"[^>]*>(.*?)</div>', content, re.DOTALL)
+            if text_match:
+                raw_html = text_match.group(1)
+                raw_html = re.sub(r'<br\s*/?>', '\n', raw_html)
+                raw_html = re.sub(r'<(b|strong)[^>]*>(.*?)</\1>', r'**\2**', raw_html)
+                raw_html = re.sub(r'<(i|em)[^>]*>(.*?)</\1>', r'*\2*', raw_html)
+                raw_html = re.sub(r'<(s|strike|del)[^>]*>(.*?)</\1>', r'~\2~', raw_html)
+                raw_html = re.sub(r'<(u|ins)[^>]*>(.*?)</\1>', r'__\2__', raw_html)
+                raw_html = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', raw_html)
+                raw_html = re.sub(r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```', raw_html)
+                raw_html = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', lambda m: '\n'.join('> ' + l for l in m.group(1).split('\n')), raw_html)
+                raw_html = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', raw_html)
+                raw_html = re.sub(r'<[^>]+>', '', raw_html)
+                text = html.unescape(raw_html).strip()
+
+            img_match = re.search(r"background-image:url\('([^']+)'\)", content)
+            img_url = img_match.group(1) if img_match else None
+
+            if img_url and 'telegram.org/img/emoji' in img_url:
+                img_url = None
+
+            return text, img_url
+    except Exception as e:
+        logger.debug(f"Public TG post extraction failed for @{username}/{post_id}: {e}")
+        return None, None
+
+
+async def _download_image_url(url: str) -> Optional[str]:
+    """Download an image from a URL into a temporary file for Delta Chat relay."""
+    if not url:
+        return None
+    if url.startswith('//'):
+        url = 'https:' + url
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            if resp.status_code == 200 and resp.content:
+                ext = '.jpg'
+                if '.png' in url.lower():
+                    ext = '.png'
+                elif '.webp' in url.lower():
+                    ext = '.webp'
+                elif '.gif' in url.lower():
+                    ext = '.gif'
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
+                with os.fdopen(tmp_fd, 'wb') as f:
+                    f.write(resp.content)
+                return tmp_path
+    except Exception as e:
+        logger.debug(f"Failed to download image from {url}: {e}")
+    return None
+
+
+def _inline_links(text: str, entities) -> str:
+    """Format entities into Markdown (maintains backwards compatibility for _inline_links)."""
+    return _format_telegram_entities(text, entities)
 
 
 async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
@@ -4418,9 +4618,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     text = post.text or post.caption or ""
-    # Inline hidden links so they are not lost in DC
     entities = post.entities or post.caption_entities or []
-    text = _inline_links(text, entities)
+    text = _format_telegram_entities(text, entities)
 
     # Author signature (shown for channel posts with signatures enabled)
     author = getattr(post, 'author_signature', None)
@@ -4524,8 +4723,18 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             loc_text = f"📍 Location: https://maps.google.com/?q={post.location.latitude},{post.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
 
+    local_file_path = None
+    if not text and not tg_file and tg_username:
+        extracted_text, extracted_img_url = await _extract_public_tg_post(tg_username, post.message_id)
+        if extracted_text:
+            text = extracted_text
+        if extracted_img_url and not local_file_path:
+            local_file_path = await _download_image_url(extracted_img_url)
+        if not text and not local_file_path:
+            text = "[📰 Post with rich formatting / unsupported media — open in Telegram to view]"
+
     # Skip posts with no text and no media
-    if not text and not tg_file:
+    if not text and not tg_file and not local_file_path:
         return
 
     # Build message text
@@ -4538,7 +4747,6 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     # Download media if present
-    local_file_path = None
     if tg_file:
         try:
             tg_file_obj = await tg_file.get_file()
@@ -4692,7 +4900,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
 
     text = post.text or post.caption or ""
     entities = post.entities or post.caption_entities or []
-    text = _inline_links(text, entities)
+    text = _format_telegram_entities(text, entities)
 
     author = getattr(post, 'author_signature', None)
 
@@ -4859,7 +5067,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     entities = msg.entities or msg.caption_entities or []
-    text = _inline_links(text, entities)
+    text = _format_telegram_entities(text, entities)
 
     if not text:
         return
@@ -4949,7 +5157,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Inline hidden links so they are not lost in DC
     entities = update.message.entities or update.message.caption_entities or []
-    text = _inline_links(text, entities)
+    text = _format_telegram_entities(text, entities)
 
     # Detect and format polls
     if update.message.poll:
@@ -5628,8 +5836,13 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         return
 
     tg_channel_id = msg.chat_id
-    text = msg.text or ""
+    raw_text = getattr(msg, 'message', '') or getattr(msg, 'raw_text', '') or getattr(msg, 'text', '') or ""
+    entities = getattr(msg, 'entities', []) or []
+    text = _format_telegram_entities(raw_text, entities) if entities else raw_text
     
+    file_path = None
+    media_to_download = None
+
     # Extract media text and descriptions for Telethon media types
     if msg.media:
         m_type = type(msg.media).__name__
@@ -5675,6 +5888,16 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             geo = getattr(msg.media, 'geo', None)
             if geo and getattr(geo, 'lat', None) is not None:
                 text = (text + f"\n\n📍 Location: https://maps.google.com/?q={geo.lat},{geo.long}").strip()
+        elif m_type == 'MessageMediaUnsupported':
+            chat_username = getattr(msg.chat, 'username', None) if getattr(msg, 'chat', None) else None
+            if not text and chat_username and getattr(msg, 'id', None):
+                extracted_text, extracted_img_url = await _extract_public_tg_post(chat_username, msg.id)
+                if extracted_text:
+                    text = extracted_text
+                if extracted_img_url and not file_path:
+                    file_path = await _download_image_url(extracted_img_url)
+            if not text and not file_path:
+                text = "[📰 Post with rich formatting / unsupported media — open in Telegram to view]"
         elif not text and m_type not in ('MessageMediaPhoto', 'MessageMediaDocument'):
             text = f"[{m_type}]"
 
@@ -5696,9 +5919,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
     # Note: downloading media with Telethon if needed
-    file_path = None
-    media_to_download = None
-    if msg.media:
+    if msg.media and not file_path:
         m_type = type(msg.media).__name__
         if m_type == 'MessageMediaPaidMedia':
             ext_media = getattr(msg.media, 'extended_media', []) or []
@@ -5707,9 +5928,9 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 if sub:
                     media_to_download = sub
                     break
-        elif m_type != 'MessageMediaWebPage':
+        elif m_type not in ('MessageMediaWebPage', 'MessageMediaUnsupported'):
             media_to_download = msg.media
-        else:
+        elif m_type == 'MessageMediaWebPage':
             webpage = msg.media.webpage
             if webpage and type(webpage).__name__ != 'WebPageEmpty' and getattr(webpage, 'photo', None):
                 media_to_download = webpage.photo

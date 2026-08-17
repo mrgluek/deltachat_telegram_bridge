@@ -90,7 +90,7 @@ class TestTelegramBridge(unittest.TestCase):
         entities = [MockEntity("text_link", 0, 5, "https://example.com")]
         self.assertEqual(
             bot._inline_links("click here", entities),
-            "click ( https://example.com ) here"
+            "[click](https://example.com) here"
         )
 
         # Skip links already present in text
@@ -322,6 +322,96 @@ class TestTelegramBridge(unittest.TestCase):
         flt = bot.PollingErrorFilter()
         self.assertFalse(flt.filter(get_updates_record))
 
+    def test_rich_entity_formatting(self):
+        # Nested bold and italic
+        text = "Hello beautiful world"
+        ents = [
+            MockEntity("bold", 0, 21),
+            MockEntity("italic", 6, 9)
+        ]
+        out = bot._format_telegram_entities(text, ents)
+        self.assertEqual(out, "**Hello *beautiful* world**")
+
+        # Inline code and text link
+        text2 = "Check docs at website now"
+        ents2 = [
+            MockEntity("code", 6, 4),
+            MockEntity("text_link", 14, 7, url="https://deltachat.org")
+        ]
+        out2 = bot._format_telegram_entities(text2, ents2)
+        self.assertEqual(out2, "Check `docs` at [website](https://deltachat.org) now")
+
+        # UTF-16 surrogate pairs and emojis
+        text3 = "📍 News: 🚀 Launch"
+        # 📍 is 2 UTF-16 code units (offset 0..2)
+        # ' Launch' starts at UTF-16 offset 11, len 7
+        ents3 = [
+            MockEntity("bold", 11, 7)
+        ]
+        out3 = bot._format_telegram_entities(text3, ents3)
+        self.assertEqual(out3, "📍 News: 🚀** Launch**")
+
+        # Blockquote
+        text4 = "Quote line 1\nQuote line 2"
+        ents4 = [
+            MockEntity("blockquote", 0, len(text4))
+        ]
+        out4 = bot._format_telegram_entities(text4, ents4)
+        self.assertEqual(out4, "> Quote line 1\n> Quote line 2")
+
+        # Strikethrough, underline, spoiler, pre/code block
+        text5 = "strike under spoil codeblock"
+        ents5 = [
+            MockEntity("strikethrough", 0, 6),
+            MockEntity("underline", 7, 5),
+            MockEntity("spoiler", 13, 5),
+            MockEntity("pre", 19, 9, url=None)
+        ]
+        ents5[3].language = "python"
+        out5 = bot._format_telegram_entities(text5, ents5)
+        self.assertIn("~strike~", out5)
+        self.assertIn("__under__", out5)
+        self.assertIn("||spoil||", out5)
+        self.assertIn("```python\ncodeblock\n```", out5)
+
+    def test_telethon_tl_entities(self):
+        class MessageEntityBold:
+            def __init__(self, offset, length):
+                self.offset = offset
+                self.length = length
+        class MessageEntityTextUrl:
+            def __init__(self, offset, length, url):
+                self.offset = offset
+                self.length = length
+                self.url = url
+        class MessageEntityBlockquote:
+            def __init__(self, offset, length):
+                self.offset = offset
+                self.length = length
+
+        text = "Delta Chat is great\nIndeed!"
+        ents = [
+            MessageEntityBold(0, 10),
+            MessageEntityTextUrl(14, 5, "https://deltachat.org"),
+            MessageEntityBlockquote(0, len(text))
+        ]
+        out = bot._format_telegram_entities(text, ents)
+        self.assertIn("> **Delta Chat** is [great](https://deltachat.org)", out)
+        self.assertIn("> Indeed!", out)
+
+    def test_unsupported_media_handling(self):
+        class MockUnsupportedMedia:
+            pass
+
+        class MockTelethonMsg:
+            def __init__(self):
+                self.media = MockUnsupportedMedia()
+                type(self.media).__name__ = "MessageMediaUnsupported"
+
+        msg = MockTelethonMsg()
+        self.assertEqual(bot._get_media_size(msg), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

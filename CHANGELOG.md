@@ -1,3 +1,13 @@
+## [2.11.0] - 2026-08-17
+- **Telegram Rich Formatting & New Post Format Support**:
+  - Implemented comprehensive Telegram entity-to-Markdown formatting engine (`_format_telegram_entities`) across both Bot API and Userbot pipelines.
+  - Full conversion of Telegram rich styling: bold (`**text**`), italic (`*text*`), underline (`__text__`), strikethrough (`~text~`), spoiler (`||text||`), inline code (`` `code` ``), code blocks with language syntax highlighting (```` ```lang\ncode\n``` ````), blockquotes (`> text`), expandable blockquotes, text links (`[text](url)`), text mentions, and headers.
+  - Added accurate UTF-16 code unit offset calculation (`_utf16_to_py_indices`) to prevent formatting shifts and string corruption on messages with multi-byte Unicode characters and emojis.
+- **Public Post Web Recovery & `MessageMediaUnsupported` Fallback**:
+  - Added automatic web preview fallback extraction (`_extract_public_tg_post`) for public channel posts encountering unsupported MTProto media types or new rich message formats.
+  - Automatically parses HTML message bodies to Delta Chat Markdown and fetches high-resolution media attachments.
+  - Replaced cryptic `[MessageMediaUnsupported]` placeholders with descriptive, user-friendly labels pointing to the original Telegram post.
+
 ## [2.10.1] - 2026-08-10
 - **Reduced Channel Reconciliation Interval to 10 Minutes**:
   - Decreased `reconcile_channels_loop` check interval from 15 minutes (900s) to 10 minutes (600s), ensuring faster recovery of missed posts after temporary outages or restarts.
