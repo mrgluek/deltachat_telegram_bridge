@@ -251,7 +251,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 
 
 
@@ -1499,6 +1499,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
+            f"/cleanup — Clean up stale, duplicate & orphaned bridges\n"
             f"/userbotsync — Force Userbot re-sync\n"
             f"/status — Show detailed bot and userbot status\n"
             f"/transports — Show configured mail relays & stats\n"
@@ -1540,6 +1541,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/channel N — Get channel invite link")
         lines.append(f"/channelqr N — Get channel QR invite")
         lines.append(f"/channelremove N — Remove a channel bridge")
+        lines.append(f"/cleanup — Clean up stale, duplicate & orphaned bridges")
         lines.append(f"/userbotsync — Force Userbot re-sync")
         lines.append(f"/status — Show detailed bot and userbot status")
         
@@ -2111,6 +2113,45 @@ def unbridge_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is not bridged."))
+
+
+@dc_cli.on(events.NewMessage(command="/cleanup"))
+def dc_cleanup_command(bot, accid, event):
+    """Trigger manual cleanup of stale/orphaned/duplicate bridges (Admin only)."""
+    msg = event.msg
+    chat_id = msg.chat_id
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot administrator can use /cleanup."))
+        return
+
+    global main_loop
+    if main_loop and main_loop.is_running():
+        async def _do_cleanup():
+            try:
+                stats = await cleanup_stale_bridges(dc_bot=bot, accid=accid)
+                total_removed = (
+                    stats['orphaned_bridges_removed']
+                    + stats['duplicate_bridges_removed']
+                    + stats['dead_bridges_removed']
+                    + stats['orphaned_channels_removed']
+                )
+                res_text = (
+                    f"🧹 Cleanup Complete\n\n"
+                    f"• Orphaned bridges removed from DB: {stats['orphaned_bridges_removed']}\n"
+                    f"• Duplicate bridges removed: {stats['duplicate_bridges_removed']}\n"
+                    f"• Dead ghost bridges removed: {stats['dead_bridges_removed']}\n"
+                    f"• Orphaned channels removed: {stats['orphaned_channels_removed']}\n"
+                    f"• Empty DC chats deleted: {stats['dc_chats_deleted']}\n\n"
+                    f"Total items cleaned: {total_removed}"
+                )
+                _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=res_text))
+            except Exception as e:
+                logger.error(f"DC manual cleanup failed: {e}")
+                _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Cleanup failed: {e}"))
+
+        asyncio.run_coroutine_threadsafe(_do_cleanup(), main_loop)
+    else:
+        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Main event loop is not ready."))
 
 
 @dc_cli.on(events.NewMessage(command="/locupdate"))
@@ -5589,10 +5630,209 @@ def start_dc_bot():
         logger.error(f"DC CLI error: {e}")
 
 
+async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, ub_client=None) -> dict:
+    """
+    Scan configured bridges and channels to remove stale, orphaned, or duplicate records.
+    Returns a dict with summary stats.
+    """
+    stats = {
+        'orphaned_bridges_removed': 0,
+        'duplicate_bridges_removed': 0,
+        'dead_bridges_removed': 0,
+        'orphaned_channels_removed': 0,
+        'dc_chats_deleted': 0
+    }
+
+    if dc_bot is None:
+        dc_bot = dc_bot_instance
+    if accid is None:
+        accid = dc_accid
+    if tg_app_instance is None:
+        tg_app_instance = tg_app
+    if ub_client is None:
+        ub_client = userbot_client
+
+    if not dc_bot or not accid:
+        logger.warning("Cleanup: Delta Chat bot instance or account ID not ready, skipping.")
+        return stats
+
+    # Get bot's self contact ID for DC member count checks
+    try:
+        self_contact = dc_bot.rpc.get_contact(accid, 1)
+        self_contact_id = getattr(self_contact, 'id', 1) if hasattr(self_contact, 'id') else (self_contact.get('id', 1) if isinstance(self_contact, dict) else 1)
+    except Exception:
+        self_contact_id = 1
+
+    # Helper to check DC chat details
+    def get_dc_info(dc_cid):
+        try:
+            info = dc_bot.rpc.get_basic_chat_info(accid, dc_cid)
+            if not info or not isinstance(info, dict) or not info.get("name"):
+                return None, 0
+            contacts = dc_bot.rpc.get_chat_contacts(accid, dc_cid)
+            if contacts:
+                sub_count = len(contacts) - 1 if self_contact_id in contacts else len(contacts)
+            else:
+                sub_count = 0
+            return info, max(0, sub_count)
+        except Exception:
+            return None, 0
+
+    def delete_dc_chat_safe(dc_cid):
+        try:
+            dc_bot.rpc.delete_chat(accid, dc_cid)
+            stats['dc_chats_deleted'] += 1
+            _clear_dc_caches(dc_cid)
+            logger.info(f"Cleanup: Deleted DC chat {dc_cid} from Delta Chat core.")
+        except Exception as e:
+            logger.debug(f"Cleanup: Could not delete DC chat {dc_cid}: {e}")
+
+    # --- 1. Scan Group Bridges ---
+    bridges = database.get_all_bridges()
+    # Group by tg_chat_id: {tg_chat_id: [(dc_cid, reactions_count), ...]}
+    tg_to_bridges = {}
+    for row in bridges:
+        dc_cid, tg_cid = row[0], row[1]
+        r_count = row[2] if len(row) > 2 else 0
+        tg_to_bridges.setdefault(tg_cid, []).append((dc_cid, r_count))
+
+    for tg_cid, bridge_list in tg_to_bridges.items():
+        evaluated = []
+        for dc_cid, r_count in bridge_list:
+            info, sub_count = get_dc_info(dc_cid)
+            m_count = database.get_bridge_message_count(dc_cid, tg_cid)
+            evaluated.append({
+                'dc_cid': dc_cid,
+                'exists_in_dc': info is not None,
+                'info': info,
+                'title': info.get('name', '') if info else '',
+                'sub_count': sub_count,
+                'm_count': m_count,
+                'r_count': r_count
+            })
+
+        # A. Remove non-existent DC chats (orphaned in DB)
+        alive_bridges = []
+        for b in evaluated:
+            if not b['exists_in_dc']:
+                database.remove_bridge_pair(b['dc_cid'], tg_cid)
+                _clear_dc_caches(b['dc_cid'])
+                stats['orphaned_bridges_removed'] += 1
+                logger.info(f"Cleanup: Removed orphaned DB bridge DC {b['dc_cid']} ↔ TG {tg_cid} (chat does not exist in DC)")
+            else:
+                alive_bridges.append(b)
+
+        # B. Handle duplicates for the same tg_cid
+        remaining_bridges = []
+        if len(alive_bridges) > 1:
+            # Sort: prioritize bridges with subscribers > 0, then higher message count, then higher (newer) dc_cid
+            alive_bridges.sort(key=lambda x: (x['sub_count'] > 0, x['sub_count'], x['m_count'], x['dc_cid']), reverse=True)
+            primary = alive_bridges[0]
+            remaining_bridges.append(primary)
+            for dup in alive_bridges[1:]:
+                # If the duplicate has 0 subscribers, we can safely delete it
+                if dup['sub_count'] == 0:
+                    database.remove_bridge_pair(dup['dc_cid'], tg_cid)
+                    delete_dc_chat_safe(dup['dc_cid'])
+                    stats['duplicate_bridges_removed'] += 1
+                    logger.info(f"Cleanup: Removed duplicate bridge DC {dup['dc_cid']} (0 subs, title='{dup['title']}') for TG {tg_cid}, keeping DC {primary['dc_cid']}")
+                else:
+                    remaining_bridges.append(dup)
+        else:
+            remaining_bridges = alive_bridges
+
+        # C. Check for dead fallback ghost bridges (0 subs, 0 messages, fallback title like Bridge -100... or TG Group -100...)
+        for b in remaining_bridges:
+            if b['sub_count'] == 0 and b['m_count'] == 0:
+                title = b.get('title', '')
+                is_fallback_name = title.startswith("Bridge -") or title.startswith("TG Group -") or title == "Unknown Group"
+                if is_fallback_name:
+                    # Check if TG chat is accessible
+                    tg_accessible = False
+                    if tg_app_instance and hasattr(tg_app_instance, 'bot') and tg_app_instance.bot:
+                        try:
+                            await tg_app_instance.bot.get_chat(tg_cid)
+                            tg_accessible = True
+                        except Exception:
+                            pass
+                    if not tg_accessible and ub_client and hasattr(ub_client, 'is_connected') and ub_client.is_connected():
+                        try:
+                            await ub_client.get_entity(tg_cid)
+                            tg_accessible = True
+                        except Exception:
+                            pass
+
+                    if not tg_accessible:
+                        database.remove_bridge_pair(b['dc_cid'], tg_cid)
+                        delete_dc_chat_safe(b['dc_cid'])
+                        stats['dead_bridges_removed'] += 1
+                        logger.info(f"Cleanup: Removed dead ghost bridge DC {b['dc_cid']} ↔ TG {tg_cid} (0 subs, 0 msgs, title='{b['title']}', TG chat inaccessible)")
+
+    # --- 2. Scan Channels ---
+    channels = database.get_all_channels()
+    for ch in channels:
+        ch_id = ch['id']
+        dc_cid = ch.get('dc_chat_id')
+        if not dc_cid:
+            continue
+        info, _ = get_dc_info(dc_cid)
+        if info is None:
+            database.remove_channel(ch_id)
+            _clear_dc_caches(dc_cid)
+            stats['orphaned_channels_removed'] += 1
+            logger.info(f"Cleanup: Removed orphaned channel #{ch_id} (DC {dc_cid} no longer exists in DC)")
+
+    logger.info(f"Cleanup finished: {stats}")
+    return stats
+
+
+async def tg_cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger manual cleanup of stale/orphaned/duplicate bridges (Owner only)."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type != "private":
+        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        return
+
+    if not database.is_owner(user.id):
+        await update.message.reply_text("❌ Only the bot owner can use /cleanup.")
+        return
+
+    status_msg = await update.message.reply_text("⏳ Running cleanup of stale and duplicate bridges...")
+    try:
+        stats = await cleanup_stale_bridges()
+        total_removed = (
+            stats['orphaned_bridges_removed']
+            + stats['duplicate_bridges_removed']
+            + stats['dead_bridges_removed']
+            + stats['orphaned_channels_removed']
+        )
+        res_lines = [
+            "🧹 <b>Cleanup Complete</b>\n",
+            f"• Orphaned bridges removed from DB: {stats['orphaned_bridges_removed']}",
+            f"• Duplicate bridges removed: {stats['duplicate_bridges_removed']}",
+            f"• Dead ghost bridges removed: {stats['dead_bridges_removed']}",
+            f"• Orphaned channels removed: {stats['orphaned_channels_removed']}",
+            f"• Empty DC chats deleted: {stats['dc_chats_deleted']}",
+            f"\n<b>Total items cleaned:</b> {total_removed}"
+        ]
+        await status_msg.edit_text("\n".join(res_lines), parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Manual cleanup failed: {e}")
+        await status_msg.edit_text(f"❌ Cleanup failed: {html.escape(str(e))}", parse_mode='HTML')
+
+
 async def db_cleanup_loop():
+    cleanup_counter = 0
     while True:
         try:
             database.cleanup_old_messages()
+            cleanup_counter += 1
+            # Run full bridge reconciliation cleanup once every 24 hours (24 iterations of 1h)
+            if cleanup_counter >= 24:
+                cleanup_counter = 0
+                await cleanup_stale_bridges()
             await asyncio.sleep(3600)  # Every hour
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
@@ -6398,6 +6638,7 @@ async def main():
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channel\d+qr$'), tg_channelqr_command))
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channelqr\d+$'), tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
+    tg_app.add_handler(CommandHandler("cleanup", tg_cleanup_command))
     tg_app.add_handler(CommandHandler("userbotsync", tg_userbotsync_command))
     tg_app.add_handler(CommandHandler("userbotjoin", tg_userbotjoin_command))
 
@@ -6459,7 +6700,16 @@ async def main():
     # allowed_updates=Update.ALL_TYPES implicitly includes message_reaction
     await tg_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
-    # Start DB cleanup loop
+    # Start DB cleanup loop and startup reconciliation
+    async def startup_cleanup_task():
+        await asyncio.sleep(10)
+        try:
+            logger.info("Running startup cleanup for stale/orphaned bridges...")
+            await cleanup_stale_bridges()
+        except Exception as e:
+            logger.error(f"Startup bridge cleanup failed: {e}")
+
+    asyncio.create_task(startup_cleanup_task())
     asyncio.create_task(db_cleanup_loop())
     asyncio.create_task(reconcile_channels_loop())
 

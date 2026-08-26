@@ -411,6 +411,129 @@ class TestTelegramBridge(unittest.TestCase):
         msg = MockTelethonMsg()
         self.assertEqual(bot._get_media_size(msg), 0)
 
+    def test_cleanup_stale_bridges_orphans(self):
+        import asyncio
+        database.add_bridge(101, -1001)
+        database.add_bridge(102, -1002)
+
+        mock_dc_bot = MagicMock()
+        def mock_get_basic_chat_info(accid, chat_id):
+            if chat_id == 101:
+                return {"id": 101, "name": "Active Chat"}
+            raise Exception("Chat not found")
+        
+        mock_dc_bot.rpc.get_basic_chat_info.side_effect = mock_get_basic_chat_info
+        mock_dc_bot.rpc.get_chat_contacts.return_value = [1, 2]
+        mock_contact = MagicMock()
+        mock_contact.id = 1
+        mock_dc_bot.rpc.get_contact.return_value = mock_contact
+
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        self.assertEqual(stats['orphaned_bridges_removed'], 1)
+        
+        bridges = database.get_all_bridges()
+        dc_ids = [b[0] for b in bridges]
+        self.assertIn(101, dc_ids)
+        self.assertNotIn(102, dc_ids)
+
+    def test_cleanup_stale_bridges_duplicates(self):
+        import asyncio
+        database.add_bridge(114, -1001041396328)
+        database.add_bridge(132, -1001041396328)
+
+        mock_dc_bot = MagicMock()
+        def mock_get_basic_chat_info(accid, chat_id):
+            if chat_id == 114:
+                return {"id": 114, "name": "Bridge -1001041396328"}
+            elif chat_id == 132:
+                return {"id": 132, "name": "IT news"}
+            raise Exception("Chat not found")
+
+        def mock_get_chat_contacts(accid, chat_id):
+            if chat_id == 114:
+                return [1]  # Only bot itself -> 0 real subscribers
+            elif chat_id == 132:
+                return [1, 10, 11]  # 2 subscribers
+            return []
+
+        mock_dc_bot.rpc.get_basic_chat_info.side_effect = mock_get_basic_chat_info
+        mock_dc_bot.rpc.get_chat_contacts.side_effect = mock_get_chat_contacts
+        mock_contact = MagicMock()
+        mock_contact.id = 1
+        mock_dc_bot.rpc.get_contact.return_value = mock_contact
+
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        self.assertEqual(stats['duplicate_bridges_removed'], 1)
+        self.assertEqual(stats['dc_chats_deleted'], 1)
+        mock_dc_bot.rpc.delete_chat.assert_called_with(1, 114)
+
+        bridges = database.get_all_bridges()
+        dc_ids = [b[0] for b in bridges]
+        self.assertIn(132, dc_ids)
+        self.assertNotIn(114, dc_ids)
+
+    def test_cleanup_channels_orphans(self):
+        import asyncio
+        ch1 = database.add_channel_by_id(tg_channel_id=1001, dc_chat_id=201, username="test_ch1")
+        ch2 = database.add_channel_by_id(tg_channel_id=1002, dc_chat_id=202, username="test_ch2")
+
+        mock_dc_bot = MagicMock()
+        def mock_get_basic_chat_info(accid, chat_id):
+            if chat_id == 201:
+                return {"id": 201, "name": "Channel 1"}
+            raise Exception("Chat not found")
+
+        mock_dc_bot.rpc.get_basic_chat_info.side_effect = mock_get_basic_chat_info
+        mock_dc_bot.rpc.get_chat_contacts.return_value = [1]
+        mock_contact = MagicMock()
+        mock_contact.id = 1
+        mock_dc_bot.rpc.get_contact.return_value = mock_contact
+
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        self.assertEqual(stats['orphaned_channels_removed'], 1)
+
+        channels = database.get_all_channels()
+        ch_ids = [c['id'] for c in channels]
+        self.assertIn(ch1, ch_ids)
+        self.assertNotIn(ch2, ch_ids)
+
+    def test_cleanup_preserves_active_bridges(self):
+        import asyncio
+        # Bridge with 5 subscribers
+        database.add_bridge(301, -10055)
+        # Channel with valid DC chat
+        ch_id = database.add_channel_by_id(tg_channel_id=1055, dc_chat_id=302, username="active_ch")
+
+        mock_dc_bot = MagicMock()
+        def mock_get_basic_chat_info(accid, chat_id):
+            if chat_id == 301:
+                return {"id": 301, "name": "Active Discussion"}
+            elif chat_id == 302:
+                return {"id": 302, "name": "Active Broadcast"}
+            raise Exception("Chat not found")
+
+        def mock_get_chat_contacts(accid, chat_id):
+            return [1, 2, 3, 4, 5, 6]  # 5 subscribers
+
+        mock_dc_bot.rpc.get_basic_chat_info.side_effect = mock_get_basic_chat_info
+        mock_dc_bot.rpc.get_chat_contacts.side_effect = mock_get_chat_contacts
+        mock_contact = MagicMock()
+        mock_contact.id = 1
+        mock_dc_bot.rpc.get_contact.return_value = mock_contact
+
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        self.assertEqual(stats['orphaned_bridges_removed'], 0)
+        self.assertEqual(stats['duplicate_bridges_removed'], 0)
+        self.assertEqual(stats['dead_bridges_removed'], 0)
+        self.assertEqual(stats['orphaned_channels_removed'], 0)
+        self.assertEqual(stats['dc_chats_deleted'], 0)
+
+        # Both remain in DB
+        bridges = database.get_all_bridges()
+        self.assertIn(301, [b[0] for b in bridges])
+        channels = database.get_all_channels()
+        self.assertIn(ch_id, [c['id'] for c in channels])
+
 
 if __name__ == "__main__":
     unittest.main()

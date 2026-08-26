@@ -133,6 +133,13 @@ def init_db():
                 cursor.execute("ALTER TABLE bridges ADD COLUMN reactions_count INTEGER DEFAULT 0")
         except Exception:
             pass
+        # Migration: add created_at to bridges
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
+            if 'created_at' not in col_names:
+                cursor.execute("ALTER TABLE bridges ADD COLUMN created_at INTEGER DEFAULT (strftime('%s','now'))")
+        except Exception:
+            pass
         # Migration: add content_hash to message_map
         try:
             col_names = [c[1] for c in cursor.execute("PRAGMA table_info(message_map)").fetchall()]
@@ -181,7 +188,7 @@ def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id, reactions_count) VALUES (?, ?, ?, 0)", (dc_chat_id, tg_chat_id, created_by_tg_id))
+            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id, reactions_count, created_at) VALUES (?, ?, ?, 0, strftime('%s','now'))", (dc_chat_id, tg_chat_id, created_by_tg_id))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -210,6 +217,18 @@ def remove_bridge_by_tg(tg_chat_id: int):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
         cursor.execute("DELETE FROM message_map WHERE tg_chat_id = ?", (tg_chat_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+def remove_bridge_pair(dc_chat_id: int, tg_chat_id: int) -> bool:
+    """Remove a specific bridge pair and its message mappings."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM bridges WHERE dc_chat_id = ? AND tg_chat_id = ?", (dc_chat_id, tg_chat_id))
+        cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ? AND tg_chat_id = ?", (dc_chat_id, tg_chat_id))
         deleted = cursor.rowcount > 0
         conn.commit()
         conn.close()

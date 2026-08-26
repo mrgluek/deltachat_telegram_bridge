@@ -1,3 +1,14 @@
+## [2.12.0] - 2026-08-26
+- **Automatic Bridge Cleanup & Reconciliation Worker (`cleanup_stale_bridges`)**:
+  - Implemented automatic startup and daily background cleanup worker to detect and resolve stale, duplicate, and orphaned bridges.
+  - **Orphaned database records**: Scans all `bridges` and `channels` in `bridge.db`, removing records and related `message_map` mappings whose Delta Chat groups no longer exist in Delta Chat core.
+  - **Duplicate bridge deduplication**: Automatically identifies duplicate bridges mapping to the same Telegram chat ID (`tg_chat_id`), preserving active bridges with subscribers/messages while deleting empty duplicate chats (`0 👤`) from Delta Chat and purging them from SQLite.
+  - **Dead ghost bridge cleanup**: Safely removes empty placeholder bridges (`Bridge -100...` / `TG Group -100...` with 0 subscribers and 0 messages) when the corresponding Telegram group is inaccessible.
+  - **Manual `/cleanup` command**: Added owner/admin `/cleanup` command in both Telegram and Delta Chat with detailed summary reports.
+- **Database Migrations & Schema**:
+  - Added `created_at` timestamp column migration to the `bridges` table.
+  - Added `remove_bridge_pair` function to securely clean up specific bridge pairs and message maps.
+
 ## [2.11.0] - 2026-08-17
 - **Telegram Rich Formatting & New Post Format Support**:
   - Implemented comprehensive Telegram entity-to-Markdown formatting engine (`_format_telegram_entities`) across both Bot API and Userbot pipelines.

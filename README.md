@@ -18,6 +18,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 
 - **Watchdog & Polling Timeout Optimization**: Automatic detection and recovery from both Userbot and Telegram Bot API polling connection hangs. Configured tuned `get_updates_request` HTTP timeouts (`read_timeout=60s`, `connect_timeout=30s`) and log filters to suppress transient `httpcore.ConnectTimeout` errors during polling restarts and graceful shutdowns.
+- **Automatic Bridge Cleanup & Reconciliation Worker**: Automatic startup and daily background cleanup worker to detect and remove orphaned database records, purge empty duplicate bridges (`0 👤`) for the same Telegram chat, delete dead fallback ghost groups from Delta Chat, and reconcile broadcast channels.
 - **Automatic Transport Failover**: Link multiple mail relays to a single account. The bot automatically detects message delivery failures via raw core events, rotates `configured_addr` to the next transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
 - **Transport Statistics**: Detailed tracking of messages sent and received per relay, viewable via `/transports`.
 - **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
@@ -340,6 +341,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/channelqr N` | Get QR code image for channel by its internal number |
 | `/userbotjoin <link>` | Join a channel/group via Userbot (no admin needed) |
 | `/groups` | List technical account's groups for easy bridging |
+| `/cleanup` | Clean up stale, duplicate & orphaned bridges (owner only) |
 | `/transports` | Show configured mail relays & usage stats |
 | `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
@@ -362,6 +364,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/channelremove N` — Remove bridge for channel #N.
 - `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
+- `/cleanup` — Clean up stale, duplicate & orphaned bridges.
 - `/stats` — Show bridge statistics for the current chat.
 - `/status` — Show detailed bot, userbot, queue, and channel status (admin only).
 - `/resilient` — Toggle resilient sending mode across all relays (admin only).
