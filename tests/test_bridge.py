@@ -652,6 +652,70 @@ class TestTelegramBridge(unittest.TestCase):
         finally:
             bot.userbot_client = original_ub
 
+    def test_find_channel_by_any_id(self):
+        row_id = database.add_channel_by_id(tg_channel_id=-1003612339259, dc_chat_id=777, username="banned_channel")
+        self.assertIsNotNone(row_id)
+
+        # Lookup by exact negative ID
+        res1 = database.find_channel_by_any_id(-1003612339259)
+        self.assertIsNotNone(res1)
+        self.assertEqual(res1['id'], row_id)
+
+        # Lookup by positive ID from Telethon logs (3612339259)
+        res2 = database.find_channel_by_any_id(3612339259)
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2['id'], row_id)
+
+        # Lookup by string with or without @
+        res3 = database.find_channel_by_any_id("@banned_channel")
+        self.assertIsNotNone(res3)
+        self.assertEqual(res3['id'], row_id)
+
+        # Lookup by internal db row id
+        res4 = database.find_channel_by_any_id(row_id)
+        self.assertIsNotNone(res4)
+        self.assertEqual(res4['id'], row_id)
+
+    def test_handle_channel_access_revoked_alerts(self):
+        import asyncio
+        ch_id = database.add_channel_by_id(tg_channel_id=-1003612339259, dc_chat_id=888, username="test_banned_channel")
+        database.set_config("admin_tg_id", "12345")
+        database.set_config("admin_dc_email", "admin@example.com")
+
+        from unittest.mock import AsyncMock
+        mock_dc_bot = MagicMock()
+        mock_tg_app = MagicMock()
+        mock_tg_app.bot.send_message = AsyncMock()
+
+        # Reset debounced set
+        bot._reported_inaccessible_channels.clear()
+
+        orig_dc_bot = bot.dc_bot_instance
+        orig_dc_accid = bot.dc_accid
+        orig_tg_app = bot.tg_app
+        try:
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+            bot.tg_app = mock_tg_app
+
+            asyncio.run(bot._handle_channel_access_revoked(3612339259, reason="Account was banned in channel"))
+            time.sleep(0.1)
+
+            # Check that DC channel was notified
+            mock_dc_bot.rpc.send_msg.assert_called()
+            # Check that TG admin was notified
+            mock_tg_app.bot.send_message.assert_called()
+
+            # Second call should be debounced (no duplicate calls)
+            mock_dc_bot.rpc.send_msg.reset_mock()
+            asyncio.run(bot._handle_channel_access_revoked(3612339259, reason="Account was banned in channel"))
+            time.sleep(0.1)
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+        finally:
+            bot.dc_bot_instance = orig_dc_bot
+            bot.dc_accid = orig_dc_accid
+            bot.tg_app = orig_tg_app
+
 
 if __name__ == "__main__":
     unittest.main()

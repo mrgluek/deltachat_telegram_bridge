@@ -604,6 +604,50 @@ def get_channel_by_tg_id(tg_channel_id: int) -> dict | None:
         conn.close()
         return dict(row) if row else None
 
+def find_channel_by_any_id(raw_id: int | str) -> dict | None:
+    """Find a channel by numeric ID with or without -100 prefix, internal row ID, or username."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # 1. Try direct integer match against tg_channel_id or internal id
+        try:
+            val = int(raw_id)
+            cursor.execute("SELECT * FROM channels WHERE tg_channel_id = ? OR id = ?", (val, val))
+            row = cursor.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+            
+            # 2. Try prefix variations (-100 prefix vs raw positive ID)
+            clean_str = str(abs(val))
+            if clean_str.startswith("100"):
+                clean_str = clean_str[3:]
+            
+            id_with_prefix = int(f"-100{clean_str}")
+            id_without_prefix = int(clean_str)
+            
+            cursor.execute("SELECT * FROM channels WHERE tg_channel_id IN (?, ?)", (id_with_prefix, id_without_prefix))
+            row = cursor.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+        except (ValueError, TypeError):
+            pass
+
+        # 3. Try username match
+        if isinstance(raw_id, str):
+            clean_name = raw_id.strip().lstrip('@').lower()
+            cursor.execute("SELECT * FROM channels WHERE tg_channel_username = ?", (clean_name,))
+            row = cursor.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+
+        conn.close()
+        return None
+
 def update_channel_info(channel_id: int, participants_count: int = None, username: str = None, title: str = None):
     """Update metadata for a channel."""
     with _lock:

@@ -1,3 +1,10 @@
+## [2.14.0] - 2026-09-02
+- **Automatic Inaccessible & Banned Channel Detection & Alerts**:
+  - Implemented `TelethonBanLogHandler` and exception interceptors in `reconcile_channel` to detect when the Userbot account is banned, removed, or loses access to a Telegram channel (`Account is now banned in ...`, `UserBannedInChannelError`, `ChannelPrivateError`).
+  - **Broadcast Channel Alert**: Automatically posts an informative alert directly into the Delta Chat broadcast channel notifying subscribers that message forwarding has been paused due to channel access loss.
+  - **Administrator Direct Notification**: Alerts the administrator in Telegram and Delta Chat with channel details and ready-to-run `/channelremove <id>` command.
+  - **Flexible Channel Lookup (`find_channel_by_any_id`)**: Added database lookup supporting raw integer IDs, `-100` prefix variations, and usernames.
+
 ## [2.13.0] - 2026-09-02
 - **Channel Reconciliation & Catchup Improvements**:
   - **Robust Entity Resolution with Fallbacks**: Added `_resolve_userbot_entity` that attempts resolution via numeric Telegram ID, then falls back to `@username`, and finally to invite links. Resolves entity lookup failures for channels not previously cached in the session database.

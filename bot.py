@@ -201,6 +201,92 @@ logging.getLogger().addHandler(admin_handler)
 logging.getLogger("deltachat2").addHandler(admin_handler)
 logging.getLogger("deltachat2").propagate = True
 logging.getLogger("telegram").addHandler(admin_handler)
+
+_reported_inaccessible_channels = set()
+_reported_inaccessible_lock = threading.Lock()
+
+async def _handle_channel_access_revoked(target_id: int | str, reason: str = "Account was banned or channel is private"):
+    """Notify DC broadcast channel and admin when userbot loses access to a channel."""
+    global _reported_inaccessible_channels, _reported_inaccessible_lock, dc_bot_instance, dc_accid, tg_app
+    
+    chan = database.find_channel_by_any_id(target_id)
+    if not chan:
+        return
+
+    chan_db_id = chan.get('id')
+    with _reported_inaccessible_lock:
+        if chan_db_id in _reported_inaccessible_channels:
+            return  # Debounced, already notified
+        _reported_inaccessible_channels.add(chan_db_id)
+
+    tg_id = chan.get('tg_channel_id')
+    username = chan.get('tg_channel_username')
+    dc_chat_id = chan.get('dc_chat_id')
+    display_name = f"@{username}" if username else f"ID {tg_id}"
+
+    logger.warning(f"Channel access revoked for {display_name} (Channel #{chan_db_id}): {reason}")
+
+    # 1. Notify Delta Chat Broadcast Channel
+    if dc_chat_id and dc_bot_instance and dc_accid:
+        try:
+            dc_notice = (
+                "⚠️ **Bridge Alert**\n"
+                "The technical account (Userbot) was banned or removed from this Telegram channel, or the channel was made private.\n\n"
+                "Message forwarding from Telegram has been paused."
+            )
+            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=dc_notice))
+        except Exception as dc_err:
+            logger.debug(f"Could not send access revoked alert to DC channel {dc_chat_id}: {dc_err}")
+
+    # 2. Notify TG Admin / Owner
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id and tg_app:
+        try:
+            tg_text = (
+                f"⚠️ <b>Channel Access Lost / Banned</b>\n\n"
+                f"• <b>Channel:</b> {html.escape(display_name)} (ID: <code>{tg_id}</code>)\n"
+                f"• <b>Channel Bridge:</b> #{chan_db_id} (DC Chat: <code>{dc_chat_id}</code>)\n"
+                f"• <b>Reason:</b> <code>{html.escape(reason)}</code>\n\n"
+                f"To remove this channel bridge:\n"
+                f"<code>/channelremove {chan_db_id}</code>"
+            )
+            await tg_app.bot.send_message(chat_id=int(admin_tg_id), text=tg_text, parse_mode='HTML')
+        except Exception as tg_err:
+            logger.error(f"Failed to notify TG admin about lost channel access: {tg_err}")
+
+    # 3. Notify DC Admin
+    admin_dc_email = database.get_config("admin_dc_email")
+    if admin_dc_email and dc_bot_instance and dc_accid:
+        dc_admin_text = (
+            f"⚠️ Channel Access Lost / Banned\n\n"
+            f"• Channel: {display_name} (ID: {tg_id})\n"
+            f"• Channel Bridge: #{chan_db_id} (DC Chat: {dc_chat_id})\n"
+            f"• Reason: {reason}\n\n"
+            f"To remove: /channelremove {chan_db_id}"
+        )
+        threading.Thread(target=_send_admin_dc_message_bg, args=(dc_admin_text,), daemon=True).start()
+
+
+class TelethonBanLogHandler(logging.Handler):
+    """Intercepts Telethon logs indicating the userbot was banned/restricted in a channel."""
+    def emit(self, record):
+        try:
+            msg = record.getMessage()
+            if "Account is now banned in" in msg or "so we can no longer fetch updates from it" in msg:
+                import re
+                m = re.search(r'banned in\s+(\d+)', msg)
+                if m:
+                    chan_id_raw = int(m.group(1))
+                    if main_loop and main_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            _handle_channel_access_revoked(chan_id_raw, reason="Account was banned in channel (Telethon update)"),
+                            main_loop
+                        )
+        except Exception:
+            pass
+
+logging.getLogger("telethon.client.updates").addHandler(TelethonBanLogHandler())
+
 class RpcProxy:
     """Thread-safe proxy for Rpc to prevent race conditions on JSON-RPC stdin/stdout pipes."""
     def __init__(self, rpc_instance):
@@ -251,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 
 
 
@@ -5988,6 +6074,9 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
                 if chan_db_id:
                     await update_tg_channel_stats(chan_db_id, entity)
         except Exception as join_e:
+            err_str = str(join_e)
+            if any(k in err_str for k in ("UserBannedInChannelError", "ChannelPrivateError", "ChatAdminRequiredError", "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE", "Account is now banned")):
+                asyncio.create_task(_handle_channel_access_revoked(tg_id or username, reason=err_str))
             logger.warning(f"Reconciliation: Userbot failed to join channel {username or tg_id}: {join_e}")
 
     # Update channel metadata if we now have more info
@@ -6017,6 +6106,9 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
     try:
         history = await asyncio.wait_for(userbot_client.get_messages(entity, limit=1), timeout=15.0)
     except Exception as e:
+        err_str = str(e)
+        if any(k in err_str for k in ("UserBannedInChannelError", "ChannelPrivateError", "ChatAdminRequiredError", "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE", "Account is now banned")):
+            asyncio.create_task(_handle_channel_access_revoked(tg_id or username, reason=err_str))
         logger.warning(f"Reconciliation: Failed to get latest message for channel {username or tg_id}: {e}")
         return 0, 0
 
