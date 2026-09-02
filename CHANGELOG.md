@@ -1,3 +1,14 @@
+## [2.16.0] - 2026-09-02
+- **Unified Message & Post Keyword Filters**:
+  - Implemented global keyword and phrase filtering for all bridged channels and group chats across Bot API and Userbot pipelines.
+  - Messages and channel posts (including media captions and edits) containing any configured filter pattern (case-insensitive substring match) are automatically skipped and not relayed to Delta Chat.
+  - Channel post de-duplication cache (`cached_last_msg_id`) is properly updated on skipped posts to prevent reconciliation loops from re-processing filtered messages.
+  - **Administrator Commands**:
+    - `/filters`: List active filters with numbered IDs.
+    - `/filteradd <phrase>`: Add a filter word or phrase (quotes optional, e.g. `/filteradd #реклама`, `/filteradd erid=`).
+    - `/filterdel <id or phrase>`: Remove a filter by its ID number or by pattern text (alias `/filterremove`).
+  - Added SQLite `message_filters` table and an in-memory synchronized filter cache (`_filter_cache`) for zero-latency message inspection.
+
 ## [2.15.0] - 2026-09-02
 - **Channel Unbridge Notification to Broadcast Channel**:
   - Automatically sends a farewell notice (`⚠️ Channel Disconnected: This broadcast channel has been unbridged from Telegram by the administrator and will no longer receive updates.`) directly into the Delta Chat broadcast channel whenever `/channelremove` or `/channeldelete` is executed.

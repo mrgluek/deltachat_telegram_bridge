@@ -2,7 +2,8 @@ import os
 import sys
 import unittest
 import time
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch
 
 # Setup test database path for isolated testing
 TEST_DB = "test_bridge.db"
@@ -742,6 +743,144 @@ class TestTelegramBridge(unittest.TestCase):
         finally:
             bot.dc_bot_instance = orig_dc_bot
             bot.dc_accid = orig_dc_accid
+
+    def test_database_filters(self):
+        # Add filters
+        id1 = database.add_filter("#реклама")
+        self.assertIsNotNone(id1)
+        id2 = database.add_filter("erid=")
+        self.assertIsNotNone(id2)
+        id3 = database.add_filter("  \"купить со скидкой\"  ")
+        self.assertIsNotNone(id3)
+
+        # Duplicate should return None
+        self.assertIsNone(database.add_filter("#РЕКЛАМА"))
+
+        # Check get_all_filters
+        all_f = database.get_all_filters()
+        self.assertEqual(len(all_f), 3)
+        patterns = database.get_all_filter_patterns()
+        self.assertIn("#реклама", patterns)
+        self.assertIn("erid=", patterns)
+        self.assertIn("купить со скидкой", patterns)
+
+        # Remove by ID
+        ok, deleted = database.remove_filter(id1)
+        self.assertTrue(ok)
+        self.assertEqual(deleted, "#реклама")
+
+        # Remove by pattern string (case insensitive)
+        ok2, deleted2 = database.remove_filter("ERID=")
+        self.assertTrue(ok2)
+        self.assertEqual(deleted2, "erid=")
+
+        # Remove nonexistent
+        ok3, _ = database.remove_filter(9999)
+        self.assertFalse(ok3)
+
+        self.assertEqual(len(database.get_all_filters()), 1)
+
+    def test_bot_is_text_filtered(self):
+        database.add_filter("#реклама")
+        database.add_filter("erid=")
+        bot._reload_filter_cache()
+
+        filtered, pat = bot.is_text_filtered("Свежие новости мира")
+        self.assertFalse(filtered)
+        self.assertIsNone(pat)
+
+        filtered2, pat2 = bot.is_text_filtered("Пост со спонсором #РЕКЛАМА и скидками")
+        self.assertTrue(filtered2)
+        self.assertEqual(pat2, "#реклама")
+
+        filtered3, pat3 = bot.is_text_filtered("ООО Ромашка, erid=2Vtzqu... ссылка")
+        self.assertTrue(filtered3)
+        self.assertEqual(pat3, "erid=")
+
+    def test_dc_filter_commands(self):
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg.from_id = 1
+        mock_event.msg.chat_id = 100
+
+        with patch('bot._is_dc_admin', return_value=True):
+            # 1. Add filter
+            mock_event.payload = "#реклама"
+            bot.dc_filteradd_command(mock_bot, 1, mock_event)
+            mock_bot.rpc.send_msg.assert_called()
+            self.assertIn("Filter added", mock_bot.rpc.send_msg.call_args[0][2].text)
+
+            # 2. List filters
+            mock_bot.rpc.send_msg.reset_mock()
+            bot.dc_filters_command(mock_bot, 1, mock_event)
+            self.assertIn("#реклама", mock_bot.rpc.send_msg.call_args[0][2].text)
+
+            # 3. Delete filter
+            mock_bot.rpc.send_msg.reset_mock()
+            mock_event.payload = "#реклама"
+            bot.dc_filterdel_command(mock_bot, 1, mock_event)
+            self.assertIn("removed", mock_bot.rpc.send_msg.call_args[0][2].text)
+
+    def test_tg_filter_commands(self):
+        mock_update = MagicMock()
+        mock_update.effective_user.id = 12345
+        mock_update.effective_chat.type = "private"
+        mock_update.message.reply_text = AsyncMock()
+        mock_context = MagicMock()
+
+        database.set_config("admin_tg_id", "12345")
+
+        # 1. Add multi-word filter without quotes
+        mock_context.args = ["купить", "со", "скидкой"]
+        asyncio.run(bot.tg_filteradd_command(mock_update, mock_context))
+        mock_update.message.reply_text.assert_called()
+        self.assertIn("Filter added", mock_update.message.reply_text.call_args[0][0])
+        self.assertIn("купить со скидкой", mock_update.message.reply_text.call_args[0][0])
+
+        # 2. List filters
+        mock_update.message.reply_text.reset_mock()
+        asyncio.run(bot.tg_filters_command(mock_update, mock_context))
+        self.assertIn("купить со скидкой", mock_update.message.reply_text.call_args[0][0])
+
+        # 3. Remove filter by phrase
+        mock_update.message.reply_text.reset_mock()
+        mock_context.args = ["купить", "со", "скидкой"]
+        asyncio.run(bot.tg_filterdel_command(mock_update, mock_context))
+        self.assertIn("removed", mock_update.message.reply_text.call_args[0][0])
+
+    def test_relay_userbot_message_filtered(self):
+        database.add_filter("#реклама")
+        bot._reload_filter_cache()
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100555
+            mock_msg.id = 42
+            mock_msg.message = "Специальное предложение #реклама"
+            mock_msg.media = None
+            mock_msg.entities = []
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg))
+
+            # Verify no message was sent to Delta Chat
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            # Verify cached last msg id was advanced so we don't get stuck in reconciliation loop
+            self.assertEqual(bot._get_cached_last_msg_id(-100555), 42)
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
 
 
 if __name__ == "__main__":

@@ -337,7 +337,33 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.15.0"
+VERSION = "2.16.0"
+
+# In-memory message filter cache
+_filter_cache = []
+_filter_cache_lock = threading.Lock()
+
+def _reload_filter_cache():
+    """Reload active filter patterns into memory."""
+    global _filter_cache
+    with _filter_cache_lock:
+        try:
+            _filter_cache = [p.lower() for p in database.get_all_filter_patterns()]
+        except Exception as e:
+            logger.error(f"Failed to reload filter cache: {e}")
+
+_reload_filter_cache()
+
+def is_text_filtered(text: str | None) -> tuple[bool, str | None]:
+    """Check if text contains any configured filter pattern (case-insensitive)."""
+    if not text:
+        return False, None
+    lower_text = text.lower()
+    with _filter_cache_lock:
+        for pat in _filter_cache:
+            if pat in lower_text:
+                return True, pat
+    return False, None
 
 
 
@@ -1583,6 +1609,10 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/channelssync — Refresh channel names & avatars from TG\n"
             f"/catchup [@channel] — Catch up missed posts for channel(s)\n"
             f"/userbotjoin <link> — Join channel via Userbot (no admin needed)\n"
+            f"\n**Message Filters (Owner only):**\n"
+            f"/filters — List active message filters\n"
+            f"/filteradd <phrase> — Add word or phrase filter\n"
+            f"/filterdel <id or phrase> — Remove a filter\n"
             f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
@@ -1633,6 +1663,11 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/catchup [@name] — Catch up missed posts for channel(s)")
         lines.append(f"/userbotsync — Force Userbot re-sync")
         lines.append(f"/status — Show detailed bot and userbot status")
+        
+        lines.append(f"\n<b>🛡️ Message Filters (Owner):</b>")
+        lines.append(f"/filters — List active message filters")
+        lines.append(f"/filteradd <i>phrase</i> — Add a word/phrase filter")
+        lines.append(f"/filterdel <i>id or phrase</i> — Remove a filter")
         
         lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
         lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
@@ -2149,6 +2184,69 @@ def dc_channelremove_command(bot, accid, event):
              _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
     except ValueError:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid channel number."))
+
+@dc_cli.on(events.NewMessage(command="/filters"))
+def dc_filters_command(bot, accid, event):
+    """List all active message filters. Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage filters."))
+        return
+
+    filters = database.get_all_filters()
+    if not filters:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="📋 **Message Filters**\nNo message filters configured.\n\nTo add a filter:\n`/filteradd <word or phrase>`"))
+        return
+
+    lines = [f"📋 **Message Filters ({len(filters)})**:"]
+    for f in filters:
+        lines.append(f"{f['id']}. `{f['pattern']}`")
+    lines.append("\nTo add: `/filteradd <word or phrase>`")
+    lines.append("To remove: `/filterdel <number or phrase>`")
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
+
+@dc_cli.on(events.NewMessage(command="/filteradd"))
+def dc_filteradd_command(bot, accid, event):
+    """Add a message filter. Admin only."""
+    msg = event.msg
+    payload = event.payload.strip()
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage filters."))
+        return
+
+    if not payload:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: `/filteradd <word or phrase>`\nExample: `/filteradd #реклама`"))
+        return
+
+    row_id = database.add_filter(payload)
+    if row_id is not None:
+        _reload_filter_cache()
+        clean = payload.strip().strip('"\'')
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Filter added (#{row_id}): `{clean}`"))
+    else:
+        clean = payload.strip().strip('"\'')
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"⚠️ Filter `{clean}` already exists or is invalid."))
+
+@dc_cli.on(events.NewMessage(command="/filterdel"))
+@dc_cli.on(events.NewMessage(command="/filterremove"))
+def dc_filterdel_command(bot, accid, event):
+    """Remove a message filter. Admin only."""
+    msg = event.msg
+    payload = event.payload.strip()
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage filters."))
+        return
+
+    if not payload:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: `/filterdel <number or phrase>`\nExample: `/filterdel 1` or `/filterdel #реклама`"))
+        return
+
+    success, deleted_pattern = database.remove_filter(payload)
+    if success:
+        _reload_filter_cache()
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Filter `{deleted_pattern}` removed."))
+    else:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Filter `{payload}` not found."))
 
 @dc_cli.on(events.NewMessage(command="/bridge"))
 def bridge_command(bot, accid, event):
@@ -4775,6 +4873,70 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Failed to remove channel.")
 
 
+async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all active message filters."""
+    if not await _check_channel_admin(update):
+        return
+
+    filters = database.get_all_filters()
+    if not filters:
+        await update.message.reply_text(
+            "📋 <b>Message Filters</b>\nNo message filters configured.\n\nTo add a filter:\n<code>/filteradd &lt;word or phrase&gt;</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    lines = [f"📋 <b>Message Filters ({len(filters)})</b>:"]
+    for f in filters:
+        lines.append(f"{f['id']}. <code>{html.escape(f['pattern'])}</code>")
+    lines.append("\nTo add: <code>/filteradd &lt;word or phrase&gt;</code>")
+    lines.append("To remove: <code>/filterdel &lt;number or phrase&gt;</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
+
+async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a message filter."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Usage: <code>/filteradd &lt;word or phrase&gt;</code>\nExample: <code>/filteradd #реклама</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    phrase = " ".join(context.args).strip()
+    row_id = database.add_filter(phrase)
+    clean = phrase.strip().strip('"\'')
+    if row_id is not None:
+        _reload_filter_cache()
+        await update.message.reply_text(f"✅ Filter added (#{row_id}): <code>{html.escape(clean)}</code>", parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"⚠️ Filter <code>{html.escape(clean)}</code> already exists or is invalid.", parse_mode='HTML')
+
+
+async def tg_filterdel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a message filter."""
+    if not await _check_channel_admin(update):
+        return
+
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Usage: <code>/filterdel &lt;number or phrase&gt;</code>\nExample: <code>/filterdel 1</code> or <code>/filterdel #реклама</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    target = " ".join(context.args).strip()
+    success, deleted_pattern = database.remove_filter(target)
+    if success:
+        _reload_filter_cache()
+        await update.message.reply_text(f"✅ Filter <code>{html.escape(deleted_pattern)}</code> removed.", parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"❌ Filter <code>{html.escape(target)}</code> not found.", parse_mode='HTML')
+
+
 # ---------------------------------------------------------
 # CHANNEL POST HANDLER
 # ---------------------------------------------------------
@@ -4935,6 +5097,13 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
 
     # Skip posts with no text and no media
     if not text and not tg_file and not local_file_path:
+        return
+
+    # Message content filter check
+    filtered, matched_pat = is_text_filtered(text)
+    if filtered:
+        logger.info(f"Bot API: Skipping channel post {post.message_id} in channel {tg_channel_id} matching filter '{matched_pat}'")
+        _update_cached_last_msg_id(tg_channel_id, post.message_id)
         return
 
     # Build message text
@@ -5107,6 +5276,12 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if not text:
         return
 
+    # Message content filter check
+    filtered, matched_pat = is_text_filtered(text)
+    if filtered:
+        logger.info(f"Bot API: Skipping channel post edit {post.message_id} in channel {tg_channel_id} matching filter '{matched_pat}'")
+        return
+
     formatted_msg = text
 
     # Add link to original Telegram post
@@ -5270,6 +5445,12 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     text = _format_telegram_entities(text, entities)
 
     if not text:
+        return
+
+    # Message content filter check
+    filtered, matched_pat = is_text_filtered(text)
+    if filtered:
+        logger.info(f"Bot API: Skipping group message edit {msg.message_id} in {tg_chat_id} matching filter '{matched_pat}'")
         return
 
     formatted_msg = f"✏️ [Edited]:\n{text}"
@@ -5465,6 +5646,12 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Skip messages with no text and no media
     if not text and not tg_file:
+        return
+
+    # Message content filter check
+    filtered, matched_pat = is_text_filtered(text)
+    if filtered:
+        logger.info(f"Bot API: Skipping group message {update.message.message_id} in {tg_chat_id} matching filter '{matched_pat}'")
         return
 
     # Check if this is a reply to another message
@@ -6449,6 +6636,13 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     if text.startswith('/') and not msg.media:
         return
 
+    # Message content filter check
+    filtered, matched_pat = is_text_filtered(text)
+    if filtered:
+        logger.info(f"Userbot: Skipping message {msg.id} in {tg_channel_id} matching filter '{matched_pat}'")
+        _update_cached_last_msg_id(tg_channel_id, msg.id)
+        return
+
     # Base formatted message
     formatted_msg = text
     
@@ -6943,6 +7137,10 @@ async def main():
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channelqr\d+$'), tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
     tg_app.add_handler(CommandHandler("channeldelete", tg_channelremove_command))
+    tg_app.add_handler(CommandHandler("filters", tg_filters_command))
+    tg_app.add_handler(CommandHandler("filteradd", tg_filteradd_command))
+    tg_app.add_handler(CommandHandler("filterdel", tg_filterdel_command))
+    tg_app.add_handler(CommandHandler("filterremove", tg_filterdel_command))
     tg_app.add_handler(CommandHandler("cleanup", tg_cleanup_command))
     tg_app.add_handler(CommandHandler("catchup", tg_catchup_command))
     tg_app.add_handler(CommandHandler("reconcile", tg_catchup_command))

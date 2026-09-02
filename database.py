@@ -167,6 +167,15 @@ def init_db():
             )
         ''')
 
+        # Message content filters
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS message_filters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern TEXT UNIQUE NOT NULL,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        ''')
+
         conn.commit()
         conn.close()
         try:
@@ -935,6 +944,89 @@ def get_recent_message_maps(limit: int = 5) -> list[dict]:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------
+# MESSAGE FILTERS
+# ---------------------------------------------------------
+
+def add_filter(pattern: str) -> int | None:
+    """Add a keyword or phrase filter (normalized lowercase). Returns row id or None if exists."""
+    clean = pattern.strip().strip('"\'').lower()
+    if not clean:
+        return None
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO message_filters (pattern) VALUES (?)", (clean,))
+            conn.commit()
+            row_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            row_id = None
+        conn.close()
+        return row_id
+
+def remove_filter(target: str | int) -> tuple[bool, str | None]:
+    """
+    Remove a filter by ID number or by pattern string.
+    Returns (success, deleted_pattern).
+    """
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        deleted_pattern = None
+
+        # 1. Try removing by ID if target is integer or numeric string
+        try:
+            val = int(target)
+            cursor.execute("SELECT pattern FROM message_filters WHERE id = ?", (val,))
+            row = cursor.fetchone()
+            if row:
+                deleted_pattern = row['pattern']
+                cursor.execute("DELETE FROM message_filters WHERE id = ?", (val,))
+                conn.commit()
+                conn.close()
+                return True, deleted_pattern
+        except (ValueError, TypeError):
+            pass
+
+        # 2. Try removing by pattern string
+        clean = str(target).strip().strip('"\'').lower()
+        if clean:
+            cursor.execute("SELECT pattern FROM message_filters WHERE pattern = ?", (clean,))
+            row = cursor.fetchone()
+            if row:
+                deleted_pattern = row['pattern']
+                cursor.execute("DELETE FROM message_filters WHERE pattern = ?", (clean,))
+                conn.commit()
+                conn.close()
+                return True, deleted_pattern
+
+        conn.close()
+        return False, None
+
+def get_all_filters() -> list[dict]:
+    """Get all configured filters sorted by ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM message_filters ORDER BY id ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+def get_all_filter_patterns() -> list[str]:
+    """Get all active filter patterns as a list of strings."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT pattern FROM message_filters ORDER BY id ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
 
 
 init_db()

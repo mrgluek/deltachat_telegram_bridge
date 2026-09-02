@@ -339,6 +339,9 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/channels` | List bridged channels (as admin, private chat) |
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
+| `/filters` | List active message filters (owner only) |
+| `/filteradd <phrase>` | Add a keyword or phrase filter (e.g. `/filteradd #реклама`) |
+| `/filterdel <target>` | Remove a filter by number or phrase (alias: `/filterremove`) |
 | `/userbotjoin <link>` | Join a channel/group via Userbot (no admin needed) |
 | `/groups` | List technical account's groups for easy bridging |
 | `/cleanup` | Clean up stale, duplicate & orphaned bridges (owner only) |
@@ -349,6 +352,14 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/resilient` | Toggle resilient sending mode across all relays (admin only) |
 | `/status` | Show detailed bot, userbot, queue, and channel status (admin only) |
 | `/donate` | Support bot development ❤️ |
+
+## Message & Post Content Filters
+
+The bot includes unified keyword and phrase filtering for all bridged channels and group chats. When an incoming Telegram post, edit, or group message contains any filtered word or phrase (case-insensitive substring match), it is skipped and not relayed to Delta Chat.
+
+- `/filters` — Show all active filters with their numbered IDs.
+- `/filteradd <word or phrase>` — Add a filter (e.g. `/filteradd #реклама` or `/filteradd erid=`).
+- `/filterdel <number or phrase>` — Remove a filter by its ID number from `/filters` or by exact text (alias `/filterremove`).
 
 ## Delta Chat User Commands
 
@@ -362,7 +373,10 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 #### Management (Admin only)
 
 - `/channeladd @username` — Bridge a new channel (admin email check).
-- `/channelremove N` — Remove bridge for channel #N.
+- `/channelremove N` — Remove bridge for channel #N (alias `/channeldelete`).
+- `/filters` — List active message filters.
+- `/filteradd <phrase>` — Add a keyword/phrase filter.
+- `/filterdel <id or phrase>` — Remove a message filter.
 - `/catchup [@channel]` — Catch up missed posts for a channel or all channels.
 - `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
