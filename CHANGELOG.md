@@ -1,3 +1,8 @@
+## [2.17.1] - 2026-09-03
+- **Removed Obsolete 10,000 Subscriber Edit Limit**:
+  - Removed legacy hardcoded 10,000 subscriber limit on post and message edits across Bot API and Userbot pipelines.
+  - Channels with large audiences (e.g. >10k subscribers) now properly receive in-place post edits, fully safeguarded by content hashing (`_get_content_hash`), 60-second debouncing, and 7-day message age guards.
+
 ## [2.17.0] - 2026-09-03
 - **In-Place Message Editing & Duplicate Edit Prevention**:
   - Implemented in-place message editing via `send_edit_request` in the Userbot pipeline, updating the original message in-place for all subscribers without creating duplicate messages.

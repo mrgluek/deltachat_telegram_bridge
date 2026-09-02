@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.17.0"
+VERSION = "2.17.1"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -5192,25 +5192,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if _mark_processed(tg_channel_id, post.message_id, f"edit_{new_hash}"):
         return
 
-    # HACK: check subscriber count (> 10000)
-    try:
-        sub_count = 0
-        ch_row = database.get_channel_by_tg_id(tg_channel_id)
-        if ch_row and ch_row.get('tg_participants_count'):
-            sub_count = ch_row['tg_participants_count']
-        
-        if sub_count == 0:
-            sub_count = await tg_app.bot.get_chat_member_count(tg_channel_id)
-            if ch_row:
-                database.update_channel_info(ch_row['id'], participants_count=sub_count)
-        
-        if sub_count > 10000:
-            logger.info(f"Skipping edit relay for channel {tg_channel_id} because it has {sub_count} subscribers (> 10000).")
-            return
-    except Exception as e:
-        logger.warning(f"Failed to check subscriber count for channel {tg_channel_id}: {e}")
-
-    # HACK: check attached file size (> 1 MB)
+    # Check attached file size (> 1 MB)
     file_size = _get_ptb_media_size(post)
     if file_size > 1024 * 1024:
         logger.info(f"Skipping edit relay for post {post.message_id} in channel {tg_channel_id} because attached file size is {file_size} bytes (> 1MB).")
@@ -5350,25 +5332,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     if _mark_processed(tg_chat_id, msg.message_id, f"edit_{new_hash}"):
         return
 
-    # HACK: check subscriber count (> 10000)
-    try:
-        sub_count = 0
-        ch_row = database.get_channel_by_tg_id(tg_chat_id)
-        if ch_row and ch_row.get('tg_participants_count'):
-            sub_count = ch_row['tg_participants_count']
-        
-        if sub_count == 0:
-            sub_count = await tg_app.bot.get_chat_member_count(tg_chat_id)
-            if ch_row:
-                database.update_channel_info(ch_row['id'], participants_count=sub_count)
-        
-        if sub_count > 10000:
-            logger.info(f"Skipping edit relay for chat/group {tg_chat_id} because it has {sub_count} members (> 10000).")
-            return
-    except Exception as e:
-        logger.warning(f"Failed to check member count for chat/group {tg_chat_id}: {e}")
-
-    # HACK: check attached file size (> 1 MB)
+    # Check attached file size (> 1 MB)
     file_size = _get_ptb_media_size(msg)
     if file_size > 1024 * 1024:
         logger.info(f"Skipping edit relay for message {msg.message_id} in chat/group {tg_chat_id} because attached file size is {file_size} bytes (> 1MB).")
@@ -6955,16 +6919,6 @@ async def _process_userbot_event_internal(event, is_edit=False):
                     return
         except Exception as e:
             logger.warning(f"Userbot: Failed to check message age for post {msg.id}: {e}")
-
-        # Check subscriber count (> 10000)
-        try:
-            ch_row = database.get_channel_by_tg_id(tg_channel_id)
-            sub_count = ch_row.get('tg_participants_count', 0) if ch_row else 0
-            if sub_count > 10000:
-                logger.info(f"Userbot: Skipping edit relay for channel {tg_channel_id} because it has {sub_count} subscribers (> 10000).")
-                return
-        except Exception:
-            pass
 
     # Check database
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
