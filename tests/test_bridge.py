@@ -882,6 +882,71 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
+    def test_dc_channels_command_formatting(self):
+        ch_id = database.add_channel_by_id(tg_channel_id=-100222, dc_chat_id=50, username="ftsec")
+        # Also add a private channel without username
+        ch_priv_id = database.add_channel_by_id(tg_channel_id=-100333, dc_chat_id=51, username=None)
+
+        mock_bot = MagicMock()
+        mock_bot.rpc.get_basic_chat_info.side_effect = lambda acc, cid: {"name": "42 секунды", "type": 1 if cid == 100 else 3}
+        mock_bot.rpc.get_contact.return_value.id = 1
+        mock_bot.rpc.get_chat_contacts.return_value = [1, 2, 3] # self (1) + 2 DC members
+        mock_event = MagicMock()
+        mock_event.payload = ""
+        mock_event.msg.from_id = 1
+        mock_event.msg.chat_id = 100
+
+        with patch('bot._is_dc_admin', return_value=True):
+            # 1. Admin in private chat (chat_id 100 has type 1) sees both public and private channels
+            bot.channels_command_dc(mock_bot, 1, mock_event)
+            mock_bot.rpc.send_msg.assert_called()
+            output_text = mock_bot.rpc.send_msg.call_args[0][2].text
+            self.assertIn(f"/channel{ch_id} — [42 секунды](https://t.me/ftsec) — 👤 0 TG / 2 DC — 💬 0", output_text)
+            self.assertIn(f"/channel{ch_priv_id}", output_text)
+            self.assertNotIn("/channelssync", output_text)
+
+            # 2. Admin in a group chat (chat_id 200 has type 2) only sees public channels
+            mock_bot.rpc.send_msg.reset_mock()
+            mock_event.msg.chat_id = 200
+            mock_bot.rpc.get_basic_chat_info.side_effect = lambda acc, cid: {"name": "Test Group" if cid == 200 else "42 секунды", "type": 2 if cid == 200 else 3}
+            bot.channels_command_dc(mock_bot, 1, mock_event)
+            mock_bot.rpc.send_msg.assert_called()
+            group_output_text = mock_bot.rpc.send_msg.call_args[0][2].text
+            self.assertIn("Public Channels:", group_output_text)
+            self.assertIn(f"/channel{ch_id} — [42 секунды](https://t.me/ftsec)", group_output_text)
+            self.assertNotIn(f"/channel{ch_priv_id}", group_output_text)
+
+    def test_tg_channels_command_formatting(self):
+        bot._channels_cache.clear()
+        ch_id = database.add_channel_by_id(tg_channel_id=-100222, dc_chat_id=50, username="ftsec")
+
+        mock_update = MagicMock()
+        mock_update.effective_user.id = 12345
+        mock_update.effective_chat.type = "private"
+        mock_update.message.reply_text = AsyncMock()
+        mock_context = MagicMock()
+
+        database.set_config("admin_tg_id", "12345")
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.get_basic_chat_info.return_value = {"name": "42 секунды"}
+        mock_dc_bot.rpc.get_contact.return_value.id = 1
+        mock_dc_bot.rpc.get_chat_contacts.return_value = [1, 2, 3]
+
+        orig_dc_bot = bot.dc_bot_instance
+        orig_dc_accid = bot.dc_accid
+        try:
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            asyncio.run(bot.tg_channels_command(mock_update, mock_context))
+            mock_update.message.reply_text.assert_called()
+            output_text = mock_update.message.reply_text.call_args[0][0]
+            self.assertIn(f'/channel{ch_id} — <a href="https://t.me/ftsec">42 секунды</a> — 👤 0 TG / 2 DC — 💬 0', output_text)
+        finally:
+            bot.dc_bot_instance = orig_dc_bot
+            bot.dc_accid = orig_dc_accid
+
 
 if __name__ == "__main__":
     unittest.main()

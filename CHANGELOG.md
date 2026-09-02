@@ -1,3 +1,9 @@
+## [2.16.1] - 2026-09-02
+- **Channel List Formatting & Privacy Improvements (`/channels`)**:
+  - Formatted channel names in `/channels` output as clickable Markdown/HTML links (e.g. `[42 секунды](https://t.me/ftsec)`).
+  - Removed redundant `/channelssyncN` suffixes from the channel listing.
+  - Restricted private channels (channels without a public username) to 1:1 direct chats with the bot only. When an administrator requests `/channels` inside a group chat, only public channels are displayed.
+
 ## [2.16.0] - 2026-09-02
 - **Unified Message & Post Keyword Filters**:
   - Implemented global keyword and phrase filtering for all bridged channels and group chats across Bot API and Userbot pipelines.

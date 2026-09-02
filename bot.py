@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.16.0"
+VERSION = "2.16.1"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -2869,19 +2869,27 @@ def channels_command_dc(bot, accid, event):
             )
         return
 
+    # Check if this chat is a direct 1:1 private chat with the bot
+    is_private_chat = False
+    try:
+        current_chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+        is_private_chat = current_chat_info.get("type") == 1
+    except Exception:
+        pass
+
     channels = database.get_all_channels()
-    if is_admin:
-        # Admin sees everything
+    if is_admin and is_private_chat:
+        # Admin in private chat sees everything (including private channels)
         display_channels = channels
     else:
-        # Others only see public channels (those with a username)
+        # Groups or non-admins only see public channels (those with a username)
         display_channels = [c for c in channels if c.get('tg_channel_username')]
 
     if not display_channels:
         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="📺 No public channels are currently available."))
         return
 
-    lines = [f"📺 **{'All' if is_admin else 'Public'} Channels:**\n"]
+    lines = [f"📺 **{'All' if (is_admin and is_private_chat) else 'Public'} Channels:**\n"]
     for ch in display_channels:
         dc_cid = ch['dc_chat_id']
         tg_username = ch.get('tg_channel_username')
@@ -2892,9 +2900,11 @@ def channels_command_dc(bot, accid, event):
         m_count = database.get_bridge_message_count(dc_cid, tg_id)
         tg_sub_count = ch.get('tg_participants_count', 0)
         
+        title = ch.get('title') or "Unknown Channel"
         try:
             chat_info = bot.rpc.get_basic_chat_info(accid, dc_cid)
-            title = chat_info.get("name", "Unknown Channel")
+            if chat_info and chat_info.get("name"):
+                title = chat_info.get("name")
             contacts = bot.rpc.get_chat_contacts(accid, dc_cid)
             if contacts:
                 try:
@@ -2905,20 +2915,18 @@ def channels_command_dc(bot, accid, event):
             else:
                 dc_sub_count = 0
         except Exception:
-            title = "Unknown Channel"
             dc_sub_count = "?"
 
-        # Format: /channel1 — Gluek's blog (t.me/gluekinfo) — 👤 150k TG / 7 DC — 💬 1
-        tg_ref = f"(t.me/{tg_username})" if tg_username else f"(ID: {tg_id})"
+        # Format: /channel22 — [42 секунды](https://t.me/ftsec) — 👤 19,373 TG / 2 DC — 💬 118
+        if tg_username:
+            title_display = f"[{title}](https://t.me/{tg_username})"
+        else:
+            title_display = f"{title} (ID: {tg_id})"
         stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
-        line = f"/channel{ch['id']} — {title} {tg_ref} — {stats_str}"
-        if is_admin:
-            line += f" — /channelssync{ch['id']}"
+        line = f"/channel{ch['id']} — {title_display} — {stats_str}"
         lines.append(line)
     
     lines.append("\nClick a /channelN command for link or /channelNqr for QR code.")
-    if is_admin:
-        lines.append("Use /channelssyncN to refresh a specific channel's name and avatar.")
     _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
@@ -4671,13 +4679,14 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             tg_id = ch.get('tg_channel_id', 0)
             m_count = database.get_bridge_message_count(dc_cid, tg_id)
             tg_sub_count = ch.get('tg_participants_count', 0)
-            title = "Unknown Channel"
+            title = ch.get('title') or "Unknown Channel"
             dc_sub_count = "?"
             
             if dc_bot_instance and dc_accid:
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_cid)
-                    title = chat_info.get("name", "Unknown Channel")
+                    if chat_info and chat_info.get("name"):
+                        title = chat_info.get("name")
                     contacts = dc_bot_instance.rpc.get_chat_contacts(dc_accid, dc_cid)
                     if contacts:
                         try:
@@ -4690,9 +4699,12 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception:
                     pass
 
-            tg_ref = f"t.me/{ch['tg_channel_username']}" if ch['tg_channel_username'] else f"ID: {ch['tg_channel_id']}"
+            if ch.get('tg_channel_username'):
+                title_display = f'<a href="https://t.me/{ch["tg_channel_username"]}">{html.escape(title)}</a>'
+            else:
+                title_display = f"<b>{html.escape(title)}</b> (ID: {ch['tg_channel_id']})"
             stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
-            lines.append(f"/channel{ch['id']} — <b>{html.escape(title)}</b> ({tg_ref}) — {stats_str}")
+            lines.append(f"/channel{ch['id']} — {title_display} — {stats_str}")
         lines.append(f"\nUse <code>/channel N</code> for invite link")
         return "\n".join(lines)
 
