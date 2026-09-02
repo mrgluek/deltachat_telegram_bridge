@@ -1,3 +1,8 @@
+## [2.17.2] - 2026-09-03
+- **Removed Obsolete 1MB Media File Size Edit Limit**:
+  - Removed legacy 1MB media file size check on post and message edits in Bot API handlers.
+  - Edits to captions of photo, video, and document posts now propagate seamlessly via in-place `send_edit_request` without media re-downloading.
+
 ## [2.17.1] - 2026-09-03
 - **Removed Obsolete 10,000 Subscriber Edit Limit**:
   - Removed legacy hardcoded 10,000 subscriber limit on post and message edits across Bot API and Userbot pipelines.

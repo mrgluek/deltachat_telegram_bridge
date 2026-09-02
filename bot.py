@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.17.1"
+VERSION = "2.17.2"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -5192,13 +5192,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     if _mark_processed(tg_channel_id, post.message_id, f"edit_{new_hash}"):
         return
 
-    # Check attached file size (> 1 MB)
-    file_size = _get_ptb_media_size(post)
-    if file_size > 1024 * 1024:
-        logger.info(f"Skipping edit relay for post {post.message_id} in channel {tg_channel_id} because attached file size is {file_size} bytes (> 1MB).")
-        return
-
-    # HACK: check message age (older than 7 days / 1 week)
+    # Check message age (older than 7 days / 1 week)
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
@@ -5332,13 +5326,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     if _mark_processed(tg_chat_id, msg.message_id, f"edit_{new_hash}"):
         return
 
-    # Check attached file size (> 1 MB)
-    file_size = _get_ptb_media_size(msg)
-    if file_size > 1024 * 1024:
-        logger.info(f"Skipping edit relay for message {msg.message_id} in chat/group {tg_chat_id} because attached file size is {file_size} bytes (> 1MB).")
-        return
-
-    # HACK: check message age (older than 7 days / 1 week)
+    # Check message age (older than 7 days / 1 week)
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
