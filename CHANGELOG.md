@@ -1,3 +1,11 @@
+## [2.17.0] - 2026-09-03
+- **In-Place Message Editing & Duplicate Edit Prevention**:
+  - Implemented in-place message editing via `send_edit_request` in the Userbot pipeline, updating the original message in-place for all subscribers without creating duplicate messages.
+  - Eliminated local message deletion on edit relay which previously prevented in-place editing and caused repeated `✏️ [Edited]` message spam.
+  - Added message age guard (> 7 days) and subscriber threshold (> 10,000) to Userbot edit processing.
+  - Fixed Telethon `_get_content_hash` resolution to correctly read `msg.message` and `msg.raw_text`.
+  - Prevented broadcast channels from sending duplicate messages on edits when in-place editing is not possible.
+
 ## [2.16.1] - 2026-09-02
 - **Channel List Formatting & Privacy Improvements (`/channels`)**:
   - Formatted channel names in `/channels` output as clickable Markdown/HTML links (e.g. `[42 секунды](https://t.me/ftsec)`).

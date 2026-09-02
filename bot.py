@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.16.1"
+VERSION = "2.17.0"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -655,9 +655,9 @@ def _is_edit_debounced(chat_id: int, msg_id: int) -> bool:
 def _get_content_hash(msg) -> str:
     """Return a SHA-256 hash of the message content (text or caption)."""
     # Safe access for both PTB and Telethon objects
-    text = getattr(msg, 'text', "") or ""
+    text = getattr(msg, 'message', "") or getattr(msg, 'text', "") or getattr(msg, 'raw_text', "") or ""
     caption = getattr(msg, 'caption', "") or ""
-    content = text or caption or ""
+    content = str(text or caption or "")
     paid = getattr(msg, 'paid_media', None)
     if paid:
         content += f"_paid_{getattr(paid, 'star_count', 0)}"
@@ -5305,7 +5305,6 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     try:
         # Try to edit in-place first if possible
         old_dc_msg_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
-        edit_success = False
         if old_dc_msg_id:
             try:
                 old_msg = dc_bot_instance.rpc.get_message(dc_accid, old_dc_msg_id)
@@ -5317,29 +5316,23 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
                 if old_text and not is_info and not has_html and view_type != 'Call':
                     dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
                     database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
-                    edit_success = True
                     logger.info(f"Edited channel post {old_dc_msg_id} in-place for TG post {post.message_id}")
+                    return
             except Exception as edit_err:
                 logger.debug(f"Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
 
-        if not edit_success:
-            if old_dc_msg_id:
-                try:
-                    _register_bot_initiated_delete(old_dc_msg_id)
-                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
-                except Exception as del_e:
-                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
-                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+        # In broadcast channels, do not send duplicate edit messages if original post was already sent
+        if old_dc_msg_id:
+            logger.info(f"Bot API: Skipping edit re-send for broadcast channel post {post.message_id} because in-place edit was not possible.")
+            return
 
-            msg_data = MsgData(text=formatted_msg)
-            if author:
-                msg_data.override_sender_name = f"✏️ [Edited] {author}"
-            else:
-                msg_data.override_sender_name = "✏️ [Edited]"
-            dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
-            if dc_sent_id:
-                database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
-            logger.info(f"Relayed edited channel post (new msg) from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
+        msg_data = MsgData(text=formatted_msg)
+        if author:
+            msg_data.override_sender_name = author
+        dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        if dc_sent_id:
+            database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
+        logger.info(f"Relayed edited channel post (new msg) from @{tg_username or tg_channel_id} to DC broadcast {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay edited channel post to DC: {e}")
 
@@ -6754,24 +6747,37 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                     elif hasattr(sender, 'title'):
                         display_author = sender.title
 
-        if display_author:
-            msg_data.override_sender_name = display_author if not is_edit else f"✏️ [Edited] {display_author}"
-        elif is_edit:
-            msg_data.override_sender_name = "✏️ [Edited]"
-        
-        if file_path:
-            msg_data.file = file_path
-
-        # For edits: delete old DC message before sending the updated version.
+        # For edits: attempt in-place edit request first
         if is_edit:
             old_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id)
             if old_dc_msg_id:
                 try:
-                    _register_bot_initiated_delete(old_dc_msg_id)
-                    dc_bot_instance.rpc.delete_messages(dc_accid, [old_dc_msg_id])
-                except Exception as del_e:
-                    logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before userbot edit relay: {del_e}")
-                    _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
+                    old_msg = dc_bot_instance.rpc.get_message(dc_accid, old_dc_msg_id)
+                    old_text = old_msg.get('text') if isinstance(old_msg, dict) else getattr(old_msg, 'text', '')
+                    is_info = old_msg.get('isInfo') if isinstance(old_msg, dict) else getattr(old_msg, 'isInfo', False)
+                    has_html = old_msg.get('hasHtml') if isinstance(old_msg, dict) else getattr(old_msg, 'hasHtml', False)
+                    view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
+
+                    if old_text and not is_info and not has_html and view_type != 'Call' and not file_path:
+                        dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
+                        c_hash = _get_content_hash(msg)
+                        database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+                        logger.info(f"Userbot: Edited post {old_dc_msg_id} in-place for TG msg {msg.id} in DC chat {dc_chat_id}")
+                        return
+                except Exception as edit_err:
+                    logger.debug(f"Userbot: Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
+
+            # If old message exists in a broadcast channel but in-place edit failed/not possible, skip sending a duplicate new message
+            ch_info = database.get_channel_by_tg_id(tg_channel_id)
+            if old_dc_msg_id and (ch_info or (msg.is_channel and not msg.is_group)):
+                logger.info(f"Userbot: Skipping edit re-send for broadcast channel post {msg.id} because in-place edit was not possible.")
+                return
+
+        if display_author:
+            msg_data.override_sender_name = display_author
+        
+        if file_path:
+            msg_data.file = file_path
 
         await _wait_for_global_dc_rate_limit()
         sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
@@ -6933,8 +6939,32 @@ async def _process_userbot_event_internal(event, is_edit=False):
     if _mark_processed(tg_channel_id, msg.id):
         return
 
-    if is_edit and _is_edit_debounced(tg_channel_id, msg.id):
-        return
+    if is_edit:
+        if _is_edit_debounced(tg_channel_id, msg.id):
+            return
+
+        # Check message age (older than 7 days)
+        try:
+            from datetime import datetime, timezone
+            msg_date = getattr(msg, 'date', None)
+            if msg_date:
+                now = datetime.now(timezone.utc)
+                age = now - msg_date
+                if age.days > 7:
+                    logger.info(f"Userbot: Skipping edit relay for post {msg.id} in channel {tg_channel_id} because it is older than 7 days ({age.days} days).")
+                    return
+        except Exception as e:
+            logger.warning(f"Userbot: Failed to check message age for post {msg.id}: {e}")
+
+        # Check subscriber count (> 10000)
+        try:
+            ch_row = database.get_channel_by_tg_id(tg_channel_id)
+            sub_count = ch_row.get('tg_participants_count', 0) if ch_row else 0
+            if sub_count > 10000:
+                logger.info(f"Userbot: Skipping edit relay for channel {tg_channel_id} because it has {sub_count} subscribers (> 10000).")
+                return
+        except Exception:
+            pass
 
     # Check database
     dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)

@@ -947,6 +947,54 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc_bot
             bot.dc_accid = orig_dc_accid
 
+    def test_userbot_edit_in_place_relay(self):
+        database.add_channel_by_id(tg_channel_id=-100555, dc_chat_id=123, username="test_ch")
+        database.save_message_map(dc_msg_id=777, dc_chat_id=123, tg_msg_id=544, tg_chat_id=-100555, content_hash="hash1")
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.get_message.return_value = {
+            "id": 777,
+            "text": "Старый пост",
+            "isInfo": False,
+            "hasHtml": False,
+            "viewType": "Text"
+        }
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100555
+            mock_msg.id = 544
+            mock_msg.message = "ОБНОВЛЕНИЕ ПОДПИСКИ"
+            mock_msg.media = None
+            mock_msg.entities = []
+            mock_msg.is_channel = True
+            mock_msg.is_group = False
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg, is_edit=True))
+
+            # Verify in-place edit was sent
+            mock_dc_bot.rpc.send_edit_request.assert_called_once()
+            call_args = mock_dc_bot.rpc.send_edit_request.call_args
+            self.assertEqual(call_args[0][0], 1)
+            self.assertEqual(call_args[0][1], 777)
+            self.assertIn("ОБНОВЛЕНИЕ ПОДПИСКИ", call_args[0][2])
+
+            # Verify NO new message was sent
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
 
 if __name__ == "__main__":
     unittest.main()
