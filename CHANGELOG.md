@@ -1,3 +1,16 @@
+## [2.13.0] - 2026-09-02
+- **Channel Reconciliation & Catchup Improvements**:
+  - **Robust Entity Resolution with Fallbacks**: Added `_resolve_userbot_entity` that attempts resolution via numeric Telegram ID, then falls back to `@username`, and finally to invite links. Resolves entity lookup failures for channels not previously cached in the session database.
+  - **Automatic Channel Auto-Joining**: Added auto-join check in `reconcile_channel` to automatically subscribe the Userbot (`JoinChannelRequest`) to bridged channels if `left=True`, restoring MTProto real-time push update delivery.
+  - **Chronological Reverse Pagination (`reverse=True`)**: Fixed Telethon `get_messages(min_id=last_id, limit=N, reverse=True)` pagination to fetch missed posts in chronological ascending order, preventing skipped message gaps when more than 50 posts were missed.
+  - **Zero `last_msg_id` Initialization**: Automatically initializes `last_msg_id` to the latest post for newly bridged channels (`Post #None`), allowing reconciliation to start tracking them immediately.
+  - **Reduced Reconciliation Interval**: Decreased background reconciliation check interval from 10 minutes (600s) to 3 minutes (180s).
+- **Manual `/catchup` and `/reconcile` Commands**:
+  - Added `/catchup` command for administrators in both Delta Chat and Telegram.
+  - Supports catching up a specific channel (e.g. `/catchup @pezduzalive` or `/catchup <id>`) or all bridged channels (`/catchup`), providing an immediate status report of queued missed messages.
+- **Database Schema & Migrations**:
+  - Added `tg_participants_count` column and migration to the `channels` table.
+
 ## [2.12.0] - 2026-08-26
 - **Automatic Bridge Cleanup & Reconciliation Worker (`cleanup_stale_bridges`)**:
   - Implemented automatic startup and daily background cleanup worker to detect and resolve stale, duplicate, and orphaned bridges.

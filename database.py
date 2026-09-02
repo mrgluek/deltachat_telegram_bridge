@@ -69,7 +69,8 @@ def init_db():
                 reactions_count INTEGER DEFAULT 0,
                 created_at INTEGER DEFAULT (strftime('%s','now')),
                 created_by_tg_id INTEGER,
-                last_msg_id INTEGER DEFAULT 0
+                last_msg_id INTEGER DEFAULT 0,
+                tg_participants_count INTEGER DEFAULT 0
             )
         ''')
         # Migrate old channels table: allow NULL username and add UNIQUE on tg_channel_id
@@ -124,6 +125,13 @@ def init_db():
             col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
             if 'last_msg_id' not in col_names:
                 cursor.execute("ALTER TABLE channels ADD COLUMN last_msg_id INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        # Migration: add tg_participants_count to channels
+        try:
+            col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
+            if 'tg_participants_count' not in col_names:
+                cursor.execute("ALTER TABLE channels ADD COLUMN tg_participants_count INTEGER DEFAULT 0")
         except Exception:
             pass
         # Migration: add reactions_count to bridges

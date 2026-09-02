@@ -534,6 +534,124 @@ class TestTelegramBridge(unittest.TestCase):
         channels = database.get_all_channels()
         self.assertIn(ch_id, [c['id'] for c in channels])
 
+    def test_reconcile_channel_catches_up_missed_posts(self):
+        import asyncio
+        database.add_channel_by_id(tg_channel_id=-100888, dc_chat_id=401, username="test_lagging_channel")
+        database.update_channel_last_msg_id(-100888, 100)
+
+        # Mock userbot client
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        class MockEntity:
+            left = False
+
+        class MockMsg:
+            def __init__(self, msg_id):
+                self.id = msg_id
+                self.chat_id = -100888
+
+        async def mock_get_entity(target):
+            return MockEntity()
+
+        async def mock_get_messages(entity, limit=None, min_id=None, reverse=None):
+            if limit == 1 and min_id is None:
+                # Latest message is 130
+                return [MockMsg(130)]
+            if min_id == 100 and reverse is True:
+                # Return missed messages
+                return [MockMsg(101), MockMsg(102), MockMsg(103)]
+            return []
+
+        mock_ub.get_entity = mock_get_entity
+        mock_ub.get_messages = mock_get_messages
+
+        original_ub = bot.userbot_client
+        try:
+            bot.userbot_client = mock_ub
+            chan = database.get_channel_by_tg_id(-100888)
+            queued, missed = asyncio.run(bot.reconcile_channel(chan))
+            self.assertEqual(missed, 30)  # 130 - 100
+            self.assertEqual(queued, 3)   # 3 mocked msgs
+        finally:
+            bot.userbot_client = original_ub
+
+    def test_reconcile_channel_initializes_zero_last_id(self):
+        import asyncio
+        database.add_channel_by_id(tg_channel_id=-100999, dc_chat_id=402, username="test_new_channel")
+        self.assertEqual(database.get_channel_last_msg_id(-100999), 0)
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        class MockEntity:
+            left = False
+
+        class MockMsg:
+            def __init__(self, msg_id):
+                self.id = msg_id
+                self.chat_id = -100999
+
+        async def mock_get_entity(target):
+            return MockEntity()
+
+        async def mock_get_messages(entity, limit=None, min_id=None, reverse=None):
+            if limit == 1:
+                return [MockMsg(500)]
+            return []
+
+        mock_ub.get_entity = mock_get_entity
+        mock_ub.get_messages = mock_get_messages
+
+        original_ub = bot.userbot_client
+        try:
+            bot.userbot_client = mock_ub
+            chan = database.get_channel_by_tg_id(-100999)
+            queued, missed = asyncio.run(bot.reconcile_channel(chan))
+            self.assertEqual(queued, 0)
+            self.assertEqual(missed, 0)
+            self.assertEqual(bot._get_cached_last_msg_id(-100999), 500)
+        finally:
+            bot.userbot_client = original_ub
+
+    def test_run_channel_catchup_command(self):
+        import asyncio
+        database.add_channel_by_id(tg_channel_id=-100777, dc_chat_id=403, username="test_catchup_ch")
+        database.update_channel_last_msg_id(-100777, 50)
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        class MockEntity:
+            left = False
+
+        class MockMsg:
+            def __init__(self, msg_id):
+                self.id = msg_id
+                self.chat_id = -100777
+
+        async def mock_get_entity(target):
+            return MockEntity()
+
+        async def mock_get_messages(entity, limit=None, min_id=None, reverse=None):
+            if limit == 1:
+                return [MockMsg(52)]
+            if min_id == 50 and reverse is True:
+                return [MockMsg(51), MockMsg(52)]
+            return []
+
+        mock_ub.get_entity = mock_get_entity
+        mock_ub.get_messages = mock_get_messages
+
+        original_ub = bot.userbot_client
+        try:
+            bot.userbot_client = mock_ub
+            report = asyncio.run(bot.run_channel_catchup("test_catchup_ch"))
+            self.assertIn("Caught up 1 channel(s)", report)
+            self.assertIn("queued 2 missed posts", report)
+        finally:
+            bot.userbot_client = original_ub
+
 
 if __name__ == "__main__":
     unittest.main()

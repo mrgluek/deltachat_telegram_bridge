@@ -342,6 +342,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/userbotjoin <link>` | Join a channel/group via Userbot (no admin needed) |
 | `/groups` | List technical account's groups for easy bridging |
 | `/cleanup` | Clean up stale, duplicate & orphaned bridges (owner only) |
+| `/catchup` | Catch up missed channel posts on demand (optional `@channel`) (admin only) |
 | `/transports` | Show configured mail relays & usage stats |
 | `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
@@ -362,6 +363,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 
 - `/channeladd @username` — Bridge a new channel (admin email check).
 - `/channelremove N` — Remove bridge for channel #N.
+- `/catchup [@channel]` — Catch up missed posts for a channel or all channels.
 - `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/cleanup` — Clean up stale, duplicate & orphaned bridges.
