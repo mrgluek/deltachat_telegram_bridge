@@ -716,6 +716,33 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_accid = orig_dc_accid
             bot.tg_app = orig_tg_app
 
+    def test_notify_and_remove_channel_bridge(self):
+        ch_id = database.add_channel_by_id(tg_channel_id=-100123456, dc_chat_id=999, username="test_remove_ch")
+        ch = database.get_channel_by_id(ch_id)
+
+        mock_dc_bot = MagicMock()
+        orig_dc_bot = bot.dc_bot_instance
+        orig_dc_accid = bot.dc_accid
+        try:
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            removed_tg_id = bot._notify_and_remove_channel_bridge(ch)
+            self.assertEqual(removed_tg_id, -100123456)
+
+            # Check that notice was sent to DC chat 999
+            mock_dc_bot.rpc.send_msg.assert_called()
+            call_args = mock_dc_bot.rpc.send_msg.call_args
+            self.assertEqual(call_args[0][0], 1)
+            self.assertEqual(call_args[0][1], 999)
+            self.assertIn("Channel Disconnected", call_args[0][2].text)
+
+            # Check channel is removed from DB
+            self.assertIsNone(database.get_channel_by_id(ch_id))
+        finally:
+            bot.dc_bot_instance = orig_dc_bot
+            bot.dc_accid = orig_dc_accid
+
 
 if __name__ == "__main__":
     unittest.main()

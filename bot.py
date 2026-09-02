@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 
 
 
@@ -2091,7 +2091,37 @@ def dc_channeladd_command(bot, accid, event):
     else:
         logger.error("Main loop not found, cannot run channeladd")
 
+def _notify_and_remove_channel_bridge(ch: dict) -> int | None:
+    """Send unbridge notice to DC channel, remove from DB, clear caches, and leave TG chat."""
+    global dc_bot_instance, dc_accid, main_loop
+    ch_id = ch.get('id')
+    dc_chat_id = ch.get('dc_chat_id')
+    tg_channel_id = ch.get('tg_channel_id')
+
+    # 1. Notify Delta Chat Broadcast Channel before unbridging
+    if dc_chat_id and dc_bot_instance and dc_accid:
+        try:
+            dc_notice = (
+                "⚠️ **Channel Disconnected**\n"
+                "This broadcast channel has been unbridged from Telegram by the administrator and will no longer receive updates."
+            )
+            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=dc_notice))
+        except Exception as e:
+            logger.debug(f"Could not send unbridge notice to DC chat {dc_chat_id}: {e}")
+
+    # 2. Remove channel from DB
+    removed_tg_id = database.remove_channel(ch_id)
+    if removed_tg_id:
+        if dc_chat_id:
+            _clear_dc_caches(dc_chat_id)
+        invalidate_channels_cache()
+        # 3. Trigger Userbot leave in background
+        if main_loop and main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(_userbot_leave_chat(removed_tg_id), main_loop)
+    return removed_tg_id
+
 @dc_cli.on(events.NewMessage(command="/channelremove"))
+@dc_cli.on(events.NewMessage(command="/channeldelete"))
 def dc_channelremove_command(bot, accid, event):
     """Remove a channel bridge from Delta Chat. Admin only."""
     msg = event.msg
@@ -2112,12 +2142,8 @@ def dc_channelremove_command(bot, accid, event):
              _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
              return
              
-        tg_channel_id = database.remove_channel(channel_id)
+        tg_channel_id = _notify_and_remove_channel_bridge(ch)
         if tg_channel_id:
-             _clear_dc_caches(ch['dc_chat_id'])
-             # Trigger Userbot leave in background
-             if main_loop:
-                 asyncio.run_coroutine_threadsafe(_userbot_leave_chat(tg_channel_id), main_loop)
              _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
         else:
              _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
@@ -4743,7 +4769,7 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
     else:
         display_name = f"ID <code>{ch['tg_channel_id']}</code>"
 
-    if database.remove_channel(channel_id):
+    if _notify_and_remove_channel_bridge(ch):
         await update.message.reply_text(f"✅ Channel #{channel_id} (<b>{display_name}</b>) removed.", parse_mode='HTML')
     else:
         await update.message.reply_text("❌ Failed to remove channel.")
@@ -6916,6 +6942,7 @@ async def main():
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channel\d+qr$'), tg_channelqr_command))
     tg_app.add_handler(MessageHandler(filters.COMMAND & filters.Regex(r'^/channelqr\d+$'), tg_channelqr_command))
     tg_app.add_handler(CommandHandler("channelremove", tg_channelremove_command))
+    tg_app.add_handler(CommandHandler("channeldelete", tg_channelremove_command))
     tg_app.add_handler(CommandHandler("cleanup", tg_cleanup_command))
     tg_app.add_handler(CommandHandler("catchup", tg_catchup_command))
     tg_app.add_handler(CommandHandler("reconcile", tg_catchup_command))

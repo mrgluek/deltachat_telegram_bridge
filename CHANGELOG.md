@@ -1,3 +1,9 @@
+## [2.15.0] - 2026-09-02
+- **Channel Unbridge Notification to Broadcast Channel**:
+  - Automatically sends a farewell notice (`⚠️ Channel Disconnected: This broadcast channel has been unbridged from Telegram by the administrator and will no longer receive updates.`) directly into the Delta Chat broadcast channel whenever `/channelremove` or `/channeldelete` is executed.
+  - Added `/channeldelete` command alias in both Delta Chat and Telegram.
+  - Unified channel unbridging pipeline (`_notify_and_remove_channel_bridge`): ensures cache invalidation and Userbot leave routines execute consistently across Delta Chat and Telegram command handlers.
+
 ## [2.14.0] - 2026-09-02
 - **Automatic Inaccessible & Banned Channel Detection & Alerts**:
   - Implemented `TelethonBanLogHandler` and exception interceptors in `reconcile_channel` to detect when the Userbot account is banned, removed, or loses access to a Telegram channel (`Account is now banned in ...`, `UserBannedInChannelError`, `ChannelPrivateError`).

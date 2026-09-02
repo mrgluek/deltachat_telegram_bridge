@@ -335,7 +335,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | Command | Description |
 |---------|-------------|
 | `/channeladd <target>` | Create a bridge (bot as admin, or Userbot if pre-joined via `/userbotjoin`) |
-| `/channelremove <target>` | Remove a channel bridge |
+| `/channelremove <target>` | Remove a channel bridge (alias: `/channeldelete`) |
 | `/channels` | List bridged channels (as admin, private chat) |
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
