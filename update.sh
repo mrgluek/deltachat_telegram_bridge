@@ -2,6 +2,9 @@
 set -e
 cd "$(dirname "$0")"
 
+# Prevent git from hanging on interactive credentials prompt
+export GIT_TERMINAL_PROMPT=0
+
 # --- HEALTHCHECKS SUPPORT ---
 # Create a .env.local file in this directory to enable monitoring:
 #   echo 'MONITOR_URL=https://ping.gluek.info/ping/YOUR-UUID' > .env.local
