@@ -1,3 +1,10 @@
+## [2.18.0] - 2026-09-03
+- **Telegram Bot Bridging as Channels via Userbot & `/botsend` Command**:
+  - Added support for bridging Telegram Bots as Delta Chat broadcast channels via `/channeladd @bot_username`.
+  - When bridging a bot, the Userbot automatically starts the dialogue with `/start`, pulls the bot's name and avatar, and mirrors all incoming posts, feeds, alerts, and updates from the bot directly into the Delta Chat channel.
+  - Added `/botsend <@bot or channel_id> <message>` command (in Delta Chat and Telegram) allowing administrators to interact with the bot (send commands, queries, and configure settings) on behalf of the Userbot.
+  - Filtered out outgoing Userbot messages (`msg.out == True`) to avoid echo feedback into the broadcast channel.
+
 ## [2.17.2] - 2026-09-03
 - **Removed Obsolete 1MB Media File Size Edit Limit**:
   - Removed legacy 1MB media file size check on post and message edits in Bot API handlers.

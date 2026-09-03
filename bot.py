@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.17.2"
+VERSION = "2.18.0"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -1602,11 +1602,12 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
         fp_suffix = f" ({admin_dc_fingerprint[-8:].upper()})" if admin_dc_fingerprint else ""
         help_text += f"\n👑 **Admin:** `{admin_dc_email}`{fp_suffix}\n"
         help_text += (
-            f"\n**Channel Management (Owner only):**\n"
-            f"/channeladd @name or ID — Bridge a TG channel/group (bot as admin or Userbot)\n"
+            f"\n**Channel & Bot Management (Owner only):**\n"
+            f"/channeladd @name or ID — Bridge a TG channel, group, or Bot (via Userbot)\n"
             f"/channelremove N — Remove a channel bridge\n"
             f"/channels — List bridged channels\n"
             f"/channelssync — Refresh channel names & avatars from TG\n"
+            f"/botsend @bot or ID <text> — Send a command/message to a bridged TG bot\n"
             f"/catchup [@channel] — Catch up missed posts for channel(s)\n"
             f"/userbotjoin <link> — Join channel via Userbot (no admin needed)\n"
             f"\n**Message Filters (Owner only):**\n"
@@ -1651,9 +1652,10 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/donate — Support bot development ❤️",
     ]
     if database.is_owner(user_id):
-        lines.append(f"\n<b>⚙️ Channel & Userbot (Owner):</b>")
-        lines.append(f"/channeladd @name or ID — Bridge a channel/group (bot must be admin OR use Userbot)")
+        lines.append(f"\n<b>⚙️ Channel, Bot & Userbot (Owner):</b>")
+        lines.append(f"/channeladd @name or ID — Bridge a channel/group/bot (bot as admin OR Userbot)")
         lines.append(f"/userbotjoin link — Join channel/group via Userbot (no admin needed; use before /channeladd)")
+        lines.append(f"/botsend @bot or ID text — Send a command/message to a bridged TG bot")
         lines.append(f"/channels — List bridged channels")
         lines.append(f"/groups — List Userbot groups to bridge")
         lines.append(f"/channel N — Get channel invite link")
@@ -2184,6 +2186,32 @@ def dc_channelremove_command(bot, accid, event):
              _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove channel #{channel_id}."))
     except ValueError:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid channel number."))
+
+@dc_cli.on(events.NewMessage(command="/botsend"))
+def dc_botsend_command(bot, accid, event):
+    """Send a command or message to a Telegram bot via Userbot. Admin only."""
+    msg = event.msg
+    payload = event.payload.strip()
+
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /botsend."))
+        return
+
+    parts = payload.split(maxsplit=1)
+    if len(parts) < 2:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /botsend @bot_username <message> or /botsend <channel_id> <message>"))
+        return
+
+    target, cmd_text = parts[0], parts[1]
+
+    async def run_botsend():
+        res = await _send_bot_message(target, cmd_text)
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=to_dc_markdown(res)))
+
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(run_botsend(), main_loop)
+    else:
+        logger.error("Main loop not found, cannot run botsend")
 
 @dc_cli.on(events.NewMessage(command="/filters"))
 def dc_filters_command(bot, accid, event):
@@ -4279,39 +4307,56 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         try:
             chat_arg = numeric_id if is_numeric else f"@{username}"
             tg_chat_info = await tg_app.bot.get_chat(chat_arg)
-            if tg_chat_info.type not in ("channel", "group", "supergroup"):
-                 return f"❌ <code>{html.escape(display_name)}</code> is not a channel or group."
-            
-            channel_title = tg_chat_info.title or display_name
-            tg_channel_id = tg_chat_info.id
-            resolved_username = tg_chat_info.username
-            if tg_chat_info.photo:
-                avatar_file = await tg_chat_info.photo.get_big_file()
-            bot_api_ok = True
+            if tg_chat_info.type in ("channel", "group", "supergroup"):
+                channel_title = tg_chat_info.title or display_name
+                tg_channel_id = tg_chat_info.id
+                resolved_username = tg_chat_info.username
+                if tg_chat_info.photo:
+                    avatar_file = await tg_chat_info.photo.get_big_file()
+                bot_api_ok = True
         except Exception:
             pass
 
-        # Ensure Userbot also "sees" and joins the channel if possible (needed for history)
+        # Ensure Userbot also "sees" and joins the channel/bot if possible (needed for history)
+        is_bot = False
         if userbot_client and userbot_client.is_connected():
             try:
                 # Use resolved username if available, fallback to original input
                 ub_arg = numeric_id if is_numeric else (resolved_username or username)
                 entity = await asyncio.wait_for(userbot_client.get_entity(ub_arg), timeout=15.0)
-                if getattr(entity, 'left', True):
+                is_bot = getattr(entity, 'bot', False)
+
+                if is_bot:
+                    # For Telegram bots: activate dialogue with /start
+                    try:
+                        logger.info(f"Userbot: Starting bot {display_name} with /start...")
+                        await asyncio.wait_for(userbot_client.send_message(entity, "/start"), timeout=10.0)
+                    except Exception as start_err:
+                        logger.debug(f"Userbot: /start to bot failed or ignored: {start_err}")
+                elif getattr(entity, 'left', True):
                     if JoinChannelRequest:
                         logger.info(f"Userbot: Joining {channel_title or display_name} for history/relay...")
                         await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
                 
                 # If Bot API failed, use Userbot info
                 if not bot_api_ok:
-                    from telethon.utils import get_peer_id
-                    tg_channel_id = get_peer_id(entity)
-                    channel_title = getattr(entity, 'title', display_name)
+                    try:
+                        from telethon.utils import get_peer_id
+                        tg_channel_id = get_peer_id(entity)
+                    except Exception:
+                        tg_channel_id = getattr(entity, 'id', None)
+                    if is_bot:
+                        first_name = getattr(entity, 'first_name', '') or ''
+                        last_name = getattr(entity, 'last_name', '') or ''
+                        full_name = f"{first_name} {last_name}".strip()
+                        channel_title = full_name or getattr(entity, 'title', None) or (f"@{entity.username}" if getattr(entity, 'username', None) else display_name)
+                    else:
+                        channel_title = getattr(entity, 'title', display_name)
                     resolved_username = getattr(entity, 'username', username)
                     bot_api_ok = True
             except Exception as e:
                 if not bot_api_ok:
-                    return f"❌ Failed to resolve chat (Userbot error): {html.escape(str(e))}"
+                    return f"❌ Failed to resolve chat/bot (Userbot error): {html.escape(str(e))}"
                 logger.debug(f"Userbot could not resolve/join channel (already resolved by Bot API): {e}")
 
         if not bot_api_ok:
@@ -4374,8 +4419,9 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             if resolved_username:
                 title_display += f" (@{html.escape(resolved_username)})"
             
+            target_type = "Bot" if is_bot else "Channel"
             return (
-                f"✅ Channel {title_display} bridged!\n\n"
+                f"✅ {target_type} {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
                 f"🆔 Channel #{row_id}\n\n"
                 f"🔗 Subscribe in Delta Chat:\n{invite_link}"
@@ -4386,6 +4432,61 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
     except Exception as e:
         logger.error(f"Failed to bridge channel: {e}")
         return f"❌ Internal Error: {html.escape(str(e))}"
+
+
+async def _send_bot_message(target: str, message_text: str) -> str:
+    """Send a command or message to a Telegram bot via Userbot."""
+    global userbot_client
+    if not userbot_client or not userbot_client.is_connected():
+        return "❌ Userbot is not running or connected."
+    
+    target_clean = target.strip()
+    if not target_clean or not message_text.strip():
+        return "Usage: <code>/botsend @bot_name &lt;message&gt;</code> or <code>/botsend &lt;channel_id&gt; &lt;message&gt;</code>"
+
+    # Support channel DB ID (e.g. channel #5)
+    try:
+        ch_id = int(target_clean)
+        ch = database.get_channel_by_id(ch_id)
+        if ch:
+            target_clean = ch.get('tg_channel_username') or str(ch.get('tg_channel_id'))
+    except ValueError:
+        pass
+
+    try:
+        entity = await asyncio.wait_for(userbot_client.get_entity(target_clean), timeout=15.0)
+        await asyncio.wait_for(userbot_client.send_message(entity, message_text), timeout=15.0)
+        first_name = getattr(entity, 'first_name', '') or ''
+        last_name = getattr(entity, 'last_name', '') or ''
+        bot_name = f"{first_name} {last_name}".strip() or getattr(entity, 'title', '') or getattr(entity, 'username', '') or target_clean
+        return f"🤖 Sent command to <b>{html.escape(str(bot_name))}</b>:\n<code>{html.escape(message_text)}</code>"
+    except Exception as e:
+        logger.error(f"Failed to send message to bot {target_clean}: {e}")
+        return f"❌ Failed to send message to bot: {html.escape(str(e))}"
+
+
+async def tg_botsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a command or message to a Telegram bot via Userbot (Telegram)."""
+    user_id = update.effective_user.id
+    if not database.is_owner(user_id):
+        await update.message.reply_text("❌ Only the bot owner can use /botsend.")
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: <code>/botsend @bot_name &lt;message&gt;</code>\n"
+            "or: <code>/botsend &lt;channel_id&gt; &lt;message&gt;</code>\n\n"
+            "Example: <code>/botsend @weather_bot /today</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    target = context.args[0]
+    cmd_text = " ".join(context.args[1:])
+    status_msg = await update.message.reply_text(f"⏳ Sending command to {html.escape(target)}...")
+    res = await _send_bot_message(target, cmd_text)
+    await status_msg.edit_text(res, parse_mode='HTML')
+
 
 async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bridge a Telegram channel to a new DC broadcast channel."""
@@ -6887,6 +6988,10 @@ async def _process_userbot_event_internal(event, is_edit=False):
             threading.Thread(target=_send_admin_dc_message_bg, args=(dc_code_text,), daemon=True).start()
         return  # Don't process further
 
+    # Ignore outgoing messages sent by the userbot itself (e.g. /start or /botsend)
+    if getattr(msg, 'out', False):
+        return
+
     tg_channel_id = msg.chat_id
     if _mark_processed(tg_channel_id, msg.id):
         return
@@ -7130,6 +7235,7 @@ async def main():
     tg_app.add_handler(CommandHandler("reconcile", tg_catchup_command))
     tg_app.add_handler(CommandHandler("userbotsync", tg_userbotsync_command))
     tg_app.add_handler(CommandHandler("userbotjoin", tg_userbotjoin_command))
+    tg_app.add_handler(CommandHandler("botsend", tg_botsend_command))
 
     # Handler for bot being added to / removed from chats (my_chat_member updates)
     tg_app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)

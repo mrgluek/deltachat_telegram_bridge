@@ -334,11 +334,12 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 | Command | Description |
 |---------|-------------|
-| `/channeladd <target>` | Create a bridge (bot as admin, or Userbot if pre-joined via `/userbotjoin`) |
+| `/channeladd <target>` | Create a bridge for a TG channel, group, or Bot (bot as admin, or Userbot) |
 | `/channelremove <target>` | Remove a channel bridge (alias: `/channeldelete`) |
 | `/channels` | List bridged channels (as admin, private chat) |
 | `/channel N` | Get invite link for channel by its internal number |
 | `/channelqr N` | Get QR code image for channel by its internal number |
+| `/botsend <target> <text>` | Send command or message to a bridged TG bot (e.g. `/botsend @weather_bot /today`) |
 | `/filters` | List active message filters (owner only) |
 | `/filteradd <phrase>` | Add a keyword or phrase filter (e.g. `/filteradd #реклама`) |
 | `/filterdel <target>` | Remove a filter by number or phrase (alias: `/filterremove`) |

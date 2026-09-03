@@ -995,6 +995,104 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
+    def test_add_bot_channel_bridge(self):
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        
+        bot_entity = MagicMock()
+        bot_entity.bot = True
+        bot_entity.id = 987654
+        bot_entity.first_name = "Weather Bot"
+        bot_entity.last_name = ""
+        bot_entity.username = "weather_bot"
+
+        mock_ub.get_entity = AsyncMock(return_value=bot_entity)
+        mock_ub.send_message = AsyncMock()
+        mock_ub.download_profile_photo = AsyncMock(return_value=None)
+        mock_ub.get_messages = AsyncMock(return_value=[])
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.create_broadcast.return_value = 55
+        mock_dc_bot.rpc.get_chat_securejoin_qr_code.return_value = "OPEN:link123"
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        orig_tg = bot.tg_app
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+            # Mock tg_app get_chat to fail so it falls through to userbot
+            mock_tg = MagicMock()
+            mock_tg.bot.get_chat = AsyncMock(side_effect=Exception("Not found in Bot API"))
+            bot.tg_app = mock_tg
+
+            res = asyncio.run(bot._add_channel_bridge("@weather_bot"))
+
+            # Verify Userbot sent /start to activate bot
+            mock_ub.send_message.assert_called_with(bot_entity, "/start")
+            # Verify DC broadcast channel created with bot's name
+            mock_dc_bot.rpc.create_broadcast.assert_called_with(1, "Weather Bot")
+            # Verify result message indicates Bot was bridged
+            self.assertIn("✅ Bot <b>Weather Bot</b> (@weather_bot) bridged!", res)
+            # Verify DB entry
+            self.assertEqual(database.get_dc_channel_chat_id(987654), 55)
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+            bot.tg_app = orig_tg
+
+    def test_botsend_command(self):
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        bot_entity = MagicMock()
+        bot_entity.first_name = "Weather Bot"
+        bot_entity.last_name = ""
+        bot_entity.username = "weather_bot"
+
+        mock_ub.get_entity = AsyncMock(return_value=bot_entity)
+        mock_ub.send_message = AsyncMock()
+
+        orig_ub = bot.userbot_client
+        try:
+            bot.userbot_client = mock_ub
+
+            res = asyncio.run(bot._send_bot_message("@weather_bot", "/today"))
+            mock_ub.send_message.assert_called_with(bot_entity, "/today")
+            self.assertIn("🤖 Sent command to <b>Weather Bot</b>:\n<code>/today</code>", res)
+        finally:
+            bot.userbot_client = orig_ub
+
+    def test_userbot_skip_outgoing_messages(self):
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc = MagicMock()
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc
+            bot.dc_accid = 1
+
+            mock_event = MagicMock()
+            mock_event.message.out = True  # Outgoing message from userbot
+            mock_event.message.chat_id = -100999
+            mock_event.message.id = 1234
+            mock_event.message.text = "/start"
+
+            with patch('bot._relay_userbot_message', new=AsyncMock()) as mock_relay:
+                asyncio.run(bot._process_userbot_event_internal(mock_event, is_edit=False))
+                mock_relay.assert_not_called()
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
 
 if __name__ == "__main__":
     unittest.main()
