@@ -1,3 +1,9 @@
+## [2.18.1] - 2026-09-03
+- **Fixed Reverse Edit Sync for Channels & Bots and Reconcile Auto-Join**:
+  - Prevented `handle_dc_message_changed` from erroneously attempting to edit messages on Telegram for one-way broadcast channels and bridged bots (which caused `Chat not found` Bot API errors).
+  - Fixed `reconcile_channel` and `userbot_sync_channels` attempting to execute `JoinChannelRequest` on bot/user entities (`Cannot cast InputPeerUser to any kind of InputChannel`).
+  - Added human-readable channel / bot names to relay and edit error logs (`_get_tg_chat_desc`).
+
 ## [2.18.0] - 2026-09-03
 - **Telegram Bot Bridging as Channels via Userbot & `/botsend` Command**:
   - Added support for bridging Telegram Bots as Delta Chat broadcast channels via `/channeladd @bot_username`.

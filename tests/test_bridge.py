@@ -1093,6 +1093,66 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
+    def test_dc_message_changed_skips_channels(self):
+        # Setup channel in DB
+        database.add_channel_by_id(8890997097, 172, "https://i.delta.chat/#123", username="migalka10_bot")
+        database.save_message_map(10, 172, 27, 8890997097, content_hash="old_hash")
+
+        mock_bot = MagicMock()
+        mock_bot.rpc.get_message.return_value = {
+            'id': 10,
+            'is_edited': True,
+            'text': 'New Edited Text',
+            'from_id': 1,
+            'file': None
+        }
+
+        mock_event = MagicMock()
+        mock_event.msg_id = 10
+        mock_event.chat_id = 172
+
+        with patch('bot.async_edit_in_tg') as mock_edit_tg:
+            bot.handle_dc_message_changed(mock_bot, 1, mock_event)
+            mock_edit_tg.assert_not_called()
+
+    def test_reconcile_channel_skips_join_for_bots(self):
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        bot_entity = MagicMock()
+        bot_entity.bot = True
+        bot_entity.id = 8890997097
+        bot_entity.username = "migalka10_bot"
+
+        mock_ub.get_messages = AsyncMock(return_value=[])
+
+        chan_dict = {
+            'id': 1,
+            'tg_channel_id': 8890997097,
+            'tg_channel_username': 'migalka10_bot',
+            'invite_link': None,
+            'dc_chat_id': 172
+        }
+
+        orig_ub = bot.userbot_client
+        try:
+            bot.userbot_client = mock_ub
+            with patch('bot._resolve_userbot_entity', new=AsyncMock(return_value=bot_entity)):
+                asyncio.run(bot.reconcile_channel(chan_dict))
+                # Ensure JoinChannelRequest was NEVER called on userbot_client
+                mock_ub.assert_not_called()
+        finally:
+            bot.userbot_client = orig_ub
+
+    def test_get_tg_chat_desc(self):
+        database.add_channel_by_id(-1001099350027, 172, "https://i.delta.chat/#123", username="test_chan")
+        desc = bot._get_tg_chat_desc(-1001099350027)
+        self.assertIn("@test_chan", desc)
+        self.assertIn("Channel #", desc)
+
+        unknown_desc = bot._get_tg_chat_desc(99999999)
+        self.assertEqual(unknown_desc, "99999999")
+
 
 if __name__ == "__main__":
     unittest.main()

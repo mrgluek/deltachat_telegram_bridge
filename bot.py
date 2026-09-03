@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.0"
+VERSION = "2.18.1"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -988,6 +988,21 @@ def _inline_links(text: str, entities) -> str:
     return _format_telegram_entities(text, entities)
 
 
+def _get_tg_chat_desc(tg_chat_id: int) -> str:
+    """Return a human-readable description for a Telegram chat/channel ID."""
+    try:
+        ch = database.get_channel_by_tg_id(tg_chat_id)
+        if ch:
+            uname = ch.get('tg_channel_username')
+            ch_num = ch.get('id')
+            if uname:
+                return f"@{uname} (Channel #{ch_num})"
+            return f"Channel #{ch_num} (ID: {tg_chat_id})"
+    except Exception:
+        pass
+    return str(tg_chat_id)
+
+
 async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
     try:
         tg_msg = None
@@ -1028,18 +1043,13 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
                     func = tg_app.bot.send_document
                     kwargs = {'chat_id': tg_chat_id, 'document': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
                 
-                # using retry_async with exponential backoff (up to 3 retries)
                 tg_msg = await retry_async(func, max_retries=3, delay=2.0, backoff=2.0, **kwargs)
-            except (TimeoutError, asyncio.TimeoutError):
-                logger.error(f"Timeout uploading media '{filename}' for DC msg {msg_id} to TG chat {tg_chat_id} after 3 retries")
-                fallback_text = formatted_msg + f"\n\n*[Failed to relay media: {html.escape(filename)} - timeout exceeded after 3 retries]*"
-                tg_msg = await retry_async(
-                    tg_app.bot.send_message,
-                    max_retries=3, delay=2.0, backoff=2.0,
-                    chat_id=tg_chat_id, text=fallback_text, parse_mode='HTML', reply_to_message_id=tg_reply_id
-                )
+                try:
+                    f.close()
+                except Exception:
+                    pass
             except Exception as e:
-                logger.error(f"Error uploading media '{filename}' for DC msg {msg_id} to TG chat {tg_chat_id}: {e}. Retrying text fallback...")
+                logger.error(f"Error uploading media '{filename}' for DC msg {msg_id} to TG chat {_get_tg_chat_desc(tg_chat_id)}: {e}. Retrying text fallback...")
                 tg_msg = await retry_async(
                     tg_app.bot.send_message,
                     max_retries=3, delay=2.0, backoff=2.0,
@@ -1054,9 +1064,9 @@ async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted
             
         if tg_msg:
             database.save_message_map(msg_id, dc_chat_id, tg_msg.message_id, tg_chat_id)
-            logger.info(f"Relayed DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {tg_chat_id} (TG msg {tg_msg.message_id})")
+            logger.info(f"Relayed DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {_get_tg_chat_desc(tg_chat_id)} (TG msg {tg_msg.message_id})")
     except Exception as e:
-        logger.error(f"Failed to relay DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {tg_chat_id} after 3 retries: {e}")
+        logger.error(f"Failed to relay DC msg {msg_id} (DC chat {dc_chat_id}) to TG chat {_get_tg_chat_desc(tg_chat_id)} after 3 retries: {e}")
 
 async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
     try:
@@ -1067,7 +1077,7 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
                     max_retries=3, delay=2.0, backoff=2.0,
                     chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML'
                 )
-                logger.info(f"Edited media caption in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
+                logger.info(f"Edited media caption in TG chat {_get_tg_chat_desc(tg_chat_id)} for TG msg {tg_msg_id}")
             except Exception as cap_err:
                 # Fallback to edit_message_text if it wasn't actually a media message on TG
                 logger.debug(f"Failed to edit caption, trying text: {cap_err}")
@@ -1076,7 +1086,7 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
                     max_retries=3, delay=2.0, backoff=2.0,
                     chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML'
                 )
-                logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id} (caption fallback)")
+                logger.info(f"Edited text in TG chat {_get_tg_chat_desc(tg_chat_id)} for TG msg {tg_msg_id} (caption fallback)")
         else:
             try:
                 await retry_async(
@@ -1084,7 +1094,7 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
                     max_retries=3, delay=2.0, backoff=2.0,
                     chat_id=tg_chat_id, message_id=tg_msg_id, text=formatted_msg, parse_mode='HTML'
                 )
-                logger.info(f"Edited text in TG chat {tg_chat_id} for TG msg {tg_msg_id}")
+                logger.info(f"Edited text in TG chat {_get_tg_chat_desc(tg_chat_id)} for TG msg {tg_msg_id}")
             except Exception as txt_err:
                 logger.debug(f"Failed to edit text, trying caption: {txt_err}")
                 await retry_async(
@@ -1092,9 +1102,9 @@ async def async_edit_in_tg(tg_chat_id, tg_msg_id, formatted_msg, is_media):
                     max_retries=3, delay=2.0, backoff=2.0,
                     chat_id=tg_chat_id, message_id=tg_msg_id, caption=formatted_msg, parse_mode='HTML'
                 )
-                logger.info(f"Edited caption in TG chat {tg_chat_id} for TG msg {tg_msg_id} (text fallback)")
+                logger.info(f"Edited caption in TG chat {_get_tg_chat_desc(tg_chat_id)} for TG msg {tg_msg_id} (text fallback)")
     except Exception as e:
-        logger.error(f"Failed to edit message in TG chat {tg_chat_id} (msg {tg_msg_id}) after 3 retries: {e}")
+        logger.error(f"Failed to edit message in TG chat {_get_tg_chat_desc(tg_chat_id)} (msg {tg_msg_id}) after 3 retries: {e}")
 
 def files_are_identical(file1: str, file2: str) -> bool:
     if not file1 or not file2:
@@ -2526,11 +2536,22 @@ def dc_userbotjoin_command(bot, accid, event):
                         target = f"@{m.group(1)}"
 
                 entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
-                if getattr(entity, 'left', True):
-                    if JoinChannelRequest:
-                        await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
+                is_bot = getattr(entity, 'bot', False)
+                if is_bot:
+                    try:
+                        await asyncio.wait_for(userbot_client.send_message(entity, "/start"), timeout=10.0)
+                    except Exception:
+                        pass
+                    first_name = getattr(entity, 'first_name', '') or ''
+                    last_name = getattr(entity, 'last_name', '') or ''
+                    full_name = f"{first_name} {last_name}".strip()
+                    joined_title = full_name or getattr(entity, 'title', None) or (f"@{entity.username}" if getattr(entity, 'username', None) else target)
+                else:
+                    if getattr(entity, 'left', True):
+                        if JoinChannelRequest:
+                            await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
+                    joined_title = getattr(entity, 'title', 'Unknown')
                 joined_entity = entity
-                joined_title = getattr(entity, 'title', 'Unknown')
 
             if joined_entity:
                 joined_id = getattr(joined_entity, 'id', None)
@@ -3260,6 +3281,15 @@ def handle_dc_message_changed(bot, accid, event):
     # We will build and dispatch edits for each mapped Telegram chat
     for mapping in mappings:
         tg_msg_id, tg_chat_id, dc_chat_id, created_at, old_hash = mapping
+
+        # 1. Do not sync edits backwards to Telegram for bridged channels / bots (channels are read-only feeds)
+        if database.get_channel_by_dc_chat_id(dc_chat_id) or database.get_channel_by_tg_id(tg_chat_id):
+            continue
+
+        # 2. For group bridges: verify that the bridge is still active
+        active_tg_chats = database.get_tg_chats(dc_chat_id)
+        if tg_chat_id not in active_tg_chats:
+            continue
 
         # If content hash is the same, no edit needed
         if old_hash and old_hash == new_hash:
@@ -4625,11 +4655,22 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
                     target = f"@{m.group(1)}"
 
             entity = await asyncio.wait_for(userbot_client.get_entity(target), timeout=15.0)
-            if getattr(entity, 'left', True):
-                if JoinChannelRequest:
-                    await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
+            is_bot = getattr(entity, 'bot', False)
+            if is_bot:
+                try:
+                    await asyncio.wait_for(userbot_client.send_message(entity, "/start"), timeout=10.0)
+                except Exception:
+                    pass
+                first_name = getattr(entity, 'first_name', '') or ''
+                last_name = getattr(entity, 'last_name', '') or ''
+                full_name = f"{first_name} {last_name}".strip()
+                joined_title = full_name or getattr(entity, 'title', None) or (f"@{entity.username}" if getattr(entity, 'username', None) else target)
+            else:
+                if getattr(entity, 'left', True):
+                    if JoinChannelRequest:
+                        await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
+                joined_title = getattr(entity, 'title', 'Unknown')
             joined_entity = entity
-            joined_title = getattr(entity, 'title', 'Unknown')
 
         if joined_entity:
             joined_id = getattr(joined_entity, 'id', None)
@@ -6337,7 +6378,8 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
         return 0, 0
 
     # Auto-join if userbot is not a member (so that MTProto live updates start arriving)
-    if getattr(entity, 'left', True):
+    is_user_or_bot = getattr(entity, 'bot', False) or (type(entity).__name__ in ('User', 'InputPeerUser', 'PeerUser'))
+    if not is_user_or_bot and getattr(entity, 'left', True):
         try:
             if JoinChannelRequest:
                 logger.info(f"Reconciliation: Userbot auto-joining channel {username or tg_id}...")
@@ -6551,7 +6593,8 @@ async def sync_userbot_channels(force=False):
                 if not entity:
                     raise Exception(f"Could not resolve {target} (and no working invite link).")
 
-                if getattr(entity, 'left', True):
+                is_user_or_bot = getattr(entity, 'bot', False) or (type(entity).__name__ in ('User', 'InputPeerUser', 'PeerUser'))
+                if not is_user_or_bot and getattr(entity, 'left', True):
                     logger.info(f"Userbot: Joining channel {target}...")
                     if JoinChannelRequest:
                         await asyncio.wait_for(userbot_client(JoinChannelRequest(entity)), timeout=15.0)
