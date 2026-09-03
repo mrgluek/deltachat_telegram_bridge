@@ -1191,6 +1191,38 @@ class TestTelegramBridge(unittest.TestCase):
             bot.tg_app = orig_tg
             bot.main_loop = orig_loop
 
+    def test_asyncio_exception_handler(self):
+        mock_loop = MagicMock()
+
+        class DummyTask:
+            def __str__(self):
+                return "<Task coro=<Connection._recv_loop()>>"
+
+        # 1. Benign Telethon connection teardown context should be suppressed
+        context_benign = {
+            "message": "Task was destroyed but it is pending!",
+            "task": DummyTask(),
+            "exception": None
+        }
+        bot._asyncio_exception_handler(mock_loop, context_benign)
+        mock_loop.default_exception_handler.assert_not_called()
+
+        # 2. Benign GeneratorExit should be suppressed
+        context_gen_exit = {
+            "message": "Unhandled error",
+            "exception": RuntimeError("coroutine ignored GeneratorExit")
+        }
+        bot._asyncio_exception_handler(mock_loop, context_gen_exit)
+        mock_loop.default_exception_handler.assert_not_called()
+
+        # 3. Real exception should be passed to default handler
+        context_real = {
+            "message": "Real error",
+            "exception": ValueError("Something broke")
+        }
+        bot._asyncio_exception_handler(mock_loop, context_real)
+        mock_loop.default_exception_handler.assert_called_once_with(context_real)
+
 
 if __name__ == "__main__":
     unittest.main()

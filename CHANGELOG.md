@@ -1,3 +1,8 @@
+## [2.18.3] - 2026-09-03
+- **Resilient Userbot Connection & Telethon GC Noise Filter**:
+  - Added custom asyncio exception handler (`_asyncio_exception_handler`) on the main loop to filter cosmetic `Task was destroyed but it is pending` / `coroutine ignored GeneratorExit` messages caused by Telethon's internal garbage collection of disconnected DC connections during media downloads.
+  - Configured resilient connection parameters for `TelegramClient` (`connection_retries=None`, `auto_reconnect=True`, `flood_sleep_threshold=60`, `retry_delay=1`).
+
 ## [2.18.2] - 2026-09-03
 - **Fixed Delta Chat Channel Reaction Handling**:
   - Fixed `NameError: name 'tg_channel_id' is not defined` in `handle_dc_reaction`.

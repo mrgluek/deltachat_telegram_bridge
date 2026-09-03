@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.2"
+VERSION = "2.18.3"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -7160,7 +7160,16 @@ async def start_userbot():
         await asyncio.sleep(1.0)
         
         logger.info("Initializing new Telethon Userbot client...")
-        userbot_client = TelegramClient(USERBOT_SESSION_PATH, int(api_id), api_hash, sequential_updates=False)
+        userbot_client = TelegramClient(
+            USERBOT_SESSION_PATH,
+            int(api_id),
+            api_hash,
+            sequential_updates=False,
+            connection_retries=None,
+            auto_reconnect=True,
+            flood_sleep_threshold=60,
+            retry_delay=1
+        )
         
         @userbot_client.on(tg_events.NewMessage())
         async def on_new_userbot_msg(event):
@@ -7202,6 +7211,28 @@ async def start_userbot():
     finally:
         _is_starting_userbot = False
 
+def _asyncio_exception_handler(loop, context):
+    """Custom asyncio exception handler to filter benign Telethon connection teardown noise."""
+    msg = context.get("message", "")
+    exception = context.get("exception")
+    task = context.get("task")
+    task_str = str(task) if task else ""
+
+    # Filter known benign Telethon disconnect/GC teardown noise
+    if "Task was destroyed but it is pending" in msg or "coroutine ignored GeneratorExit" in msg:
+        if any(k in task_str for k in ("Connection._send_loop", "Connection._recv_loop", "MTProtoSender", "_recv_loop", "_send_loop")):
+            logger.debug(f"Suppressed benign Telethon connection teardown: {msg}")
+            return
+        if not task and not exception:
+            logger.debug(f"Suppressed unhandled asyncio task message: {msg}")
+            return
+    if isinstance(exception, RuntimeError) and "coroutine ignored GeneratorExit" in str(exception):
+        logger.debug(f"Suppressed benign Telethon GeneratorExit: {exception}")
+        return
+
+    # Pass everything else to default handler
+    loop.default_exception_handler(context)
+
 async def main():
     global tg_app, main_loop
 
@@ -7224,6 +7255,7 @@ async def main():
         sys.exit(1)
 
     main_loop = asyncio.get_running_loop()
+    main_loop.set_exception_handler(_asyncio_exception_handler)
 
     # 1. Setup Telegram Application with tuned HTTPX connection pool and timeouts
     from telegram.request import HTTPXRequest
