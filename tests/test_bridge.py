@@ -1153,6 +1153,44 @@ class TestTelegramBridge(unittest.TestCase):
         unknown_desc = bot._get_tg_chat_desc(99999999)
         self.assertEqual(unknown_desc, "99999999")
 
+    def test_dc_channel_reaction_handling(self):
+        database.add_channel_by_id(-1001639743211, 172, "https://i.delta.chat/#123", username="test_chan")
+        database.save_message_map(42, 172, 100, -1001639743211)
+
+        mock_bot = MagicMock()
+        mock_msg = MagicMock()
+        mock_msg.chat_id = 172
+        mock_bot.rpc.get_message.return_value = mock_msg
+
+        mock_reactions = MagicMock()
+        mock_reaction_item = MagicMock()
+        mock_reaction_item.emoji = "🔥"
+        mock_reactions.reactions = [mock_reaction_item]
+        mock_bot.rpc.get_message_reactions.return_value = mock_reactions
+
+        mock_event = MagicMock()
+        mock_event.msg_id = 42
+        mock_event.contact_id = 5
+
+        orig_tg = bot.tg_app
+        orig_loop = bot.main_loop
+        try:
+            bot.tg_app = MagicMock()
+            bot.main_loop = MagicMock()
+
+            # Execute handle_dc_reaction
+            bot.handle_dc_reaction(mock_bot, 1, mock_event)
+
+            # Ensure set_message_reaction was NOT called on tg_app.bot (since it's a channel)
+            bot.tg_app.bot.set_message_reaction.assert_not_called()
+
+            # Verify stats were incremented in DB
+            rx_count = database.get_channel_reaction_count(-1001639743211)
+            self.assertEqual(rx_count, 1)
+        finally:
+            bot.tg_app = orig_tg
+            bot.main_loop = orig_loop
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,8 @@
+## [2.18.2] - 2026-09-03
+- **Fixed Delta Chat Channel Reaction Handling**:
+  - Fixed `NameError: name 'tg_channel_id' is not defined` in `handle_dc_reaction`.
+  - Prevented attempting to relay reactions back to Telegram for one-way broadcast channels and bridged bots via Bot API (reactions by DC subscribers are now tracked locally in DB statistics).
+
 ## [2.18.1] - 2026-09-03
 - **Fixed Reverse Edit Sync for Channels & Bots and Reconcile Auto-Join**:
   - Prevented `handle_dc_message_changed` from erroneously attempting to edit messages on Telegram for one-way broadcast channels and bridged bots (which caused `Chat not found` Bot API errors).

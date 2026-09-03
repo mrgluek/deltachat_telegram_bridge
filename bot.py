@@ -337,7 +337,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.1"
+VERSION = "2.18.2"
 
 # In-memory message filter cache
 _filter_cache = []
@@ -3539,25 +3539,31 @@ def handle_dc_reaction(bot, accid, event):
         for mapping in tg_mappings:
             tg_msg_id, tg_chat_id, dc_chat_id = mapping[0], mapping[1], mapping[2]
             # Verify if bridge is still active
-            is_channel = database.get_channel_by_dc_chat_id(int(dc_chat_id))
+            is_channel = database.get_channel_by_dc_chat_id(int(dc_chat_id)) or database.get_channel_by_tg_id(int(tg_chat_id))
             is_group = int(tg_chat_id) in database.get_tg_chats(int(dc_chat_id))
             
             if not is_channel and not is_group:
-                logger.info(f"Skipping DC→TG reaction sync: bridge for DC chat {dc_chat_id} to TG {tg_chat_id} no longer exists.")
+                logger.info(f"Skipping DC→TG reaction sync: bridge for DC chat {dc_chat_id} to TG {_get_tg_chat_desc(tg_chat_id)} no longer exists.")
                 continue
 
             try:
-                reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
-                asyncio.run_coroutine_threadsafe(
-                    tg_app.bot.set_message_reaction(chat_id=tg_chat_id, message_id=tg_msg_id, reaction=reaction),
-                    main_loop
-                )
-                if database.get_dc_channel_chat_id(tg_chat_id):
-                    database.increment_channel_reaction_count(tg_channel_id)
+                if is_channel:
+                    # Channels and bridged bots are one-way broadcast feeds.
+                    # Reactions placed by DC subscribers are tracked locally in DB stats and not relayed to TG.
+                    if primary_emoji:
+                        database.increment_channel_reaction_count(int(tg_chat_id))
+                    logger.info(f"Recorded DC reaction '{primary_emoji}' for channel post {tg_msg_id} in {_get_tg_chat_desc(tg_chat_id)}")
                 else:
-                    database.increment_bridge_reaction_count(int(dc_chat_id), int(tg_chat_id))
+                    # For bidirectional group chats, relay reaction to TG
+                    reaction = [ReactionTypeEmoji(primary_emoji)] if primary_emoji else []
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.set_message_reaction(chat_id=tg_chat_id, message_id=tg_msg_id, reaction=reaction),
+                        main_loop
+                    )
+                    if primary_emoji:
+                        database.increment_bridge_reaction_count(int(dc_chat_id), int(tg_chat_id))
             except Exception as e:
-                bot.logger.error(f"Failed to relay DC reaction to TG chat {tg_chat_id}: {e}")
+                bot.logger.error(f"Failed to relay DC reaction to TG chat {_get_tg_chat_desc(tg_chat_id)}: {e}")
     except Exception as e:
         bot.logger.error(f"Error handling DC reaction: {e}")
 
