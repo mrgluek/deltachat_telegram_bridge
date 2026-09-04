@@ -337,7 +337,19 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.3"
+VERSION = "2.18.4"
+
+def _custom_unraisablehook(unraisable):
+    """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
+    if unraisable.exc_type is RuntimeError and "coroutine ignored GeneratorExit" in str(unraisable.exc_value):
+        obj_name = getattr(unraisable.object, '__qualname__', '') or getattr(unraisable.object, '__name__', '') or str(unraisable.object)
+        if any(k in obj_name for k in ("_recv_loop", "_send_loop", "Connection", "MTProtoSender", "coroutine")):
+            logger.debug(f"Suppressed benign Telethon finalizer GeneratorExit in {obj_name}")
+            return
+    if hasattr(sys, '__unraisablehook__') and sys.__unraisablehook__:
+        sys.__unraisablehook__(unraisable)
+
+sys.unraisablehook = _custom_unraisablehook
 
 # In-memory message filter cache
 _filter_cache = []

@@ -1,3 +1,7 @@
+## [2.18.4] - 2026-09-04
+- **Suppressed Unraisablehook Telethon Finalizer GeneratorExit**:
+  - Configured `sys.unraisablehook` (`_custom_unraisablehook`) to filter `RuntimeError: coroutine ignored GeneratorExit` emitted during garbage collection of Telethon's internal connection tasks (`Connection._recv_loop` / `_send_loop`).
+
 ## [2.18.3] - 2026-09-03
 - **Resilient Userbot Connection & Telethon GC Noise Filter**:
   - Added custom asyncio exception handler (`_asyncio_exception_handler`) on the main loop to filter cosmetic `Task was destroyed but it is pending` / `coroutine ignored GeneratorExit` messages caused by Telethon's internal garbage collection of disconnected DC connections during media downloads.

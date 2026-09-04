@@ -1223,6 +1223,33 @@ class TestTelegramBridge(unittest.TestCase):
         bot._asyncio_exception_handler(mock_loop, context_real)
         mock_loop.default_exception_handler.assert_called_once_with(context_real)
 
+    def test_custom_unraisablehook(self):
+        class DummyUnraisable:
+            def __init__(self, exc_type, exc_value, obj):
+                self.exc_type = exc_type
+                self.exc_value = exc_value
+                self.object = obj
+                self.err_msg = None
+
+        with patch('sys.__unraisablehook__') as mock_sys_hook:
+            # 1. Benign Telethon GeneratorExit on Connection._recv_loop should be suppressed
+            unraisable_benign = DummyUnraisable(
+                RuntimeError,
+                RuntimeError("coroutine ignored GeneratorExit"),
+                "<coroutine object Connection._recv_loop at 0x123>"
+            )
+            bot._custom_unraisablehook(unraisable_benign)
+            mock_sys_hook.assert_not_called()
+
+            # 2. Other unraisable exceptions should be passed to default sys.__unraisablehook__
+            unraisable_real = DummyUnraisable(
+                ValueError,
+                ValueError("Unraisable value error"),
+                "some_object"
+            )
+            bot._custom_unraisablehook(unraisable_real)
+            mock_sys_hook.assert_called_once_with(unraisable_real)
+
 
 if __name__ == "__main__":
     unittest.main()
