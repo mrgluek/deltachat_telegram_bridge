@@ -1,3 +1,9 @@
+## [2.18.5] - 2026-09-07
+- **Fixed Telethon Infinite Reconnection Loop on NoneType Connection**:
+  - Monkey-patched `MTProtoSender._reconnect` (`_safe_telethon_reconnect`) to immediately abort reconnection attempts when `_connection` is `None` (sender was already disconnected or abandoned), preventing infinite loop crashes (`AttributeError: 'NoneType' object has no attribute 'connect'`).
+  - Changed `connection_retries` from `None` (unbounded infinite attempts) to `5` in `TelegramClient`, allowing dead senders to terminate cleanly so the userbot watchdog can re-initialize a fresh session.
+  - Added `telethon.network.mtprotosender` to `PollingErrorFilter`.
+
 ## [2.18.4] - 2026-09-04
 - **Suppressed Unraisablehook Telethon Finalizer GeneratorExit**:
   - Configured `sys.unraisablehook` (`_custom_unraisablehook`) to filter `RuntimeError: coroutine ignored GeneratorExit` emitted during garbage collection of Telethon's internal connection tasks (`Connection._recv_loop` / `_send_loop`).

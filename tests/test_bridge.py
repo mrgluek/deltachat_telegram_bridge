@@ -1250,6 +1250,18 @@ class TestTelegramBridge(unittest.TestCase):
             bot._custom_unraisablehook(unraisable_real)
             mock_sys_hook.assert_called_once_with(unraisable_real)
 
+    def test_telethon_safe_reconnect_aborts_on_none_connection(self):
+        # Create a dummy sender with _connection = None
+        class DummySender:
+            def __init__(self):
+                self._connection = None
+                self._log = MagicMock()
+
+        dummy_sender = DummySender()
+        # Calling _safe_telethon_reconnect on a sender with _connection = None should abort immediately without error
+        asyncio.run(bot._safe_telethon_reconnect(dummy_sender, None))
+        dummy_sender._log.info.assert_called_with('Cannot reconnect MTProtoSender: _connection is None.')
+
 
 if __name__ == "__main__":
     unittest.main()

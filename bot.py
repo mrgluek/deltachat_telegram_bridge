@@ -109,6 +109,90 @@ logging.getLogger("telegram.ext.Updater").addFilter(PollingErrorFilter())
 logging.getLogger("telegram.ext.Application").addFilter(PollingErrorFilter())
 logging.getLogger("httpx").addFilter(PollingErrorFilter())
 logging.getLogger("httpcore").addFilter(PollingErrorFilter())
+logging.getLogger("telethon.network.mtprotosender").addFilter(PollingErrorFilter())
+
+# Patch Telethon MTProtoSender._reconnect to prevent infinite loop on AttributeError (reconnecting to None)
+try:
+    from telethon.network.mtprotosender import MTProtoSender
+    from telethon import helpers
+    from telethon.helpers import retry_range
+    from telethon.errors import InvalidBufferError, AuthKeyNotFound
+
+    _orig_telethon_reconnect = MTProtoSender._reconnect
+
+    async def _safe_telethon_reconnect(self, last_error):
+        # If connection is None, this sender was already disconnected or abandoned.
+        # Reconnecting to None is impossible and causes infinite AttributeError loops.
+        if getattr(self, '_connection', None) is None:
+            self._log.info('Cannot reconnect MTProtoSender: _connection is None.')
+            return
+
+        self._log.info('Closing current connection to begin reconnect...')
+        try:
+            if self._connection:
+                await self._connection.disconnect()
+        except Exception:
+            pass
+
+        await helpers._cancel(
+            self._log,
+            send_loop_handle=self._send_loop_handle,
+            recv_loop_handle=self._recv_loop_handle
+        )
+
+        self._reconnecting = False
+        self._state.reset()
+
+        retries = self._retries if self._auto_reconnect else 0
+
+        attempt = 0
+        ok = True
+        for attempt in retry_range(retries, force_retry=False):
+            if getattr(self, '_connection', None) is None:
+                self._log.info('MTProtoSender connection is None; aborting reconnect.')
+                ok = False
+                break
+            try:
+                await self._connect()
+            except (IOError, asyncio.TimeoutError) as e:
+                last_error = e
+                self._log.info('Failed reconnection attempt %d with %s',
+                               attempt, e.__class__.__name__)
+                await asyncio.sleep(self._delay)
+            except BufferError as e:
+                if isinstance(e, InvalidBufferError) and e.code == 404:
+                    self._log.info('Server does not know about the current auth key; the session may need to be recreated')
+                    last_error = AuthKeyNotFound()
+                    ok = False
+                    break
+                else:
+                    self._log.warning('Invalid buffer %s', e)
+            except Exception as e:
+                if getattr(self, '_connection', None) is None:
+                    self._log.info('MTProtoSender connection became None during reconnect; aborting.')
+                    ok = False
+                    break
+                last_error = e
+                self._log.exception('Unexpected exception reconnecting on attempt %d', attempt)
+                await asyncio.sleep(self._delay)
+            else:
+                self._send_queue.extend(self._pending_state.values())
+                self._pending_state.clear()
+
+                if self._auto_reconnect_callback:
+                    helpers.get_running_loop().create_task(self._auto_reconnect_callback())
+                break
+        else:
+            ok = False
+
+        if not ok:
+            self._log.error('Automatic reconnection failed %d time(s)', attempt)
+            error = last_error.with_traceback(None) if last_error else None
+            await self._disconnect(error=error)
+
+    MTProtoSender._reconnect = _safe_telethon_reconnect
+except Exception as _patch_err:
+    logger.warning(f"Could not patch Telethon MTProtoSender._reconnect: {_patch_err}")
 
 _admin_dc_chat_id_cache = None
 _admin_dc_chat_id_lock = threading.Lock()
@@ -337,7 +421,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.4"
+VERSION = "2.18.5"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -7177,7 +7261,7 @@ async def start_userbot():
             int(api_id),
             api_hash,
             sequential_updates=False,
-            connection_retries=None,
+            connection_retries=5,
             auto_reconnect=True,
             flood_sleep_threshold=60,
             retry_delay=1
