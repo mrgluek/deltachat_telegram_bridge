@@ -1,3 +1,7 @@
+## [2.18.6] - 2026-09-07
+- **Configurable Display Name & Status Text**:
+  - `on_init` now checks `DISPLAY_NAME` and `STATUS_TEXT` environment variables with `/data/options.json` fallback instead of overwriting display name and status text with static strings.
+
 ## [2.18.5] - 2026-09-07
 - **Fixed Telethon Infinite Reconnection Loop on NoneType Connection**:
   - Monkey-patched `MTProtoSender._reconnect` (`_safe_telethon_reconnect`) to immediately abort reconnection attempts when `_connection` is `None` (sender was already disconnected or abandoned), preventing infinite loop crashes (`AttributeError: 'NoneType' object has no attribute 'connect'`).

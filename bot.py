@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import logging
 import os
 import tempfile
@@ -421,7 +422,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.5"
+VERSION = "2.18.6"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1654,9 +1655,29 @@ def on_init(bot, args):
     bot.logger.addHandler(admin_handler)
     
     for accid in bot.rpc.get_all_account_ids():
-        displayname = database.get_config("bot_displayname") or "TG Bridge"
+        displayname = os.environ.get("DISPLAY_NAME")
+        if not displayname and os.path.exists("/data/options.json"):
+            try:
+                with open("/data/options.json", "r", encoding="utf-8") as f:
+                    opts = json.load(f)
+                    displayname = opts.get("display_name", "").strip()
+            except Exception:
+                pass
+        if not displayname:
+            displayname = database.get_config("bot_displayname") or "TG Bridge"
         bot.rpc.set_config(accid, "displayname", displayname)
-        bot.rpc.set_config(accid, "selfstatus", "I bridge Telegram and Delta Chat groups. Send /help for commands.")
+
+        status_text = os.environ.get("STATUS_TEXT")
+        if not status_text and os.path.exists("/data/options.json"):
+            try:
+                with open("/data/options.json", "r", encoding="utf-8") as f:
+                    opts = json.load(f)
+                    status_text = opts.get("status_text", "").strip()
+            except Exception:
+                pass
+        if not status_text:
+            status_text = "I bridge Telegram and Delta Chat groups. Send /help for commands."
+        bot.rpc.set_config(accid, "selfstatus", status_text)
         
         # Configure local message retention policy (in seconds, default: 7 days)
         delete_after = os.environ.get("DELETE_DEVICE_AFTER", "604800")
