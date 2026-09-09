@@ -347,9 +347,11 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/groups` | List technical account's groups for easy bridging |
 | `/cleanup` | Clean up stale, duplicate & orphaned bridges (owner only) |
 | `/catchup` | Catch up missed channel posts on demand (optional `@channel`) (admin only) |
+| `/initadmin` | Claim bot ownership in private chat (binds email & cryptographic fingerprint) |
 | `/transports` | Show configured mail relays & usage stats |
-| `/addtransport <addr>` | Add a backup mail relay (chatmail URI or addr password) |
+| `/addtransport <addr>` | Add a backup mail relay (private 1:1 chat only, chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
+| `/setprimary <addr>` | Set primary transport address |
 | `/resilient` | Toggle resilient sending mode across all relays (admin only) |
 | `/status` | Show detailed bot, userbot, queue, and channel status (admin only) |
 | `/donate` | Support bot development ❤️ |
@@ -373,6 +375,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 
 #### Management (Admin only)
 
+- `/initadmin` — Claim bot ownership in private chat (binds email & cryptographic fingerprint).
 - `/channeladd @username` — Bridge a new channel (admin email check).
 - `/channelremove N` — Remove bridge for channel #N (alias `/channeldelete`).
 - `/filters` — List active message filters.
@@ -384,7 +387,11 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/cleanup` — Clean up stale, duplicate & orphaned bridges.
 - `/stats` — Show bridge statistics for the current chat.
 - `/status` — Show detailed bot, userbot, queue, and channel status (admin only).
-- `/resilient` — Toggle resilient sending mode across all relays (admin only).
+- `/transports` — Show configured mail relays & usage stats.
+- `/addtransport <addr>` — Add backup mail relay (private 1:1 chat only).
+- `/rmtransport <addr>` — Remove mail relay.
+- `/setprimary <addr>` — Set primary mail relay address.
+- `/resilient [on|off]` — Toggle or check resilient sending mode across all mail relays.
 - `/help` — Show Delta Chat bot help.
 
 #### Target-Specific Commands in Group Chats

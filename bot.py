@@ -422,7 +422,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.6"
+VERSION = "2.18.7"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1892,6 +1892,52 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     return None
 
 
+def _parse_chat_info_is_private(chat_info) -> bool:
+    if isinstance(chat_info, dict):
+        chat_type = chat_info.get("chatType") or chat_info.get("chat_type")
+        if isinstance(chat_type, str) and chat_type.lower() == "single":
+            return True
+        type_val = chat_info.get("type")
+        if type_val in (1, "1"):
+            return True
+    else:
+        chat_type = getattr(chat_info, "chat_type", None) or getattr(chat_info, "chatType", None)
+        if isinstance(chat_type, str) and chat_type.lower() == "single":
+            return True
+        type_val = getattr(chat_info, "type", None)
+        if type_val in (1, "1"):
+            return True
+    return False
+
+
+def _is_private_chat(bot, accid, chat_id) -> bool:
+    # 1. Try get_basic_chat_info
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+        if chat_info:
+            return _parse_chat_info_is_private(chat_info)
+    except Exception as e:
+        logger.debug(f"get_basic_chat_info failed: {e}")
+
+    # 2. Fallback to get_full_chat_by_id
+    try:
+        chat_info = bot.rpc.get_full_chat_by_id(accid, chat_id)
+        if chat_info:
+            return _parse_chat_info_is_private(chat_info)
+    except Exception as e:
+        logger.debug(f"get_full_chat_by_id failed: {e}")
+
+    # 3. Ultimate fallback: get_chat_contacts length check
+    try:
+        contacts = bot.rpc.get_chat_contacts(accid, chat_id)
+        if isinstance(contacts, list) and len(contacts) == 1:
+            return True
+    except Exception as e:
+        logger.error(f"get_chat_contacts failed: {e}")
+
+    return False
+
+
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:
@@ -1968,7 +2014,8 @@ def setprimary_command(bot, accid, event):
         bot.rpc.set_config(accid, "configured_addr", addr)
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
+        logger.error(f"Failed to set primary address: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to set primary address."))
 
 @dc_cli.on(events.NewMessage(command="/resilient"))
 def resilient_command(bot, accid, event):
@@ -1995,7 +2042,8 @@ def resilient_command(bot, accid, event):
         else:
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to update resilient mode: {e}"))
+        logger.error(f"Failed to update resilient mode: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to update resilient mode."))
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
@@ -2009,6 +2057,35 @@ def help_command(bot, accid, event):
     help_msg = get_dc_help_text(bot, accid, sender_email, msg.from_id)
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_msg))
 
+@dc_cli.on(events.NewMessage(command="/initadmin"))
+def initadmin_command(bot, accid, event):
+    """Claim bot ownership in private chat (binds email & cryptographic fingerprint)."""
+    msg = event.msg
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ For security reasons, /initadmin can only be used in a private 1:1 chat with the bot."))
+        return
+
+    admin_email = database.get_admin_email()
+    admin_fp = database.get_admin_fingerprint()
+
+    if admin_email or admin_fp:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Admin is already set. Use `set_admin.py` on the server to change."))
+        return
+
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    email = contact.address
+    database.set_admin_email(email)
+
+    fp = _get_contact_fingerprint(bot, accid, msg.from_id, contact=contact)
+    if fp:
+        first_fp = fp.split(',')[0]
+        database.set_admin_fingerprint(first_fp)
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
+            f"✅ You are now the admin!\n\nEmail: `{email}`\nFingerprint: `{first_fp[-8:]}`"))
+    else:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
+            f"✅ You are now the admin!\n\nEmail: `{email}`\n⚠️ Fingerprint not available yet (will be used after key exchange)."))
+
 
 @dc_cli.on(events.NewMessage(command="/transports"))
 def transports_command(bot, accid, event):
@@ -2021,7 +2098,8 @@ def transports_command(bot, accid, event):
     try:
         transports = bot.rpc.list_transports(accid)
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to list transports: {e}"))
+        logger.error(f"Failed to list transports: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to list transports."))
         return
 
     if not transports:
@@ -2110,36 +2188,16 @@ def transports_command(bot, accid, event):
     reply += f"Total transports: {len(transport_addrs)}"
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
-@dc_cli.on(events.NewMessage(command="/rmtransport"))
-def rmtransport_command(bot, accid, event):
-    """Remove a mail relay. Admin only."""
-    msg = event.msg
-    if not _is_dc_admin(bot, accid, msg.from_id):
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /rmtransport."))
-        return
-
-    addr = event.payload.strip()
-    if not addr:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
-        return
-
-    try:
-        transports = bot.rpc.list_transports(accid)
-        if len(transports) <= 1:
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport."))
-            return
-
-        bot.rpc.delete_transport(accid, addr)
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
-    except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
-
 @dc_cli.on(events.NewMessage(command="/addtransport"))
 def addtransport_command(bot, accid, event):
     """Add a backup mail relay (transport). Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /addtransport."))
+        return
+
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ For security reasons, /addtransport can only be used in a private 1:1 chat with the bot."))
         return
 
     payload = event.payload.strip()
@@ -2167,7 +2225,8 @@ def addtransport_command(bot, accid, event):
             bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Backup transport `{addr}` added."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to add transport: {e}"))
+        logger.error(f"Failed to add transport: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to add transport."))
 
 @dc_cli.on(events.NewMessage(command="/rmtransport"))
 def rmtransport_command(bot, accid, event):
@@ -2195,14 +2254,16 @@ def rmtransport_command(bot, accid, event):
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Transport `{addr}` not found."))
             return
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to check transports: {e}"))
+        logger.error(f"Failed to check transports: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to check transports."))
         return
 
     try:
         bot.rpc.delete_transport(accid, addr)
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
+        logger.error(f"Failed to remove transport: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to remove transport."))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def dc_donate_command(bot, accid, event):
@@ -3820,6 +3881,18 @@ def on_start(bot, _args):
             print("\n" + "="*50 + "\n")
         except Exception as e:
             bot.logger.error(f"Failed to generate QR code: {e}")
+
+        # Start periodic background cleanup & stats flush worker (every 60s)
+        def _bg_cleanup_worker():
+            while True:
+                time.sleep(60)
+                try:
+                    database.flush_transport_stats()
+                    database.cleanup_old_records()
+                except Exception as e:
+                    bot.logger.debug(f"Background cleanup error: {e}")
+
+        threading.Thread(target=_bg_cleanup_worker, daemon=True, name="bg_cleanup_worker").start()
 
 # ---------------------------------------------------------
 # TELEGRAM HANDLERS
