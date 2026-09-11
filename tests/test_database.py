@@ -114,6 +114,39 @@ class TestDatabase(unittest.TestCase):
         res = database.cleanup_old_records(limit=5)
         self.assertEqual(res["message_map"], 10)
 
+    def test_processed_media_groups(self):
+        self.assertFalse(database.is_media_group_processed("group_123"))
+        database.mark_media_group_processed("group_123", -10012345, 999)
+        self.assertTrue(database.is_media_group_processed("group_123"))
+
+        # Test integer group_id conversion
+        database.mark_media_group_processed(456789, -10012345, 1000)
+        self.assertTrue(database.is_media_group_processed(456789))
+        self.assertTrue(database.is_media_group_processed("456789"))
+
+        # Test cleanup with limit
+        for i in range(10):
+            database.mark_media_group_processed(f"bulk_grp_{i}", -10012345, i)
+        res = database.cleanup_old_records(limit=5)
+        self.assertGreaterEqual(res["processed_media_groups"], 5)
+
+    def test_monotonic_update_channel_last_msg_id(self):
+        ch_id = -100999888
+        database.add_channel_by_id(ch_id, 50, username="testchan")
+        self.assertEqual(database.get_channel_last_msg_id(ch_id), 0)
+
+        # Update to 100
+        database.update_channel_last_msg_id(ch_id, 100)
+        self.assertEqual(database.get_channel_last_msg_id(ch_id), 100)
+
+        # Attempt to downgrade to 80 (e.g. out-of-order album part)
+        database.update_channel_last_msg_id(ch_id, 80)
+        self.assertEqual(database.get_channel_last_msg_id(ch_id), 100)
+
+        # Update to 150
+        database.update_channel_last_msg_id(ch_id, 150)
+        self.assertEqual(database.get_channel_last_msg_id(ch_id), 150)
+
 
 if __name__ == "__main__":
     unittest.main()

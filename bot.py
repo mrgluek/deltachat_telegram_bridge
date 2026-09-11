@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.20.0"
+VERSION = "2.20.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1018,15 +1018,18 @@ def _format_telegram_entities(text: str, entities) -> str:
 _processed_media_groups: dict[str, float] = {}
 
 def _is_media_group_processed(group_id: str | int | None) -> bool:
-    """Check if a media group / album has already been processed within 600 seconds."""
+    """Check if a media group / album has already been processed (in memory or persistent DB)."""
     if not group_id:
         return False
     group_str = str(group_id)
     now = time.time()
-    stale = [k for k, t in _processed_media_groups.items() if now - t > 600]
+    stale = [k for k, t in _processed_media_groups.items() if now - t > 3600]
     for k in stale:
         _processed_media_groups.pop(k, None)
     if group_str in _processed_media_groups:
+        return True
+    if database.is_media_group_processed(group_str):
+        _processed_media_groups[group_str] = now
         return True
     _processed_media_groups[group_str] = now
     return False
@@ -1054,6 +1057,7 @@ class TelegramRichPost:
     image_urls: list[str] = field(default_factory=list)
     video_urls: list[str] = field(default_factory=list)
     videos: list[TelegramRichVideo] = field(default_factory=list)
+    album_post_ids: list[int] = field(default_factory=list)
     published_date: str = ""
     views: str = ""
     is_rich: bool = False
@@ -1841,10 +1845,11 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         # 8. Fill HTML Template
         from datetime import datetime, timezone
         bridged_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M GMT")
-        doc_title = f"{post.author_name or 'Telegram'}: {post.teaser[:60]}" if post.teaser else (post.author_name or "Telegram Post")
+        channel_title = post.author_name or (f"@{post.username}" if post.username else "Telegram")
+        doc_title = f"{channel_title} #{post.post_id}" if post.post_id else channel_title
         html_doc = TG_POST_WEBXDC_HTML_TEMPLATE.format(
             title=html.escape(doc_title),
-            author_name=html.escape(post.author_name or post.username or "Telegram Channel"),
+            author_name=html.escape(channel_title),
             meta_text=html.escape(meta_text),
             source_url=source_url,
             avatar_html=avatar_html,
@@ -1996,6 +2001,16 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
             date_m = re.search(r'<time datetime="([^"]+)"', content)
             published_date = date_m.group(1).strip() if date_m else ""
 
+            # Album post IDs (extract from ?single links in grouped messages)
+            album_pids = {post_id}
+            for u_match, pid_match in re.findall(r't\.me/([^/]+)/(\d+)\?single', content):
+                if u_match.lower() == username.lower():
+                    try:
+                        album_pids.add(int(pid_match))
+                    except ValueError:
+                        pass
+            album_post_ids = sorted(album_pids)
+
             # Check if post has rich characteristics
             has_tables = '<table' in text_html
             is_grouped = 'tgme_widget_message_grouped' in content
@@ -2014,6 +2029,7 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
                 image_urls=image_urls,
                 video_urls=[v.video_url for v in videos if v.video_url],
                 videos=videos,
+                album_post_ids=album_post_ids,
                 published_date=published_date,
                 views=views,
                 is_rich=is_rich
@@ -6553,8 +6569,13 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         dc_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if dc_msg_id:
             c_hash = _get_content_hash(post)
-            database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=c_hash)
-            _update_cached_last_msg_id(tg_channel_id, post.message_id)
+            pids_to_map = set(rich_post.album_post_ids) if (rich_post and rich_post.album_post_ids) else {post.message_id}
+            pids_to_map.add(post.message_id)
+            for pid in pids_to_map:
+                database.save_message_map(dc_msg_id, dc_chat_id, pid, tg_channel_id, content_hash=c_hash)
+            _update_cached_last_msg_id(tg_channel_id, max(pids_to_map))
+            if media_group_id:
+                database.mark_media_group_processed(media_group_id, tg_channel_id, dc_msg_id)
 
             # Follow-up images for split or both mode
             if rich_post and len(rich_post.image_urls) > 1 and rich_mode in ("split", "both"):
@@ -6597,6 +6618,11 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         return
 
     tg_channel_id = post.chat.id
+    media_group_id = getattr(post, 'media_group_id', None)
+    if media_group_id and _is_media_group_processed(media_group_id):
+        logger.info(f"Bot API: Skipping edit for already processed album post {post.message_id} in media_group {media_group_id}")
+        return
+
     new_hash = _get_content_hash(post)
     if _mark_processed(tg_channel_id, post.message_id, f"edit_{new_hash}"):
         return
@@ -6711,7 +6737,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
             logger.info(f"Bot API: Skipping edit re-send for broadcast channel post {post.message_id} because in-place edit was not possible.")
             return
 
-        msg_data = MsgData(text=formatted_msg)
+        msg_data = MsgData(text=f"✏️ [Edited]\n\n{formatted_msg}")
         if author:
             msg_data.override_sender_name = author
         dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
@@ -8048,7 +8074,6 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     formatted_msg = text
     
     # Add link to original post
-    edit_prefix = "✏️ [Edited]" if is_edit else ""
     if msg.chat and getattr(msg.chat, 'username', None):
         formatted_msg = (formatted_msg + f"\n\n🔗 t.me/{msg.chat.username}/{msg.id}").strip()
 
@@ -8067,7 +8092,11 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 clean_title = rich_post.author_name or f"@{chat_username}"
                 formatted_msg = (f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{chat_username}/{msg.id}").strip()
 
-    formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+    clean_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
+    if is_edit:
+        formatted_msg = f"✏️ [Edited]\n\n{clean_msg}"
+    else:
+        formatted_msg = clean_msg
 
     # Note: downloading media with Telethon if needed
     if msg.media and not file_path:
@@ -8167,7 +8196,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                     view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
 
                     if old_text and not is_info and not has_html and view_type != 'Call' and not file_path:
-                        dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
+                        dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, clean_msg)
                         c_hash = _get_content_hash(msg)
                         database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
                         logger.info(f"Userbot: Edited post {old_dc_msg_id} in-place for TG msg {msg.id} in DC chat {dc_chat_id}")
@@ -8191,11 +8220,16 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
         if sent_id:
             c_hash = _get_content_hash(msg)
-            database.save_message_map(sent_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+            pids_to_map = set(rich_post.album_post_ids) if (rich_post and rich_post.album_post_ids) else {msg.id}
+            pids_to_map.add(msg.id)
+            for pid in pids_to_map:
+                database.save_message_map(sent_id, dc_chat_id, pid, tg_channel_id, content_hash=c_hash)
             if not is_edit:
                 channel_dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
                 if channel_dc_chat_id == dc_chat_id:
-                    _update_cached_last_msg_id(tg_channel_id, msg.id)
+                    _update_cached_last_msg_id(tg_channel_id, max(pids_to_map))
+            if grouped_id:
+                database.mark_media_group_processed(grouped_id, tg_channel_id, sent_id)
             if rich_post and len(rich_post.image_urls) > 1 and rich_mode in ("split", "both"):
                 start_idx = 1 if rich_mode == "split" else 0
                 for idx in range(start_idx, len(rich_post.image_urls)):

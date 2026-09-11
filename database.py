@@ -42,9 +42,32 @@ def init_db():
                     tg_chat_id INTEGER,
                     content_hash TEXT,
                     created_at INTEGER DEFAULT 0,
-                    PRIMARY KEY (dc_msg_id, dc_chat_id, tg_chat_id)
+                    PRIMARY KEY (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id)
                 )
             ''')
+            # Migration: ensure message_map composite primary key includes tg_msg_id
+            try:
+                pk_cols = [c[1] for c in cursor.execute("PRAGMA table_info(message_map)").fetchall() if c[5] > 0]
+                if pk_cols and 'tg_msg_id' not in pk_cols:
+                    cursor.execute("ALTER TABLE message_map RENAME TO message_map_old")
+                    cursor.execute('''
+                        CREATE TABLE message_map (
+                            dc_msg_id INTEGER,
+                            dc_chat_id INTEGER,
+                            tg_msg_id INTEGER,
+                            tg_chat_id INTEGER,
+                            content_hash TEXT,
+                            created_at INTEGER DEFAULT 0,
+                            PRIMARY KEY (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id)
+                        )
+                    ''')
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, created_at)
+                        SELECT dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, created_at FROM message_map_old
+                    ''')
+                    cursor.execute("DROP TABLE message_map_old")
+            except Exception:
+                pass
             # Clean up old mappings (keep last 10000)
             cursor.execute('''
                 DELETE FROM message_map WHERE rowid NOT IN (
@@ -185,6 +208,17 @@ def init_db():
                     created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))
                 )
             ''')
+
+            # Processed media groups / albums tracking (for reliable deduplication across restarts and edit events)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS processed_media_groups (
+                    group_id TEXT PRIMARY KEY,
+                    tg_channel_id INTEGER,
+                    dc_msg_id INTEGER,
+                    created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_pmg_created ON processed_media_groups (created_at)')
 
             conn.commit()
         finally:
@@ -818,12 +852,41 @@ def get_channel_last_msg_id(tg_channel_id: int) -> int:
             conn.close()
 
 def update_channel_last_msg_id(tg_channel_id: int, last_msg_id: int):
-    """Update the message ID of the last post forwarded to Delta Chat for a channel."""
+    """Update the message ID of the last post forwarded to Delta Chat for a channel (monotonically)."""
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("UPDATE channels SET last_msg_id = ? WHERE tg_channel_id = ?", (last_msg_id, tg_channel_id))
+            cursor.execute("UPDATE channels SET last_msg_id = MAX(COALESCE(last_msg_id, 0), ?) WHERE tg_channel_id = ?", (last_msg_id, tg_channel_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+def is_media_group_processed(group_id: str | int) -> bool:
+    """Check if a Telegram media group / album has already been processed."""
+    if not group_id:
+        return False
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM processed_media_groups WHERE group_id = ?", (str(group_id),))
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+def mark_media_group_processed(group_id: str | int, tg_channel_id: int, dc_msg_id: Optional[int] = None):
+    """Mark a Telegram media group / album as processed in persistent storage."""
+    if not group_id:
+        return
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO processed_media_groups (group_id, tg_channel_id, dc_msg_id) VALUES (?, ?, ?)",
+                (str(group_id), tg_channel_id, dc_msg_id)
+            )
             conn.commit()
         finally:
             conn.close()
@@ -1156,8 +1219,16 @@ def cleanup_old_records(limit: int = 10000) -> dict[str, int]:
                 )
             ''', (limit,))
             pruned = cursor.rowcount
+
+            cursor.execute('''
+                DELETE FROM processed_media_groups WHERE rowid NOT IN (
+                    SELECT rowid FROM processed_media_groups ORDER BY rowid DESC LIMIT ?
+                )
+            ''', (limit,))
+            pruned_pmg = cursor.rowcount
+
             conn.commit()
-            return {"message_map": pruned}
+            return {"message_map": pruned, "processed_media_groups": pruned_pmg}
         finally:
             conn.close()
 

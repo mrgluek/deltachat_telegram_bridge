@@ -61,10 +61,16 @@ class TestRichPosts(unittest.TestCase):
     def test_media_group_deduplication(self):
         group_id = 987654321
         self.assertFalse(bot._is_media_group_processed(group_id))
-        # Second call should return True (already processed)
+        # Second call should return True (already processed in memory)
         self.assertTrue(bot._is_media_group_processed(group_id))
         # Different group should return False
         self.assertFalse(bot._is_media_group_processed(123456789))
+
+        # Test persistent DB survival across memory cache wipe
+        bot._processed_media_groups.clear()
+        database.mark_media_group_processed(group_id, -10012345, 777)
+        # Even after clearing memory cache, DB record must identify it as processed
+        self.assertTrue(bot._is_media_group_processed(group_id))
 
     def test_clean_html_for_webxdc(self):
         raw_html = (
@@ -111,8 +117,12 @@ class TestRichPosts(unittest.TestCase):
                     Major update with <b>tables</b> and spoilers: <span class="tg-spoiler">secret</span>
                     <table><tr><th>Header</th></tr><tr><td>Row 1</td></tr></table>
                 </div>
-                <div class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/photo1.jpg')"></div>
-                <div class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/photo2.jpg')"></div>
+                <div class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/photo1.jpg')">
+                    <a href="https://t.me/durov/1233?single">Photo 1</a>
+                </div>
+                <div class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/photo2.jpg')">
+                    <a href="https://t.me/durov/1234?single">Photo 2</a>
+                </div>
                 <span class="tgme_widget_message_views">125.4K</span>
                 <time datetime="2026-09-11T10:00:00+00:00">Sep 11, 2026</time>
             </div>
@@ -134,6 +144,7 @@ class TestRichPosts(unittest.TestCase):
         self.assertEqual(len(rich_post.image_urls), 2)
         self.assertIn("https://cdn4.telesco.pe/file/photo1.jpg", rich_post.image_urls)
         self.assertIn("https://cdn4.telesco.pe/file/photo2.jpg", rich_post.image_urls)
+        self.assertEqual(rich_post.album_post_ids, [1233, 1234])
         self.assertTrue(rich_post.is_rich)
         self.assertEqual(rich_post.views, "125.4K")
         self.assertEqual(rich_post.published_date, "2026-09-11T10:00:00+00:00")
@@ -184,12 +195,13 @@ class TestRichPosts(unittest.TestCase):
                 self.assertIn("images/img_0.webp", names)
                 self.assertIn("images/img_1.webp", names)
 
-                # Check manifest contents
+                # Check manifest contents (channel_title #post_id format)
                 manifest_content = z.read("manifest.toml").decode("utf-8")
-                self.assertIn('name = "Telegram News', manifest_content)
+                self.assertIn('name = "Telegram News #4321"', manifest_content)
 
                 # Check index.html contents
                 html_content = z.read("index.html").decode("utf-8")
+                self.assertIn("<title>Telegram News #4321</title>", html_content)
                 self.assertIn("Telegram News", html_content)
                 self.assertIn("Cell 1", html_content)
                 self.assertIn("images/img_0.webp", html_content)
@@ -505,6 +517,77 @@ class TestRichPosts(unittest.TestCase):
                 if os.path.exists(tmp_file):
                     try: os.unlink(tmp_file)
                     except: pass
+
+    def test_userbot_relay_album_maps_all_post_ids(self):
+        tg_channel_id = -100888999
+        dc_chat_id = 100
+        database.add_channel_by_id(tg_channel_id, dc_chat_id, username="phototravel")
+
+        mock_msg = MagicMock()
+        mock_msg.id = 8888
+        mock_msg.chat_id = tg_channel_id
+        mock_msg.chat.username = "phototravel"
+        mock_msg.grouped_id = 99887766
+        mock_msg.media = MagicMock()
+        mock_msg.raw_text = "Beautiful mountains album"
+        mock_msg.is_channel = True
+        mock_msg.is_group = False
+
+        rich_post = bot.TelegramRichPost(
+            username="phototravel",
+            post_id=8888,
+            author_name="Фото и путешествия",
+            teaser="Красивые горы...",
+            image_urls=["https://example.com/p1.jpg", "https://example.com/p2.jpg"],
+            album_post_ids=[8887, 8888],
+            is_rich=True,
+        )
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.send_msg.return_value = 54321
+        mock_userbot = MagicMock()
+        mock_userbot.is_connected.return_value = True
+
+        with patch('bot.dc_bot_instance', mock_dc_bot), \
+             patch('bot.dc_accid', 1), \
+             patch('bot.userbot_client', mock_userbot), \
+             patch('bot._extract_public_tg_post_rich', new_callable=AsyncMock) as mock_extract, \
+             patch('bot._package_tg_post_webxdc', new_callable=AsyncMock) as mock_package:
+            
+            mock_extract.return_value = rich_post
+            mock_package.return_value = True
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg))
+
+        # 1. Verify DC send was called
+        mock_dc_bot.rpc.send_msg.assert_called_once()
+        sent_msg_data = mock_dc_bot.rpc.send_msg.call_args[0][2]
+        self.assertTrue(sent_msg_data.file.endswith(".xdc"))
+
+        # 2. Verify BOTH post 8888 and post 8887 are mapped to 54321
+        self.assertEqual(database.get_dc_msg_id(8888, tg_channel_id, dc_chat_id), 54321)
+        self.assertEqual(database.get_dc_msg_id(8887, tg_channel_id, dc_chat_id), 54321)
+
+        # 3. Verify media group is marked processed persistently in database
+        self.assertTrue(database.is_media_group_processed(99887766))
+
+        # 4. Verify watermark last_msg_id is max(8887, 8888) = 8888
+        self.assertEqual(database.get_channel_last_msg_id(tg_channel_id), 8888)
+
+        # 5. Verify subsequent edit or second message for the same album is skipped
+        mock_msg_8887 = MagicMock()
+        mock_msg_8887.id = 8887
+        mock_msg_8887.chat_id = tg_channel_id
+        mock_msg_8887.chat.username = "phototravel"
+        mock_msg_8887.grouped_id = 99887766
+
+        mock_dc_bot.rpc.send_msg.reset_mock()
+        with patch('bot.dc_bot_instance', mock_dc_bot), \
+             patch('bot.dc_accid', 1), \
+             patch('bot.userbot_client', mock_userbot):
+            asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg_8887, is_edit=True))
+
+        mock_dc_bot.rpc.send_msg.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

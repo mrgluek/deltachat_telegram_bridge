@@ -1,3 +1,14 @@
+## [2.20.1] - 2026-09-11
+- **Persistent Media Group Deduplication & Album Mapping**:
+  - Added persistent SQLite table `processed_media_groups` and index `idx_pmg_created` to store media group / album IDs across bot restarts and beyond the initial in-memory window.
+  - Automatically extracts all album message IDs (`?single` links) in public post embeds (`album_post_ids`) and maps every individual post ID to the forwarded Delta Chat message ID in `message_map`.
+  - Enforced monotonic updates for channel `last_msg_id` via `MAX(COALESCE(last_msg_id, 0), ?)` in SQLite to prevent out-of-order album messages from rewinding the channel watermark.
+  - Expanded `message_map` composite primary key to `(dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id)` with automatic schema migration, allowing multiple Telegram album post IDs to be associated with a single WebXDC Delta Chat message.
+  - Suppressed duplicate messages for edit events on posts belonging to already processed albums or mapped in broadcast channels when in-place edits are not possible.
+  - Fixed missing `✏️ [Edited]` prefix on newly relayed edited posts.
+- **WebXDC App Title Formatting**:
+  - Formatted WebXDC application card title (`manifest.toml` `name` and HTML `<title>`) as `Channel Title #PostID` (e.g. `Фото и путешествия #1629` or `QWERTY #8888`) instead of truncating the post text teaser.
+
 ## [2.20.0] - 2026-09-11
 - **Telegram Video Post & Album WebXDC Packaging**:
   - Full support for embedding MP4 videos into standalone offline WebXDC applications (`.xdc`).
