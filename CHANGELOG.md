@@ -1,3 +1,10 @@
+## [2.19.3] - 2026-09-11
+- **Local Channel Avatar Integration for WebXDC**:
+  - Prioritized existing local channel avatars from Delta Chat core (`profile_image`) when packaging WebXDC apps.
+  - Automatically crops and resizes the channel's avatar to a 128x128 square PNG (`icon.png`, ~5–8 KB) matching the channel's authentic avatar in the chat list.
+  - Eliminates external network requests and CDN blocking (e.g. 403 Forbidden) for avatar retrieval, ensuring the WebXDC card always renders the channel's official logo.
+  - Fixed `tempfile.mkdtemp` typo in Userbot rich mode fallback.
+
 ## [2.19.2] - 2026-09-11
 - **Native 1280px Resolution Alignment**:
   - Aligned WebXDC maximum image bounding dimension to `1280px` to match Telegram's standard native photo delivery size (`y` size box 1280x1280).

@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.19.2"
+VERSION = "2.19.3"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1462,6 +1462,8 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
                             img = img.resize(new_size, Image.Resampling.LANCZOS)
                         if fmt.upper() == "WEBP":
                             img.save(output_path, format="WEBP", quality=quality, method=3)
+                        elif fmt.upper() == "PNG":
+                            img.save(output_path, format="PNG", optimize=True)
                         else:
                             img.save(output_path, format="JPEG", quality=quality, optimize=True)
                         return True
@@ -1474,20 +1476,66 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
     return False
 
 
-async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) -> bool:
+def _get_channel_avatar_path(dc_chat_id: Optional[int] = None, username: Optional[str] = None) -> Optional[str]:
+    """Retrieve local profile image path for a bridged Delta Chat channel from Delta Chat core."""
+    global dc_bot_instance, dc_accid
+    if not dc_bot_instance or not dc_accid:
+        return None
+    try:
+        target_chat_id = dc_chat_id
+        if not target_chat_id and username:
+            clean_user = username.lstrip('@')
+            ch = database.get_channel_by_tg_username(clean_user)
+            if ch:
+                target_chat_id = ch.get('dc_chat_id')
+        if not target_chat_id:
+            return None
+
+        # 1. Try get_basic_chat_info
+        try:
+            chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, target_chat_id)
+            prof_img = chat_info.get("profile_image") if chat_info else None
+            if prof_img and os.path.exists(prof_img):
+                return prof_img
+        except Exception:
+            pass
+
+        # 2. Fallback to get_full_chat_by_id
+        try:
+            full_chat = dc_bot_instance.rpc.get_full_chat_by_id(dc_accid, target_chat_id)
+            prof_img = full_chat.get("profile_image") if full_chat else None
+            if prof_img and os.path.exists(prof_img):
+                return prof_img
+        except Exception:
+            pass
+    except Exception as e:
+        logger.debug(f"Failed to get channel profile image for chat {dc_chat_id}: {e}")
+    return None
+
+
+async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, dc_chat_id: Optional[int] = None) -> bool:
     """Bundle a rich Telegram post into a standalone offline WebXDC package (.xdc)."""
     try:
         tmp_dir = tempfile.mkdtemp(prefix="tg_webxdc_")
         images_dir = os.path.join(tmp_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
 
-        # 1. Generate Application Icon
+        # 1. Generate Application Icon (128x128 square PNG)
         icon_bytes = None
         icon_name = "icon.png"
-        if post.author_avatar_url:
+
+        # 1a. Prioritize existing local Delta Chat channel avatar (already in the bot, 100% reliable)
+        local_avatar = _get_channel_avatar_path(dc_chat_id=dc_chat_id, username=post.username)
+        if local_avatar:
+            icon_bytes, icon_name = _make_square_icon(local_avatar, max_dim=128, fmt="PNG")
+
+        # 1b. Fallback to author avatar URL from Telegram embed
+        if not icon_bytes and post.author_avatar_url:
             avatar_tmp = os.path.join(tmp_dir, "avatar_raw")
             if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=256, fmt="PNG"):
                 icon_bytes, icon_name = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
+
+        # 1c. Fallback to default Telegram icon
         if not icon_bytes:
             icon_bytes = _generate_fallback_telegram_icon()
             icon_name = "icon.png"
@@ -1554,11 +1602,13 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) 
 
         # 7. Build manifest.toml
         app_name = _clean_toml_string(doc_title[:80])
-        manifest_content = (
-            f'name = "{app_name}"\n'
-            f'source_code_url = "{_clean_toml_string(source_url)}"\n'
-            f'icon = "{icon_name}"\n'
-        )
+        manifest_lines = [
+            f'name = "{app_name}"',
+            f'source_code_url = "{_clean_toml_string(source_url)}"',
+        ]
+        if icon_bytes:
+            manifest_lines.append(f'icon = "{icon_name}"')
+        manifest_content = "\n".join(manifest_lines) + "\n"
 
         # 8. Package into .xdc ZIP
         with zipfile.ZipFile(output_xdc_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
@@ -6111,7 +6161,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or (not text and not tg_file)):
         tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
         os.close(tmp_fd)
-        if await _package_tg_post_webxdc(rich_post, xdc_path):
+        if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
             local_file_path = xdc_path
             is_webxdc_package = True
             clean_title = rich_post.author_name or f"@{tg_username}"
@@ -7646,7 +7696,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or not text):
                     tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
                     os.close(tmp_fd)
-                    if await _package_tg_post_webxdc(rich_post, xdc_path):
+                    if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
                         file_path = xdc_path
                         clean_title = rich_post.author_name or f"@{chat_username}"
                         text = f"📰 **{clean_title}**\n\n{rich_post.teaser}" if rich_post.teaser else f"📰 **{clean_title}**"
@@ -7705,7 +7755,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if rich_post and (rich_post.is_rich or len(rich_post.image_urls) > 1):
             tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
             os.close(tmp_fd)
-            if await _package_tg_post_webxdc(rich_post, xdc_path):
+            if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
                 file_path = xdc_path
                 clean_title = rich_post.author_name or f"@{chat_username}"
                 formatted_msg = (f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{chat_username}/{msg.id}").strip()

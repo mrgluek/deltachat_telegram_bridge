@@ -204,6 +204,62 @@ class TestRichPosts(unittest.TestCase):
                 except Exception:
                     pass
 
+    def test_package_tg_post_webxdc_uses_local_channel_avatar(self):
+        rich_post = bot.TelegramRichPost(
+            username="exploitex",
+            post_id=36560,
+            author_name="Эксплойт",
+            author_avatar_url="https://example.com/ignored_remote_avatar.jpg",
+            text_html="<p>Test post</p>",
+            text_markdown="Test post",
+            teaser="Test post...",
+            image_urls=[],
+            published_date="Sep 11, 2026",
+            views="10K",
+            is_rich=True,
+        )
+
+        # Create dummy local avatar file (simulating Delta Chat chat profile image)
+        tmp_avatar_fd, avatar_path = tempfile.mkstemp(suffix=".png")
+        os.close(tmp_avatar_fd)
+        try:
+            img = Image.new('RGB', (64, 64), color='orange')
+            img.save(avatar_path, 'PNG')
+        except Exception:
+            with open(avatar_path, 'wb') as f:
+                f.write(b'fake_avatar_png')
+
+        tmp_fd, xdc_dest = tempfile.mkstemp(suffix=".xdc")
+        os.close(tmp_fd)
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.get_basic_chat_info.return_value = {"profile_image": avatar_path}
+
+        try:
+            with patch('bot.dc_bot_instance', mock_dc_bot), \
+                 patch('bot.dc_accid', 1), \
+                 patch('bot._download_image_to_file') as mock_download:
+                ok = asyncio.run(bot._package_tg_post_webxdc(rich_post, xdc_dest, dc_chat_id=555))
+            
+            self.assertTrue(ok)
+            self.assertTrue(os.path.exists(xdc_dest))
+            # Verify remote avatar download was NOT called because local avatar was prioritized
+            for call_args in mock_download.call_args_list:
+                self.assertNotIn("ignored_remote_avatar.jpg", call_args[0])
+
+            with zipfile.ZipFile(xdc_dest, 'r') as z:
+                names = z.namelist()
+                self.assertIn("manifest.toml", names)
+                self.assertIn("icon.png", names)
+                self.assertGreater(len(z.read("icon.png")), 0)
+        finally:
+            if os.path.exists(avatar_path):
+                try: os.unlink(avatar_path)
+                except: pass
+            if os.path.exists(xdc_dest):
+                try: os.unlink(xdc_dest)
+                except: pass
+
     def test_richmode_command(self):
         mock_bot = MagicMock()
         mock_event = MagicMock()
