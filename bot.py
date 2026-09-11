@@ -9,7 +9,10 @@ import threading
 import random
 from collections import defaultdict
 from typing import Optional
+from dataclasses import dataclass, field
 import hashlib
+import zipfile
+import shutil
 
 from deltachat2 import EventType, MsgData, SystemMessageType, events
 from deltabot_cli import BotCli
@@ -422,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.18.7"
+VERSION = "2.19.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1012,23 +1015,601 @@ def _format_telegram_entities(text: str, entities) -> str:
     return formatted
 
 
-async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional[str], Optional[str]]:
-    """Fetch public Telegram channel post preview and extract formatted text and high-res media URL."""
+_processed_media_groups: dict[str, float] = {}
+
+def _is_media_group_processed(group_id: str | int | None) -> bool:
+    """Check if a media group / album has already been processed within 600 seconds."""
+    if not group_id:
+        return False
+    group_str = str(group_id)
+    now = time.time()
+    stale = [k for k, t in _processed_media_groups.items() if now - t > 600]
+    for k in stale:
+        _processed_media_groups.pop(k, None)
+    if group_str in _processed_media_groups:
+        return True
+    _processed_media_groups[group_str] = now
+    return False
+
+
+@dataclass
+class TelegramRichPost:
+    """Structured representation of a Telegram post, channel article, or media album."""
+    username: str
+    post_id: int
+    author_name: str = ""
+    author_avatar_url: str = ""
+    text_html: str = ""
+    text_markdown: str = ""
+    teaser: str = ""
+    image_urls: list[str] = field(default_factory=list)
+    video_urls: list[str] = field(default_factory=list)
+    published_date: str = ""
+    views: str = ""
+    is_rich: bool = False
+
+
+TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{title}</title>
+    <style>
+        :root {{
+            --bg-color: #f4f5f7;
+            --card-bg: #ffffff;
+            --text-color: #0e0e0e;
+            --text-secondary: #707579;
+            --accent-color: #2481cc;
+            --accent-hover: #1c6ba8;
+            --border-color: #e4e4e7;
+            --quote-bg: #f8f9fa;
+            --code-bg: #f1f3f5;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            :root {{
+                --bg-color: #0f141a;
+                --card-bg: #18222d;
+                --text-color: #f5f5f5;
+                --text-secondary: #8899a6;
+                --accent-color: #2ea6ff;
+                --accent-hover: #4bb3ff;
+                --border-color: #283543;
+                --quote-bg: #1c2733;
+                --code-bg: #131c26;
+            }}
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-family);
+            line-height: 1.6;
+            display: flex;
+            justify-content: center;
+            padding: 16px;
+        }}
+        .container {{
+            max-width: 680px;
+            width: 100%;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+        }}
+        @media (max-width: 600px) {{
+            body {{ padding: 0; }}
+            .container {{
+                border-radius: 0;
+                border: none;
+                padding: 16px;
+                box-shadow: none;
+            }}
+        }}
+        header.post-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+        }}
+        .author-box {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .avatar {{
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: var(--border-color);
+        }}
+        .author-info h2 {{
+            font-size: 1.1rem;
+            font-weight: 700;
+            line-height: 1.2;
+            color: var(--text-color);
+        }}
+        .author-meta {{
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }}
+        .tg-link-btn {{
+            background: var(--accent-color);
+            color: #ffffff;
+            text-decoration: none;
+            padding: 7px 14px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }}
+        .tg-link-btn:hover {{
+            background: var(--accent-hover);
+        }}
+        .post-content {{
+            font-size: 1.05rem;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }}
+        .post-content p {{
+            margin-bottom: 14px;
+        }}
+        .post-content a {{
+            color: var(--accent-color);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }}
+        .post-content blockquote {{
+            border-left: 4px solid var(--accent-color);
+            background: var(--quote-bg);
+            padding: 10px 16px;
+            margin: 14px 0;
+            border-radius: 0 8px 8px 0;
+            font-style: italic;
+        }}
+        .post-content code {{
+            font-family: "SF Mono", Monaco, Menlo, Consolas, monospace;
+            background: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }}
+        .post-content pre {{
+            background: var(--code-bg);
+            padding: 14px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 14px 0;
+        }}
+        .post-content pre code {{
+            background: none;
+            padding: 0;
+        }}
+        .spoiler {{
+            filter: blur(6px);
+            background: var(--border-color);
+            border-radius: 4px;
+            padding: 0 4px;
+            cursor: pointer;
+            transition: filter 0.2s ease, background 0.2s ease;
+            user-select: none;
+        }}
+        .spoiler.revealed {{
+            filter: none;
+            background: transparent;
+            user-select: text;
+        }}
+        .table-wrap {{
+            overflow-x: auto;
+            margin: 16px 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+        }}
+        th, td {{
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            text-align: left;
+        }}
+        th {{
+            background: var(--quote-bg);
+            font-weight: 600;
+        }}
+        tr:nth-child(even) td {{
+            background: var(--quote-bg);
+        }}
+        .gallery-single {{
+            margin: 18px 0;
+            border-radius: 12px;
+            overflow: hidden;
+            text-align: center;
+        }}
+        .gallery-single img {{
+            width: 100%;
+            max-height: 550px;
+            object-fit: contain;
+            border-radius: 12px;
+            cursor: zoom-in;
+            display: block;
+        }}
+        .gallery-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 8px;
+            margin: 18px 0;
+            border-radius: 12px;
+            overflow: hidden;
+        }}
+        .gallery-item {{
+            position: relative;
+            aspect-ratio: 1 / 1;
+            overflow: hidden;
+            background: var(--border-color);
+            border-radius: 8px;
+        }}
+        .gallery-item img {{
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            cursor: zoom-in;
+            transition: transform 0.2s;
+        }}
+        .gallery-item img:hover {{
+            transform: scale(1.02);
+        }}
+        footer.post-footer {{
+            margin-top: 24px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }}
+        #lightbox {{
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.92);
+            justify-content: center;
+            align-items: center;
+            cursor: zoom-out;
+        }}
+        #lightbox-img {{
+            max-width: 95vw;
+            max-height: 95vh;
+            object-fit: contain;
+            border-radius: 8px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="post-header">
+            <div class="author-box">
+                {avatar_html}
+                <div class="author-info">
+                    <h2>{author_name}</h2>
+                    <div class="author-meta">{meta_text}</div>
+                </div>
+            </div>
+            <a href="{source_url}" target="_blank" rel="noopener noreferrer" class="tg-link-btn">Open in TG ↗</a>
+        </header>
+
+        {gallery_top_html}
+
+        <article class="post-content">
+            {content_html}
+        </article>
+
+        {gallery_bottom_html}
+
+        <footer class="post-footer">
+            <div class="views-box">{views_text}</div>
+            <a href="{source_url}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-color); text-decoration: none;">View original on Telegram</a>
+        </footer>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin-top: 25px; margin-bottom: 15px;">
+        <footer style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; padding-bottom: 10px;">
+            Post bridged at {bridged_at} by <a href="https://git.gluek.info/gluek/deltachat_telegram_bridge" target="_blank" rel="noopener noreferrer" style="color: var(--accent-color); text-decoration: none;">Delta Chat Telegram Bridge</a>.
+        </footer>
+    </div>
+
+    <div id="lightbox" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="Fullscreen view" />
+    </div>
+
+    <script>
+        function openLightbox(src) {{
+            var lb = document.getElementById('lightbox');
+            var img = document.getElementById('lightbox-img');
+            img.src = src;
+            lb.style.display = 'flex';
+        }}
+        function closeLightbox() {{
+            document.getElementById('lightbox').style.display = 'none';
+        }}
+    </script>
+</body>
+</html>
+"""
+
+
+def _clean_toml_string(val: str) -> str:
+    """Sanitize string for inclusion in manifest.toml."""
+    if not val:
+        return ""
+    val = val.replace("\r", " ").replace("\n", " ")
+    return val.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _make_square_icon(image_source_path: str | None, max_dim: int = 128, fmt: str = "PNG") -> tuple[bytes | None, str]:
+    """Helper to crop and resize an image file into a square icon bytes buffer."""
+    if not image_source_path or not os.path.exists(image_source_path):
+        return None, ""
+    try:
+        from PIL import Image
+        with Image.open(image_source_path) as img:
+            ext = "jpg" if fmt == "JPEG" else "png"
+            if fmt == "JPEG":
+                img = img.convert("RGB")
+            else:
+                img = img.convert("RGBA")
+            width, height = img.size
+            min_dim = min(width, height)
+            left = (width - min_dim) // 2
+            top = (height - min_dim) // 2
+            img = img.crop((left, top, left + min_dim, top + min_dim))
+            img = img.resize((max_dim, max_dim), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            if fmt == "JPEG":
+                img.save(buf, format="JPEG", quality=85, optimize=True)
+            else:
+                img.save(buf, format="PNG", optimize=True)
+            return buf.getvalue(), f"icon.{ext}"
+    except Exception as e:
+        logger.warning(f"Failed to generate square icon from {image_source_path}: {e}")
+        return None, ""
+
+
+def _generate_fallback_telegram_icon() -> bytes:
+    """Generate a clean 128x128 PNG fallback Telegram icon using PIL."""
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGBA", (128, 128), color=(36, 129, 204, 255))
+        d = ImageDraw.Draw(img)
+        d.polygon([(26, 64), (102, 28), (76, 100), (62, 74)], fill=(255, 255, 255, 255))
+        d.polygon([(62, 74), (102, 28), (56, 66)], fill=(220, 235, 248, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return b""
+
+
+def _make_teaser(text: str, max_len: int = 280) -> str:
+    """Extract a clean concise teaser from text for message preview."""
+    if not text:
+        return ""
+    clean = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    clean = re.sub(r'`[^`]+`', '', clean)
+    clean = re.sub(r'^\s*#+\s*', '', clean, flags=re.MULTILINE)
+    clean = re.sub(r'^\s*>\s*', '', clean, flags=re.MULTILINE)
+    clean = ' '.join(clean.split())
+    if len(clean) <= max_len:
+        return clean
+    truncated = clean[:max_len]
+    last_space = truncated.rfind(' ')
+    if last_space > max_len // 2:
+        truncated = truncated[:last_space]
+    return truncated.strip() + "…"
+
+
+def _clean_html_for_webxdc(raw_html: str) -> str:
+    """Clean and normalize HTML for inclusion inside WebXDC application."""
+    if not raw_html:
+        return ""
+    cleaned = re.sub(r'<script[^>]*>.*?</script>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'<tg-emoji[^>]*>(?:<i[^>]*>)?(.*?)(?:</i>)?</tg-emoji>', r'\1', cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r'<tg-spoiler[^>]*>(.*?)</tg-spoiler>', r"""<span class="spoiler" onclick="this.classList.toggle('revealed')">\1</span>""", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r'<span class="tg-spoiler"[^>]*>(.*?)</span>', r"""<span class="spoiler" onclick="this.classList.toggle('revealed')">\1</span>""", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r'<blockquote[^>]*\bexpandable\b[^>]*>(.*?)</blockquote>', r'<blockquote class="expandable" onclick="this.classList.toggle(\'expanded\')">\1</blockquote>', cleaned, flags=re.DOTALL)
+    def _link_sub(m):
+        href = m.group(1)
+        text = m.group(2)
+        return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{text}</a>'
+    cleaned = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', _link_sub, cleaned, flags=re.DOTALL)
+    if '<table' in cleaned and 'table-wrap' not in cleaned:
+        cleaned = re.sub(r'(<table[^>]*>.*?</table>)', r'<div class="table-wrap">\1</div>', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1600) -> bool:
+    """Download and optionally optimize an image to a specific path."""
+    if not url:
+        return False
+    if url.startswith('//'):
+        url = 'https:' + url
+    try:
+        import httpx
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://t.me/'
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200 and resp.content:
+                try:
+                    from PIL import Image
+                    with Image.open(io.BytesIO(resp.content)) as img:
+                        img = img.convert("RGB")
+                        w, h = img.size
+                        if max(w, h) > max_dim:
+                            scale = max_dim / max(w, h)
+                            new_size = (int(w * scale), int(h * scale))
+                            img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        img.save(output_path, format="JPEG", quality=85, optimize=True)
+                        return True
+                except Exception:
+                    with open(output_path, 'wb') as f:
+                        f.write(resp.content)
+                    return True
+    except Exception as e:
+        logger.debug(f"Failed to download image from {url}: {e}")
+    return False
+
+
+async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) -> bool:
+    """Package a Telegram rich post into a standalone WebXDC .xdc ZIP application."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        images_dir = os.path.join(tmpdir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        # 1. Download Avatar / Icon
+        icon_bytes = None
+        icon_name = "icon.png"
+        if post.author_avatar_url:
+            avatar_tmp = os.path.join(tmpdir, "avatar_raw")
+            if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=128):
+                b, _ = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
+                if b:
+                    icon_bytes = b
+        if not icon_bytes:
+            icon_bytes = _generate_fallback_telegram_icon()
+
+        # 2. Download Images
+        local_images = []
+        for idx, img_url in enumerate(post.image_urls):
+            img_fname = f"img_{idx}.jpg"
+            img_dest = os.path.join(images_dir, img_fname)
+            if await _download_image_to_file(img_url, img_dest, max_dim=1600):
+                local_images.append(f"images/{img_fname}")
+
+        # 3. Build Gallery HTML
+        gallery_top_html = ""
+        gallery_bottom_html = ""
+        if len(local_images) == 1:
+            gallery_top_html = f'<div class="gallery-single"><img src="{local_images[0]}" alt="Post media" onclick="openLightbox(this.src)" /></div>'
+        elif len(local_images) > 1:
+            items_html = "\n".join(
+                f'<div class="gallery-item"><img src="{img_path}" alt="Photo {i+1}" onclick="openLightbox(this.src)" loading="lazy" /></div>'
+                for i, img_path in enumerate(local_images)
+            )
+            gallery_top_html = f'<div class="gallery-grid">\n{items_html}\n</div>'
+
+        # 4. Clean content HTML
+        cleaned_content = _clean_html_for_webxdc(post.text_html)
+
+        # 5. Build Header & Meta
+        avatar_html = '<div class="avatar" style="display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;background:var(--accent-color);">TG</div>'
+        if icon_bytes:
+            avatar_html = '<img src="icon.png" alt="Avatar" class="avatar" />'
+
+        meta_parts = []
+        if post.username:
+            meta_parts.append(f"@{post.username}")
+        if post.published_date:
+            date_clean = post.published_date.replace("T", " ").split("+")[0]
+            meta_parts.append(date_clean)
+        meta_text = " • ".join(meta_parts) if meta_parts else "Telegram Post"
+
+        views_text = f"👁️ {post.views} views" if post.views else ""
+        source_url = f"https://t.me/{post.username}/{post.post_id}" if post.username else "https://t.me"
+
+        # 6. Fill HTML Template
+        from datetime import datetime, timezone
+        bridged_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M GMT")
+        doc_title = f"{post.author_name or 'Telegram'}: {post.teaser[:60]}" if post.teaser else (post.author_name or "Telegram Post")
+        html_doc = TG_POST_WEBXDC_HTML_TEMPLATE.format(
+            title=html.escape(doc_title),
+            author_name=html.escape(post.author_name or post.username or "Telegram Channel"),
+            meta_text=html.escape(meta_text),
+            source_url=source_url,
+            avatar_html=avatar_html,
+            gallery_top_html=gallery_top_html,
+            content_html=cleaned_content,
+            gallery_bottom_html=gallery_bottom_html,
+            views_text=html.escape(views_text),
+            bridged_at=bridged_at
+        )
+
+        index_html_path = os.path.join(tmpdir, "index.html")
+        with open(index_html_path, "w", encoding="utf-8") as f:
+            f.write(html_doc)
+
+        # 7. Build manifest.toml
+        app_name = _clean_toml_string(doc_title[:80])
+        manifest_content = (
+            f'name = "{app_name}"\n'
+            f'source_code_url = "{_clean_toml_string(source_url)}"\n'
+            f'icon = "{icon_name}"\n'
+        )
+
+        # 8. Package into .xdc ZIP
+        with zipfile.ZipFile(output_xdc_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            zf.write(index_html_path, arcname="index.html")
+            zf.writestr("manifest.toml", manifest_content)
+            if icon_bytes:
+                zf.writestr(icon_name, icon_bytes)
+            for img_rel in local_images:
+                full_img_path = os.path.join(tmpdir, img_rel)
+                if os.path.exists(full_img_path):
+                    zf.write(full_img_path, arcname=img_rel)
+
+        return os.path.exists(output_xdc_path) and os.path.getsize(output_xdc_path) > 0
+    except Exception as e:
+        logger.error(f"Failed to package WebXDC post for @{post.username}/{post.post_id}: {e}")
+        return False
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[TelegramRichPost]:
+    """Fetch public Telegram channel post embed and extract full rich post metadata."""
     if not username or not post_id:
-        return None, None
+        return None
     url = f"https://t.me/{username}/{post_id}?embed=1"
     try:
         import httpx
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            resp = await client.get(url, headers=headers)
             if resp.status_code != 200 or not resp.text:
-                return None, None
+                return None
             content = resp.text
 
-            text = None
-            text_match = re.search(r'<div class="tgme_widget_message_text[^"]*js-message_text[^"]*"[^>]*>(.*?)</div>', content, re.DOTALL)
-            if text_match:
-                raw_html = text_match.group(1)
+            # Author Name
+            author_m = re.search(r'class="tgme_widget_message_owner_name"[^>]*>(.*?)</(?:a|div|span)>', content, re.DOTALL)
+            author_name = html.unescape(re.sub(r'<[^>]+>', '', author_m.group(1))).strip() if author_m else ""
+
+            # Author Avatar URL
+            avatar_m = re.search(r'class="tgme_widget_message_user_photo[^"]*"[^>]*>\s*<img src="([^"]+)"', content)
+            if not avatar_m:
+                avatar_m = re.search(r'class="tgme_widget_message_user_photo[^"]*"[^>]*style="background-image:url\(\'([^\']+)\'\)"', content)
+            avatar_url = avatar_m.group(1) if avatar_m else ""
+
+            # Post Text HTML
+            text_m = re.search(r'<div class="tgme_widget_message_text[^"]*js-message_text[^"]*"[^>]*>(.*?)</div>', content, re.DOTALL)
+            text_html = text_m.group(1) if text_m else ""
+
+            # Post Text Markdown (for DC message teaser & fallback)
+            text_md = ""
+            if text_html:
+                raw_html = text_html
                 raw_html = re.sub(r'<br\s*/?>', '\n', raw_html)
                 raw_html = re.sub(r'<(b|strong)[^>]*>(.*?)</\1>', r'**\2**', raw_html)
                 raw_html = re.sub(r'<(i|em)[^>]*>(.*?)</\1>', r'*\2*', raw_html)
@@ -1039,18 +1620,56 @@ async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional
                 raw_html = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', lambda m: '\n'.join('> ' + l for l in m.group(1).split('\n')), raw_html)
                 raw_html = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', raw_html)
                 raw_html = re.sub(r'<[^>]+>', '', raw_html)
-                text = html.unescape(raw_html).strip()
+                text_md = html.unescape(raw_html).strip()
 
-            img_match = re.search(r"background-image:url\('([^']+)'\)", content)
-            img_url = img_match.group(1) if img_match else None
+            teaser = _make_teaser(text_md)
 
-            if img_url and 'telegram.org/img/emoji' in img_url:
-                img_url = None
+            # Images
+            image_urls = []
+            for u in re.findall(r'background-image:url\(\'([^\']+)\'\)', content):
+                if 'telegram.org/img/emoji' not in u and u not in image_urls:
+                    image_urls.append(u)
 
-            return text, img_url
+            # Views
+            views_m = re.search(r'class="tgme_widget_message_views"[^>]*>(.*?)</span>', content)
+            views = views_m.group(1).strip() if views_m else ""
+
+            # Published Date
+            date_m = re.search(r'<time datetime="([^"]+)"', content)
+            published_date = date_m.group(1).strip() if date_m else ""
+
+            # Check if post has rich characteristics
+            has_tables = '<table' in text_html
+            is_grouped = 'tgme_widget_message_grouped' in content
+            is_unsupported = 'text_not_supported_wrap' in content
+            is_long = len(text_md) > 1500
+            is_rich = len(image_urls) > 1 or has_tables or is_grouped or is_unsupported or (len(image_urls) >= 1 and is_long)
+
+            return TelegramRichPost(
+                username=username,
+                post_id=post_id,
+                author_name=author_name,
+                author_avatar_url=avatar_url,
+                text_html=text_html,
+                text_markdown=text_md,
+                teaser=teaser,
+                image_urls=image_urls,
+                published_date=published_date,
+                views=views,
+                is_rich=is_rich
+            )
     except Exception as e:
-        logger.debug(f"Public TG post extraction failed for @{username}/{post_id}: {e}")
-        return None, None
+        logger.debug(f"Public TG rich post extraction failed for @{username}/{post_id}: {e}")
+        return None
+
+
+async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional[str], Optional[str]]:
+    """Fetch public Telegram channel post preview and extract formatted text and high-res media URL."""
+    rich = await _extract_public_tg_post_rich(username, post_id)
+    if rich:
+        first_img = rich.image_urls[0] if rich.image_urls else None
+        return rich.text_markdown, first_img
+    return None, None
 
 
 async def _download_image_url(url: str) -> Optional[str]:
@@ -1753,6 +2372,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/rmtransport <addr> — Remove a mail relay\n"
             f"/setprimary <addr> — Switch the primary mail relay\n"
             f"/resilient — Toggle resilient sending mode (all relays)\n"
+            f"/richmode [webxdc|split|both|off] — Configure Telegram rich posts & album relay mode\n"
         )
     
     help_text += (
@@ -2044,6 +2664,39 @@ def resilient_command(bot, accid, event):
     except Exception as e:
         logger.error(f"Failed to update resilient mode: {e}")
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to update resilient mode."))
+
+@dc_cli.on(events.NewMessage(command="/richmode"))
+def richmode_command(bot, accid, event):
+    """Configure Telegram rich post handling mode (webxdc, split, both, off)."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /richmode."))
+        return
+
+    arg = event.payload.strip().lower() if event.payload else ""
+
+    try:
+        current = database.get_rich_mode()
+        if not arg:
+            status_text = (
+                f"ℹ️ Current Telegram rich post mode: **{current}**\n\n"
+                f"Options:\n"
+                f"• `/richmode webxdc` — Package rich posts, articles & albums into standalone WebXDC apps (Recommended) 📦\n"
+                f"• `/richmode split` — Send text with first photo, extra photos as separate messages 📷\n"
+                f"• `/richmode both` — Send WebXDC app and also send extra photos separately\n"
+                f"• `/richmode off` — Disable rich post packaging (legacy fallback)"
+            )
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=status_text))
+            return
+
+        if arg in ("webxdc", "split", "both", "off"):
+            database.set_rich_mode(arg)
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Telegram rich post relay mode set to **{arg}**."))
+        else:
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid mode. Use `/richmode webxdc`, `/richmode split`, `/richmode both`, or `/richmode off`."))
+    except Exception as e:
+        logger.error(f"Failed to update richmode: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to update richmode."))
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
@@ -3007,6 +3660,7 @@ def stats_command(bot, accid, event):
                 title = "Unknown Group"
             lines.append(f"• DC {dc_cid} ↔ TG {tg_cid} ({title}) — {m_count} 💬 {r_count} 🙂")
                 
+        lines.append(f"\n⚙️ Rich Post Mode: **{database.get_rich_mode()}**")
         _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
     else:
         # In group chat: show stats for this bridge only
@@ -5302,6 +5956,12 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     tg_channel_id = post.chat.id
     if _mark_processed(tg_channel_id, post.message_id):
         return
+
+    media_group_id = getattr(post, 'media_group_id', None)
+    if media_group_id and _is_media_group_processed(media_group_id):
+        logger.info(f"Bot API: Skipping already processed album post {post.message_id} in media_group {media_group_id}")
+        _update_cached_last_msg_id(tg_channel_id, post.message_id)
+        return
     
     tg_username = post.chat.username
 
@@ -5436,14 +6096,45 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         text = (text + "\n\n" + loc_text).strip()
 
     local_file_path = None
-    if not text and not tg_file and tg_username:
+    rich_post = None
+    rich_mode = database.get_rich_mode()
+    is_webxdc_package = False
+
+    # Trigger rich extraction if post is in a media group (album), has paid media, or has no text and no file
+    if tg_username and (media_group_id or getattr(post, 'paid_media', None) or (not text and not tg_file)):
+        rich_post = await _extract_public_tg_post_rich(tg_username, post.message_id)
+
+    if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or (not text and not tg_file)):
+        tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
+        os.close(tmp_fd)
+        if await _package_tg_post_webxdc(rich_post, xdc_path):
+            local_file_path = xdc_path
+            is_webxdc_package = True
+            clean_title = rich_post.author_name or f"@{tg_username}"
+            text = f"📰 **{clean_title}**\n\n{rich_post.teaser}" if rich_post.teaser else f"📰 **{clean_title}**"
+        else:
+            if os.path.exists(xdc_path):
+                try:
+                    os.unlink(xdc_path)
+                except Exception:
+                    pass
+            if rich_post.text_markdown and not text:
+                text = rich_post.text_markdown
+            if rich_post.image_urls and not local_file_path and not tg_file:
+                local_file_path = await _download_image_url(rich_post.image_urls[0])
+    elif rich_post and rich_mode == "split" and len(rich_post.image_urls) > 1:
+        if rich_post.text_markdown and not text:
+            text = rich_post.text_markdown
+        if rich_post.image_urls and not local_file_path and not tg_file:
+            local_file_path = await _download_image_url(rich_post.image_urls[0])
+    elif not text and not tg_file and tg_username:
         extracted_text, extracted_img_url = await _extract_public_tg_post(tg_username, post.message_id)
         if extracted_text:
             text = extracted_text
         if extracted_img_url and not local_file_path:
             local_file_path = await _download_image_url(extracted_img_url)
         if not text and not local_file_path:
-            text = "[📰 Post with rich formatting / unsupported media — open in Telegram to view]"
+            text = f"[📰 Post with rich formatting / unsupported media — open in Telegram to view: https://t.me/{tg_username}/{post.message_id}]"
 
     # Skip posts with no text and no media
     if not text and not tg_file and not local_file_path:
@@ -5465,8 +6156,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
 
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
-    # Download media if present
-    if tg_file:
+    # Download media if present (skip if WebXDC already packaged all media)
+    if tg_file and not is_webxdc_package:
         try:
             tg_file_obj = await tg_file.get_file()
             suffix = os.path.splitext(file_name)[1] if file_name else ""
@@ -5474,7 +6165,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             os.close(tmp_fd)
             await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path, max_retries=3, delay=3.0, backoff=2.0)
         except (TimeoutError, asyncio.TimeoutError):
-            logger.error(f"Timeout downloading channel {tg_channel_id} post {tg_post_id} media '{file_name}' after 3 retries")
+            logger.error(f"Timeout downloading channel {tg_channel_id} post {post.message_id} media '{file_name}' after 3 retries")
             if local_file_path and os.path.exists(local_file_path):
                 try:
                     os.unlink(local_file_path)
@@ -5483,7 +6174,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             local_file_path = None
             formatted_msg += f"\n\n[Failed to download media (timeout after 3 retries): {file_name}]"
         except Exception as e:
-            logger.error(f"Failed to download channel {tg_channel_id} post {tg_post_id} media '{file_name}' after retries: {e}")
+            logger.error(f"Failed to download channel {tg_channel_id} post {post.message_id} media '{file_name}' after retries: {e}")
             if local_file_path and os.path.exists(local_file_path):
                 try:
                     os.unlink(local_file_path)
@@ -5503,6 +6194,25 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             c_hash = _get_content_hash(post)
             database.save_message_map(dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=c_hash)
             _update_cached_last_msg_id(tg_channel_id, post.message_id)
+
+            # Follow-up images for split or both mode
+            if rich_post and len(rich_post.image_urls) > 1 and rich_mode in ("split", "both"):
+                start_idx = 1 if rich_mode == "split" else 0
+                for idx in range(start_idx, len(rich_post.image_urls)):
+                    img_url = rich_post.image_urls[idx]
+                    sub_img_path = await _download_image_url(img_url)
+                    if sub_img_path and os.path.exists(sub_img_path):
+                        try:
+                            sub_cap = f"📷 [{idx + 1}/{len(rich_post.image_urls)}] {rich_post.author_name or tg_username}\n🔗 t.me/{tg_username}/{post.message_id}"
+                            sub_data = MsgData(text=sub_cap, file=sub_img_path)
+                            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, sub_data)
+                        except Exception as sub_err:
+                            logger.warning(f"Failed to send follow-up image {idx+1} for post {post.message_id}: {sub_err}")
+                        finally:
+                            try:
+                                os.unlink(sub_img_path)
+                            except Exception:
+                                pass
         # Register in edit debounce so link-preview "edits" within 60s are suppressed
         _edit_timestamps[(tg_channel_id, post.message_id)] = time.time()
         
@@ -6864,12 +7574,20 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         return
 
     tg_channel_id = msg.chat_id
+    grouped_id = getattr(msg, 'grouped_id', None)
+    if isinstance(grouped_id, int) and _is_media_group_processed(grouped_id):
+        logger.info(f"Userbot: Skipping already processed album post in grouped_id {grouped_id}")
+        _update_cached_last_msg_id(tg_channel_id, msg.id)
+        return
+
     raw_text = getattr(msg, 'message', '') or getattr(msg, 'raw_text', '') or getattr(msg, 'text', '') or ""
     entities = getattr(msg, 'entities', []) or []
     text = _format_telegram_entities(raw_text, entities) if entities else raw_text
     
     file_path = None
     media_to_download = None
+    rich_post = None
+    rich_mode = database.get_rich_mode()
 
     # Extract media text and descriptions for Telethon media types
     if msg.media:
@@ -6918,14 +7636,39 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 text = (text + f"\n\n📍 Location: https://maps.google.com/?q={geo.lat},{geo.long}").strip()
         elif m_type == 'MessageMediaUnsupported':
             chat_username = getattr(msg.chat, 'username', None) if getattr(msg, 'chat', None) else None
-            if not text and chat_username and getattr(msg, 'id', None):
-                extracted_text, extracted_img_url = await _extract_public_tg_post(chat_username, msg.id)
-                if extracted_text:
-                    text = extracted_text
-                if extracted_img_url and not file_path:
-                    file_path = await _download_image_url(extracted_img_url)
+            rich_mode = database.get_rich_mode()
+            if isinstance(chat_username, str) and isinstance(getattr(msg, 'id', None), int):
+                rich_post = await _extract_public_tg_post_rich(chat_username, msg.id)
+                if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or not text):
+                    tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
+                    os.close(tmp_fd)
+                    if await _package_tg_post_webxdc(rich_post, xdc_path):
+                        file_path = xdc_path
+                        clean_title = rich_post.author_name or f"@{chat_username}"
+                        text = f"📰 **{clean_title}**\n\n{rich_post.teaser}" if rich_post.teaser else f"📰 **{clean_title}**"
+                    else:
+                        if os.path.exists(xdc_path):
+                            try:
+                                os.unlink(xdc_path)
+                            except Exception:
+                                pass
+                        if rich_post.text_markdown and not text:
+                            text = rich_post.text_markdown
+                        if rich_post.image_urls and not file_path:
+                            file_path = await _download_image_url(rich_post.image_urls[0])
+                elif rich_post and rich_mode == "split" and len(rich_post.image_urls) > 1:
+                    if rich_post.text_markdown and not text:
+                        text = rich_post.text_markdown
+                    if not file_path and rich_post.image_urls:
+                        file_path = await _download_image_url(rich_post.image_urls[0])
+                elif not text and not file_path:
+                    extracted_text, extracted_img_url = await _extract_public_tg_post(chat_username, msg.id)
+                    if extracted_text:
+                        text = extracted_text
+                    if extracted_img_url and not file_path:
+                        file_path = await _download_image_url(extracted_img_url)
             if not text and not file_path:
-                text = "[📰 Post with rich formatting / unsupported media — open in Telegram to view]"
+                text = f"[📰 Post with rich formatting / unsupported media — open in Telegram to view: https://t.me/{chat_username}/{msg.id}]" if isinstance(chat_username, str) and chat_username else "[📰 Post with rich formatting / unsupported media — open in Telegram to view]"
         elif not text and m_type not in ('MessageMediaPhoto', 'MessageMediaDocument'):
             text = f"[{m_type}]"
 
@@ -6950,6 +7693,18 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
 
     if not formatted_msg and not msg.media:
         return
+
+    chat_username = getattr(msg.chat, 'username', None) if getattr(msg, 'chat', None) else None
+    rich_mode = database.get_rich_mode()
+    if isinstance(grouped_id, int) and isinstance(chat_username, str) and not file_path and not rich_post and rich_mode in ("webxdc", "both") and not is_edit:
+        rich_post = await _extract_public_tg_post_rich(chat_username, msg.id)
+        if rich_post and (rich_post.is_rich or len(rich_post.image_urls) > 1):
+            tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
+            os.close(tmp_fd)
+            if await _package_tg_post_webxdc(rich_post, xdc_path):
+                file_path = xdc_path
+                clean_title = rich_post.author_name or f"@{chat_username}"
+                formatted_msg = (f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{chat_username}/{msg.id}").strip()
 
     formatted_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
 
@@ -7080,6 +7835,26 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 channel_dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
                 if channel_dc_chat_id == dc_chat_id:
                     _update_cached_last_msg_id(tg_channel_id, msg.id)
+            if rich_post and len(rich_post.image_urls) > 1 and rich_mode in ("split", "both"):
+                start_idx = 1 if rich_mode == "split" else 0
+                for idx in range(start_idx, len(rich_post.image_urls)):
+                    img_url = rich_post.image_urls[idx]
+                    sub_img_path = await _download_image_url(img_url)
+                    if sub_img_path and os.path.exists(sub_img_path):
+                        try:
+                            sub_cap = f"📷 [{idx + 1}/{len(rich_post.image_urls)}] {display_author or chat_username or 'Telegram'}\n🔗 t.me/{chat_username}/{msg.id}" if (isinstance(chat_username, str) and chat_username) else f"📷 [{idx + 1}/{len(rich_post.image_urls)}] {display_author or 'Telegram'}"
+                            sub_data = MsgData(text=sub_cap, file=sub_img_path)
+                            if display_author:
+                                sub_data.override_sender_name = display_author
+                            await _wait_for_global_dc_rate_limit()
+                            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, sub_data)
+                        except Exception as sub_err:
+                            logger.warning(f"Failed to send follow-up userbot image {idx+1} for msg {msg.id}: {sub_err}")
+                        finally:
+                            try:
+                                os.unlink(sub_img_path)
+                            except Exception:
+                                pass
         logger.info(f"Relayed userbot {'edited ' if is_edit else ''}post from {tg_channel_id} to DC chat {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay userbot message: {e}")

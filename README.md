@@ -13,6 +13,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Rich Text & Advanced Formatting Support**: Full conversion of Telegram's rich text formatting (bold `**text**`, italic `*text*`, underline `__text__`, strikethrough `~text~`, spoiler `||text||`, inline code `` `code` ``, code blocks ```` ```lang\ncode\n``` ````, blockquotes `> text`, expandable blockquotes, hyperlinks `[text](url)`, and headers) into native Delta Chat Markdown.
 - **Telegram Paid Media & Extended Post Types**: Full support for relaying Telegram Paid Media (posts/photos/videos locked with Telegram Stars), Stories, Giveaways, Polls, Contacts, Invoices, and new Telegram post formats without skipping posts.
 - **Public Post Web Recovery & Unsupported Media Handling**: Automatic fallback extraction of public channel posts when Telegram MTProto returns unsupported media objects or rich post containers, preventing cryptic `[MessageMediaUnsupported]` placeholders.
+- **Telegram Rich Post & Album WebXDC Packaging**: Automatically packages long-form Telegram channel posts (with tables, spoilers, blockquotes) and multi-image photo albums into standalone, interactive WebXDC applications (`.xdc`). Apps feature offline reading, dark/light theme, interactive spoilers, table wrapping, lightbox viewer, and an attribution footer (`Post bridged at ... by Delta Chat Telegram Bridge`) with direct links back to Telegram and source repository. Configurable via `/richmode` (`webxdc`, `split`, `both`, or `off`).
 - **Channel Sync Command (`/channelssync`)**: Force-refresh names and avatars of all bridged channels from Telegram (supports both Bot API and Userbot).
 - **Historical Context**: Automatically pre-fills newly bridged channels with the last 3 historical posts.
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
@@ -353,6 +354,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/rmtransport <addr>` | Remove a mail relay |
 | `/setprimary <addr>` | Set primary transport address |
 | `/resilient` | Toggle resilient sending mode across all relays (admin only) |
+| `/richmode [mode]` | Configure rich post relay mode (`webxdc`, `split`, `both`, `off`) |
 | `/status` | Show detailed bot, userbot, queue, and channel status (admin only) |
 | `/donate` | Support bot development ❤️ |
 
@@ -392,6 +394,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/rmtransport <addr>` — Remove mail relay.
 - `/setprimary <addr>` — Set primary mail relay address.
 - `/resilient [on|off]` — Toggle or check resilient sending mode across all mail relays.
+- `/richmode [mode]` — Configure rich post / album relay mode (`webxdc` for interactive WebXDC apps, `split` for separate follow-up images, `both` for WebXDC + extra images, or `off` for legacy fallback).
 - `/help` — Show Delta Chat bot help.
 
 #### Target-Specific Commands in Group Chats

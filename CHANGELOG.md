@@ -1,3 +1,23 @@
+## [2.19.0] - 2026-09-11
+- **Telegram Rich Post & Album WebXDC Packaging**:
+  - Full support for converting Telegram long-form rich posts (posts with tables, spoilers, blockquotes, inline formatting, and multi-image photo albums) into standalone offline WebXDC applications (`.xdc`).
+  - WebXDC container includes complete responsive reader interface with Telegram Instant View styling, dark/light theme support (`prefers-color-scheme`), clickable spoiler reveal, horizontally scrollable table wrapper, image lightbox viewer, and an attribution footer (`Post bridged at ... by Delta Chat Telegram Bridge` linking to `https://git.gluek.info/gluek/deltachat_telegram_bridge`).
+  - Bundles high-resolution images locally into `images/` directory inside `.xdc` ZIP archive with PIL optimization (capped at 1600px, JPEG 85%).
+  - Automatically generates tailored square 128x128 icon from channel author avatar or custom vector Telegram icon fallback.
+- **Media Group (Album) Deduplication**:
+  - Implemented `_is_media_group_processed` tracking `media_group_id` (Bot API) and `grouped_id` (Userbot) to prevent spamming duplicate events when Telegram delivers multi-photo albums as individual message updates.
+- **Configurable Relay Modes (`/richmode`)**:
+  - Added `/richmode [webxdc|split|both|off]` command for administrators to configure relay strategy:
+    - `webxdc` (default): Package rich posts and multi-photo albums into interactive WebXDC app.
+    - `split`: Send first photo with text, then send remaining photos sequentially as captioned follow-up messages (`[2/N]`, `[3/N]`).
+    - `both`: Send interactive WebXDC package AND send individual follow-up images.
+    - `off`: Legacy behavior with fallback text notifications.
+  - Added persistent DB storage via `get_rich_mode()` and `set_rich_mode()` in `database.py`.
+- **Public Embed Rich Post Parser (`_extract_public_tg_post_rich`)**:
+  - Extracts author name, avatar, text HTML, formatted markdown, all image URLs, view count, published date, and detects rich post characteristics (tables, albums, long-form content).
+- **Unit Testing**:
+  - Added `tests/test_rich_posts.py` with comprehensive unit tests covering rich mode database config, media group deduplication, HTML cleaning, teaser generation, public post extraction, WebXDC archive packaging, and `/richmode` command authorization.
+
 ## [2.18.7] - 2026-09-09
 - **Security & Authorization Hardening**:
   - Implemented missing `/initadmin` command handler to claim bot ownership securely in private 1:1 chat with email and cryptographic fingerprint binding.

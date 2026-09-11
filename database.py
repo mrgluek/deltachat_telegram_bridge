@@ -215,6 +215,20 @@ def get_config(key: str) -> str | None:
         finally:
             conn.close()
 
+def get_rich_mode() -> str:
+    """Get rich mode configuration ('webxdc', 'split', 'both', 'off'). Default is 'webxdc'."""
+    val = get_config("rich_mode")
+    if val in ("webxdc", "split", "both", "off"):
+        return val
+    return "webxdc"
+
+def set_rich_mode(mode: str) -> bool:
+    """Set rich mode configuration."""
+    if mode in ("webxdc", "split", "both", "off"):
+        set_config("rich_mode", mode)
+        return True
+    return False
+
 def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = None):
     with _lock:
         conn = _connect()
