@@ -3866,6 +3866,7 @@ def channels_command_dc(bot, accid, event):
 
 
 @dc_cli.on(events.NewMessage(command="/channelssync"))
+@dc_cli.on(events.NewMessage(command="/channelsync"))
 def channelssync_command_dc(bot, accid, event):
     """Sync/update bridged Telegram channel names and avatars in Delta Chat."""
     msg = event.msg
@@ -3928,14 +3929,14 @@ def handle_dc_message(bot, accid, event):
     text = msg.text or ""
     cmd = text.split()[0] if text else ""
 
-    # Handle /channelssyncN commands
-    if cmd.startswith("/channelssync") and any(c.isdigit() for c in cmd):
+    # Handle /channelssyncN and /channelsyncN commands
+    if (cmd.startswith("/channelssync") or cmd.startswith("/channelsync")) and any(c.isdigit() for c in cmd):
         if not _is_dc_admin(bot, accid, msg.from_id):
             _dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text="❌ Only administrators can sync channels."))
             return
         
         import re
-        match = re.search(r'(\d+)', cmd[13:])
+        match = re.search(r'(\d+)', cmd)
         if match:
             channel_id = int(match.group(1))
             if main_loop:
