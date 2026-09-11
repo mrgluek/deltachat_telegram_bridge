@@ -1,3 +1,9 @@
+## [2.19.1] - 2026-09-11
+- **WebP Image Compression for WebXDC**:
+  - Switched bundled WebXDC post images from JPEG to WebP (`format="WEBP"`, `quality=80`, `method=3`).
+  - Optimized maximum image bounding box dimension from 1600px to 1200px (retina-sharp on mobile/desktop readers while reducing file size by ~60% compared to uncompressed JPEGs and cutting encoding time in half).
+  - Significantly reduced `.xdc` package sizes, saving server bandwidth and speeding up downloads on mobile networks.
+
 ## [2.19.0] - 2026-09-11
 - **Telegram Rich Post & Album WebXDC Packaging**:
   - Full support for converting Telegram long-form rich posts (posts with tables, spoilers, blockquotes, inline formatting, and multi-image photo albums) into standalone offline WebXDC applications (`.xdc`).

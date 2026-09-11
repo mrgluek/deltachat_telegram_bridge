@@ -155,14 +155,14 @@ class TestRichPosts(unittest.TestCase):
             is_rich=True,
         )
 
-        async def fake_download(url, dest_path, max_dim=1600):
+        async def fake_download(url, dest_path, max_dim=1200, **kwargs):
             # Create a tiny dummy image file
             try:
                 img = Image.new('RGB', (32, 32), color='purple')
-                img.save(dest_path, 'JPEG')
+                img.save(dest_path, 'WEBP')
             except Exception:
                 with open(dest_path, 'wb') as f:
-                    f.write(b'fake_jpeg_data')
+                    f.write(b'fake_webp_data')
             return True
 
         tmp_fd, xdc_dest = tempfile.mkstemp(suffix=".xdc")
@@ -181,8 +181,8 @@ class TestRichPosts(unittest.TestCase):
                 self.assertIn("manifest.toml", names)
                 self.assertIn("index.html", names)
                 self.assertIn("icon.png", names)
-                self.assertIn("images/img_0.jpg", names)
-                self.assertIn("images/img_1.jpg", names)
+                self.assertIn("images/img_0.webp", names)
+                self.assertIn("images/img_1.webp", names)
 
                 # Check manifest contents
                 manifest_content = z.read("manifest.toml").decode("utf-8")
@@ -192,8 +192,8 @@ class TestRichPosts(unittest.TestCase):
                 html_content = z.read("index.html").decode("utf-8")
                 self.assertIn("Telegram News", html_content)
                 self.assertIn("Cell 1", html_content)
-                self.assertIn("images/img_0.jpg", html_content)
-                self.assertIn("images/img_1.jpg", html_content)
+                self.assertIn("images/img_0.webp", html_content)
+                self.assertIn("images/img_1.webp", html_content)
                 self.assertIn("Post bridged at", html_content)
                 self.assertIn("https://git.gluek.info/gluek/deltachat_telegram_bridge", html_content)
                 self.assertIn("Delta Chat Telegram Bridge", html_content)

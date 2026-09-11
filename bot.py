@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.19.0"
+VERSION = "2.19.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1435,7 +1435,7 @@ def _clean_html_for_webxdc(raw_html: str) -> str:
     return cleaned.strip()
 
 
-async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1600) -> bool:
+async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1200, fmt: str = "WEBP", quality: int = 80) -> bool:
     """Download and optionally optimize an image to a specific path."""
     if not url:
         return False
@@ -1459,7 +1459,10 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 160
                             scale = max_dim / max(w, h)
                             new_size = (int(w * scale), int(h * scale))
                             img = img.resize(new_size, Image.Resampling.LANCZOS)
-                        img.save(output_path, format="JPEG", quality=85, optimize=True)
+                        if fmt.upper() == "WEBP":
+                            img.save(output_path, format="WEBP", quality=quality, method=3)
+                        else:
+                            img.save(output_path, format="JPEG", quality=quality, optimize=True)
                         return True
                 except Exception:
                     with open(output_path, 'wb') as f:
@@ -1492,9 +1495,9 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) 
         # 2. Download Images
         local_images = []
         for idx, img_url in enumerate(post.image_urls):
-            img_fname = f"img_{idx}.jpg"
+            img_fname = f"img_{idx}.webp"
             img_dest = os.path.join(images_dir, img_fname)
-            if await _download_image_to_file(img_url, img_dest, max_dim=1600):
+            if await _download_image_to_file(img_url, img_dest, max_dim=1200, fmt="WEBP", quality=80):
                 local_images.append(f"images/{img_fname}")
 
         # 3. Build Gallery HTML
