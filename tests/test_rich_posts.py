@@ -589,5 +589,102 @@ class TestRichPosts(unittest.TestCase):
 
         mock_dc_bot.rpc.send_msg.assert_not_called()
 
+    def test_empty_post_not_packaged_as_webxdc(self):
+        empty_post = bot.TelegramRichPost(
+            username="qwerty_live",
+            post_id=8889,
+            author_name="QWERTY",
+            text_html="",
+            text_markdown="",
+            teaser="",
+            image_urls=[],
+            videos=[],
+        )
+        tmp_fd, xdc_dest = tempfile.mkstemp(suffix=".xdc")
+        os.close(tmp_fd)
+        try:
+            ok = asyncio.run(bot._package_tg_post_webxdc(empty_post, xdc_dest))
+            self.assertFalse(ok)
+            # File should be empty or nonexistent
+            self.assertEqual(os.path.getsize(xdc_dest), 0)
+        finally:
+            if os.path.exists(xdc_dest):
+                try: os.unlink(xdc_dest)
+                except: pass
+
+    def test_unsupported_media_embed_not_marked_rich(self):
+        unsupported_embed_html = '''
+        <!DOCTYPE html>
+        <html><body>
+            <div class="tgme_widget_message text_not_supported_wrap user-color-4 js-widget_message" data-post="qwerty_live/8889">
+                <div class="message_media_not_supported_wrap">
+                    <div class="message_media_not_supported">Please open Telegram to view this post</div>
+                </div>
+            </div>
+        </body></html>
+        '''
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = unsupported_embed_html
+
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            rich_post = asyncio.run(bot._extract_public_tg_post_rich("qwerty_live", 8889))
+
+        self.assertIsNotNone(rich_post)
+        self.assertFalse(rich_post.is_rich)
+        self.assertEqual(rich_post.text_markdown, "")
+        self.assertEqual(len(rich_post.image_urls), 0)
+        self.assertEqual(len(rich_post.videos), 0)
+
+    def test_userbot_relay_unsupported_media_sends_fallback_text(self):
+        tg_channel_id = -100777666
+        dc_chat_id = 200
+        database.add_channel_by_id(tg_channel_id, dc_chat_id, username="qwerty_live")
+
+        mock_msg = MagicMock()
+        mock_msg.id = 8889
+        mock_msg.chat_id = tg_channel_id
+        mock_msg.chat.username = "qwerty_live"
+        mock_msg.grouped_id = None
+        mock_msg.media = MagicMock()
+        type(mock_msg.media).__name__ = "MessageMediaUnsupported"
+        mock_msg.raw_text = ""
+        mock_msg.message = ""
+        mock_msg.text = ""
+        mock_msg.entities = []
+        mock_msg.is_channel = True
+        mock_msg.is_group = False
+
+        empty_rich_post = bot.TelegramRichPost(
+            username="qwerty_live",
+            post_id=8889,
+            author_name="QWERTY",
+            text_html="",
+            text_markdown="",
+            teaser="",
+            image_urls=[],
+            videos=[],
+            is_rich=False,
+        )
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.send_msg.return_value = 888999
+        mock_userbot = MagicMock()
+        mock_userbot.is_connected.return_value = True
+
+        with patch('bot.dc_bot_instance', mock_dc_bot), \
+             patch('bot.dc_accid', 1), \
+             patch('bot.userbot_client', mock_userbot), \
+             patch('bot._extract_public_tg_post_rich', new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = empty_rich_post
+            asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg))
+
+        mock_dc_bot.rpc.send_msg.assert_called_once()
+        sent_data = mock_dc_bot.rpc.send_msg.call_args[0][2]
+        self.assertIsNone(sent_data.file)
+        self.assertIn("open in Telegram to view", sent_data.text)
+        self.assertIn("t.me/qwerty_live/8889", sent_data.text)
+
 if __name__ == '__main__':
     unittest.main()

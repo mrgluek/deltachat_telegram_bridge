@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.20.1"
+VERSION = "2.20.2"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1684,6 +1684,16 @@ def _get_channel_avatar_path(dc_chat_id: Optional[int] = None, username: Optiona
 
 async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, dc_chat_id: Optional[int] = None) -> bool:
     """Bundle a rich Telegram post into a standalone offline WebXDC package (.xdc)."""
+    has_displayable_content = bool(
+        (post.text_markdown and post.text_markdown.strip()) or
+        (post.text_html and re.sub(r'<[^>]+>', '', post.text_html).strip()) or
+        post.image_urls or
+        post.videos
+    )
+    if not has_displayable_content:
+        logger.warning(f"Cannot package empty WebXDC for @{post.username}/{post.post_id}: no text, images, or videos found.")
+        return False
+
     try:
         tmp_dir = tempfile.mkdtemp(prefix="tg_webxdc_")
         images_dir = os.path.join(tmp_dir, "images")
@@ -2013,10 +2023,10 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
 
             # Check if post has rich characteristics
             has_tables = '<table' in text_html
-            is_grouped = 'tgme_widget_message_grouped' in content
-            is_unsupported = 'text_not_supported_wrap' in content
+            is_grouped = 'tgme_widget_message_grouped' in content and len(image_urls) >= 1
             is_long = len(text_md) > 1500
-            is_rich = len(image_urls) > 1 or len(videos) > 0 or has_tables or is_grouped or is_unsupported or ((len(image_urls) >= 1 or len(videos) >= 1) and is_long)
+            has_content = bool(text_md.strip() or image_urls or videos)
+            is_rich = has_content and (len(image_urls) > 1 or len(videos) > 0 or has_tables or is_grouped or ((len(image_urls) >= 1 or len(videos) >= 1) and is_long))
 
             return TelegramRichPost(
                 username=username,
@@ -6481,7 +6491,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     if tg_username and (media_group_id or getattr(post, 'paid_media', None) or (not text and not tg_file)):
         rich_post = await _extract_public_tg_post_rich(tg_username, post.message_id)
 
-    if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or (not text and not tg_file)):
+    has_rich_content = bool(rich_post and (rich_post.text_markdown.strip() or rich_post.image_urls or rich_post.videos))
+    if rich_post and has_rich_content and rich_mode in ("webxdc", "both") and (rich_post.is_rich or (not text and not tg_file and (rich_post.image_urls or rich_post.videos or len(rich_post.text_markdown) > 500))):
         tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
         os.close(tmp_fd)
         if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
@@ -8026,7 +8037,8 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             rich_mode = database.get_rich_mode()
             if isinstance(chat_username, str) and isinstance(getattr(msg, 'id', None), int):
                 rich_post = await _extract_public_tg_post_rich(chat_username, msg.id)
-                if rich_post and rich_mode in ("webxdc", "both") and (rich_post.is_rich or not text):
+                has_rich_content = bool(rich_post and (rich_post.text_markdown.strip() or rich_post.image_urls or rich_post.videos))
+                if rich_post and has_rich_content and rich_mode in ("webxdc", "both") and (rich_post.is_rich or (not text and (rich_post.image_urls or rich_post.videos or len(rich_post.text_markdown) > 500))):
                     tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
                     os.close(tmp_fd)
                     if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):

@@ -1,3 +1,10 @@
+## [2.20.2] - 2026-09-11
+- **Prevent Empty WebXDC Applications on Unsupported Media**:
+  - Added strict displayable content check (`has_displayable_content`) to `_package_tg_post_webxdc`: immediately rejects creating WebXDC packages when posts contain 0 text, 0 images, and 0 videos.
+  - Fixed false-positive `is_rich = True` detection in `_extract_public_tg_post_rich`: removed `text_not_supported_wrap` from the rich heuristic, since Telegram applies this class when the web widget itself cannot display the media (e.g. Stories, Gifts, live streams, or widget-unsupported objects like `qwerty_live/8889`).
+  - Guaranteed that unsupported media posts with no displayable content smoothly trigger the standard Telegram fallback card (`[📰 Post with rich formatting / unsupported media — open in Telegram to view: https://t.me/...]`) instead of an empty WebXDC card.
+  - Added dedicated unit tests for empty post rejection, embed markup validation, and unsupported media fallback messaging.
+
 ## [2.20.1] - 2026-09-11
 - **Persistent Media Group Deduplication & Album Mapping**:
   - Added persistent SQLite table `processed_media_groups` and index `idx_pmg_created` to store media group / album IDs across bot restarts and beyond the initial in-memory window.
