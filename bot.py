@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.19.1"
+VERSION = "2.19.2"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1435,7 +1435,7 @@ def _clean_html_for_webxdc(raw_html: str) -> str:
     return cleaned.strip()
 
 
-async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1200, fmt: str = "WEBP", quality: int = 80) -> bool:
+async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1280, fmt: str = "WEBP", quality: int = 80) -> bool:
     """Download and optionally optimize an image to a specific path."""
     if not url:
         return False
@@ -1443,6 +1443,7 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 120
         url = 'https:' + url
     try:
         import httpx
+        from PIL import Image
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
@@ -1451,9 +1452,9 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 120
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200 and resp.content:
                 try:
-                    from PIL import Image
                     with Image.open(io.BytesIO(resp.content)) as img:
-                        img = img.convert("RGB")
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
                         w, h = img.size
                         if max(w, h) > max_dim:
                             scale = max_dim / max(w, h)
@@ -1469,35 +1470,34 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 120
                         f.write(resp.content)
                     return True
     except Exception as e:
-        logger.debug(f"Failed to download image from {url}: {e}")
+        logger.warning(f"Failed to download image {url}: {e}")
     return False
 
 
 async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) -> bool:
-    """Package a Telegram rich post into a standalone WebXDC .xdc ZIP application."""
-    tmpdir = tempfile.mkdtemp()
+    """Bundle a rich Telegram post into a standalone offline WebXDC package (.xdc)."""
     try:
-        images_dir = os.path.join(tmpdir, "images")
+        tmp_dir = tempfile.mkdtemp(prefix="tg_webxdc_")
+        images_dir = os.path.join(tmp_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
 
-        # 1. Download Avatar / Icon
+        # 1. Generate Application Icon
         icon_bytes = None
         icon_name = "icon.png"
         if post.author_avatar_url:
-            avatar_tmp = os.path.join(tmpdir, "avatar_raw")
-            if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=128):
-                b, _ = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
-                if b:
-                    icon_bytes = b
+            avatar_tmp = os.path.join(tmp_dir, "avatar_raw")
+            if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=256, fmt="PNG"):
+                icon_bytes, icon_name = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
         if not icon_bytes:
             icon_bytes = _generate_fallback_telegram_icon()
+            icon_name = "icon.png"
 
         # 2. Download Images
         local_images = []
         for idx, img_url in enumerate(post.image_urls):
             img_fname = f"img_{idx}.webp"
             img_dest = os.path.join(images_dir, img_fname)
-            if await _download_image_to_file(img_url, img_dest, max_dim=1200, fmt="WEBP", quality=80):
+            if await _download_image_to_file(img_url, img_dest, max_dim=1280, fmt="WEBP", quality=80):
                 local_images.append(f"images/{img_fname}")
 
         # 3. Build Gallery HTML
@@ -1548,7 +1548,7 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) 
             bridged_at=bridged_at
         )
 
-        index_html_path = os.path.join(tmpdir, "index.html")
+        index_html_path = os.path.join(tmp_dir, "index.html")
         with open(index_html_path, "w", encoding="utf-8") as f:
             f.write(html_doc)
 
@@ -1567,7 +1567,7 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) 
             if icon_bytes:
                 zf.writestr(icon_name, icon_bytes)
             for img_rel in local_images:
-                full_img_path = os.path.join(tmpdir, img_rel)
+                full_img_path = os.path.join(tmp_dir, img_rel)
                 if os.path.exists(full_img_path):
                     zf.write(full_img_path, arcname=img_rel)
 
@@ -1576,7 +1576,8 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str) 
         logger.error(f"Failed to package WebXDC post for @{post.username}/{post.post_id}: {e}")
         return False
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if 'tmp_dir' in locals():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[TelegramRichPost]:

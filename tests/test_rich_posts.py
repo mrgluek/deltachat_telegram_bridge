@@ -155,7 +155,7 @@ class TestRichPosts(unittest.TestCase):
             is_rich=True,
         )
 
-        async def fake_download(url, dest_path, max_dim=1200, **kwargs):
+        async def fake_download(url, dest_path, max_dim=1280, **kwargs):
             # Create a tiny dummy image file
             try:
                 img = Image.new('RGB', (32, 32), color='purple')

@@ -1,3 +1,9 @@
+## [2.19.2] - 2026-09-11
+- **Native 1280px Resolution Alignment**:
+  - Aligned WebXDC maximum image bounding dimension to `1280px` to match Telegram's standard native photo delivery size (`y` size box 1280x1280).
+  - Bypasses unnecessary image downsampling/interpolation overhead for native Telegram photos, reducing CPU usage during packaging while preserving crisp 1:1 original clarity.
+  - Still automatically caps oversize images (e.g., 2560px `w` size) down to 1280px.
+
 ## [2.19.1] - 2026-09-11
 - **WebP Image Compression for WebXDC**:
   - Switched bundled WebXDC post images from JPEG to WebP (`format="WEBP"`, `quality=80`, `method=3`).
