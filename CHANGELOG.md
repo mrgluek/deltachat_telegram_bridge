@@ -15,6 +15,9 @@
   - Added persistent DB storage via `get_rich_mode()` and `set_rich_mode()` in `database.py`.
 - **Public Embed Rich Post Parser (`_extract_public_tg_post_rich`)**:
   - Extracts author name, avatar, text HTML, formatted markdown, all image URLs, view count, published date, and detects rich post characteristics (tables, albums, long-form content).
+- **Dependencies & CI Pipeline**:
+  - Added explicit `Pillow>=10.0.0` and `httpx>=0.25.0` dependencies to `requirements.txt` to fix CI unit test runs and image manipulation on lean environments.
+  - Added graceful import fallbacks in `tests/test_rich_posts.py`.
 - **Unit Testing**:
   - Added `tests/test_rich_posts.py` with comprehensive unit tests covering rich mode database config, media group deduplication, HTML cleaning, teaser generation, public post extraction, WebXDC archive packaging, and `/richmode` command authorization.
 

@@ -5,7 +5,10 @@ import zipfile
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = MagicMock()
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import database
@@ -154,8 +157,12 @@ class TestRichPosts(unittest.TestCase):
 
         async def fake_download(url, dest_path, max_dim=1600):
             # Create a tiny dummy image file
-            img = Image.new('RGB', (32, 32), color='purple')
-            img.save(dest_path, 'JPEG')
+            try:
+                img = Image.new('RGB', (32, 32), color='purple')
+                img.save(dest_path, 'JPEG')
+            except Exception:
+                with open(dest_path, 'wb') as f:
+                    f.write(b'fake_jpeg_data')
             return True
 
         tmp_fd, xdc_dest = tempfile.mkstemp(suffix=".xdc")
