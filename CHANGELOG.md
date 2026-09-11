@@ -1,3 +1,17 @@
+## [2.20.0] - 2026-09-11
+- **Telegram Video Post & Album WebXDC Packaging**:
+  - Full support for embedding MP4 videos into standalone offline WebXDC applications (`.xdc`).
+  - Added responsive HTML5 `<video controls playsinline preload="metadata">` player with dark/light mode support, play/pause controls, and duration badges.
+  - Implemented smart size limits & budgeting:
+    - **Per-video cap**: Videos up to **20 MB** individually are downloaded and embedded directly into the WebXDC app.
+    - **Total budget**: Direct embedding of videos up to a cumulative package budget of **50 MB**.
+    - **Fast packaging**: Stored MP4 files uncompressed (`ZIP_STORED`) to prevent redundant CPU-heavy re-compression and ensure instant `.xdc` creation.
+  - **Smart Overflow Cards**: Videos exceeding 20 MB individually, exceeding the 50 MB cumulative budget, or flagged as "Media is too big" by Telegram web embeds are rendered as elegant preview cards with duration badges, optimized WebP posters (`images/vid_poster_{idx}.webp`), and a prominent «Смотреть все видео в Telegram ↗» button pointing to the original Telegram post.
+  - **Public Embed Video Extraction**: Extracted video streams (`.mp4`), thumbnail posters, durations, and status directly from Telegram public embed cards (`tgme_widget_message_video_player`).
+  - **Poster De-duplication**: Filtered out video poster images from the photo gallery (`image_urls`) to eliminate duplicate image previews.
+  - **Streaming Guard (`_download_video_with_limit`)**: Added HTTP `HEAD` early-rejection check and chunk-counting streaming downloader to prevent downloading oversize media beyond allowable byte budgets.
+  - **Unit Tests**: Added comprehensive test coverage for video extraction, budgeting limits, overflow fallback, and streaming download guards.
+
 ## [2.19.3] - 2026-09-11
 - **Local Channel Avatar Integration for WebXDC**:
   - Prioritized existing local channel avatars from Delta Chat core (`profile_image`) when packaging WebXDC apps.

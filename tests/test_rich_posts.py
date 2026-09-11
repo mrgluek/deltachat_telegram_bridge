@@ -305,5 +305,206 @@ class TestRichPosts(unittest.TestCase):
             bot.richmode_command(mock_bot, 1, mock_event)
             self.assertEqual(database.get_rich_mode(), "webxdc")
 
+    def test_extract_public_tg_post_rich_with_videos(self):
+        sample_embed_html = '''
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div class="tgme_widget_message">
+                <div class="tgme_widget_message_owner_name"><span>Chtddd Channel</span></div>
+                <div class="tgme_widget_message_text js-message_text">Post with two videos</div>
+                <!-- Video 0: direct stream -->
+                <a class="tgme_widget_message_video_player js-message_video_player" href="https://t.me/chtddd/96722">
+                    <i class="tgme_widget_message_video_thumb" style="background-image:url('https://cdn4.telesco.pe/file/poster0.jpg')"></i>
+                    <video src="https://cdn4.telesco.pe/file/stream0.mp4?token=abc" class="tgme_widget_message_video"></video>
+                    <time class="message_video_duration">0:35</time>
+                </a>
+                <!-- Video 1: too big / unsupported stream -->
+                <a class="tgme_widget_message_video_player js-message_video_player" href="https://t.me/chtddd/96723">
+                    <i class="tgme_widget_message_video_thumb" style="background-image:url('https://cdn4.telesco.pe/file/poster1.jpg')"></i>
+                    <time class="message_video_duration">1:38</time>
+                    <div class="message_media_not_supported_label">Media is too big</div>
+                </a>
+                <!-- Extra photo -->
+                <div style="background-image:url('https://cdn4.telesco.pe/file/photo1.jpg')"></div>
+            </div>
+        </body>
+        </html>
+        '''
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = sample_embed_html
+
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            rich_post = asyncio.run(bot._extract_public_tg_post_rich("chtddd", 96722))
+
+        self.assertIsNotNone(rich_post)
+        self.assertEqual(rich_post.author_name, "Chtddd Channel")
+        self.assertEqual(len(rich_post.videos), 2)
+        
+        # Video 0 checks
+        v0 = rich_post.videos[0]
+        self.assertEqual(v0.video_url, "https://cdn4.telesco.pe/file/stream0.mp4?token=abc")
+        self.assertEqual(v0.poster_url, "https://cdn4.telesco.pe/file/poster0.jpg")
+        self.assertEqual(v0.duration, "0:35")
+        self.assertFalse(v0.is_too_big)
+
+        # Video 1 checks (Media is too big)
+        v1 = rich_post.videos[1]
+        self.assertEqual(v1.video_url, "")
+        self.assertEqual(v1.poster_url, "https://cdn4.telesco.pe/file/poster1.jpg")
+        self.assertEqual(v1.duration, "1:38")
+        self.assertTrue(v1.is_too_big)
+
+        # Posters should not leak into photo gallery
+        self.assertEqual(rich_post.image_urls, ["https://cdn4.telesco.pe/file/photo1.jpg"])
+        self.assertTrue(rich_post.is_rich)
+
+    def test_package_tg_post_webxdc_with_videos_and_budgeting(self):
+        rich_post = bot.TelegramRichPost(
+            username="chtddd",
+            post_id=96722,
+            author_name="Chtddd News",
+            author_avatar_url="",
+            text_html="<p>Test with video limits</p>",
+            text_markdown="Test with video limits",
+            teaser="Test with video limits",
+            image_urls=[],
+            videos=[
+                # Vid 0: 10 MB (within 20 MB single and 50 MB total -> embedded)
+                bot.TelegramRichVideo(video_url="https://example.com/v0.mp4", poster_url="https://example.com/p0.jpg", duration="0:35", is_too_big=False),
+                # Vid 1: 15 MB (within 20 MB single, total 25 MB <= 50 MB -> embedded)
+                bot.TelegramRichVideo(video_url="https://example.com/v1.mp4", poster_url="https://example.com/p1.jpg", duration="0:45", is_too_big=False),
+                # Vid 2: 30 MB (exceeds 20 MB single cap -> overflow card)
+                bot.TelegramRichVideo(video_url="https://example.com/v2.mp4", poster_url="https://example.com/p2.jpg", duration="2:10", is_too_big=False),
+                # Vid 3: Media is too big by Telegram -> overflow card
+                bot.TelegramRichVideo(video_url="", poster_url="https://example.com/p3.jpg", duration="1:38", is_too_big=True),
+            ],
+            is_rich=True,
+        )
+
+        simulated_sizes = {
+            "https://example.com/v0.mp4": 10 * 1024 * 1024,
+            "https://example.com/v1.mp4": 15 * 1024 * 1024,
+            "https://example.com/v2.mp4": 30 * 1024 * 1024,
+        }
+
+        async def fake_download_video(url, dest_path, max_bytes):
+            size = simulated_sizes.get(url, 0)
+            if size > max_bytes:
+                return False
+            with open(dest_path, 'wb') as f:
+                f.write(b'0' * 1024)  # write dummy payload
+            # simulate file size on disk
+            with patch('os.path.getsize', return_value=size):
+                pass
+            return True
+
+        async def fake_download_image(url, dest_path, **kwargs):
+            with open(dest_path, 'wb') as f:
+                f.write(b'fake_img')
+            return True
+
+        tmp_fd, xdc_dest = tempfile.mkstemp(suffix=".xdc")
+        os.close(tmp_fd)
+
+        try:
+            # We mock getsize so that os.path.getsize(vid_dest) returns simulated_sizes
+            orig_getsize = os.path.getsize
+            def custom_getsize(path):
+                for vid_idx, (u, s) in enumerate(simulated_sizes.items()):
+                    if f"vid_{vid_idx}.mp4" in path:
+                        return s
+                return orig_getsize(path)
+
+            with patch('bot._download_video_with_limit', side_effect=fake_download_video), \
+                 patch('bot._download_image_to_file', side_effect=fake_download_image), \
+                 patch('os.path.getsize', side_effect=custom_getsize):
+                ok = asyncio.run(bot._package_tg_post_webxdc(rich_post, xdc_dest))
+
+            self.assertTrue(ok)
+            self.assertTrue(os.path.exists(xdc_dest))
+            self.assertTrue(zipfile.is_zipfile(xdc_dest))
+
+            with zipfile.ZipFile(xdc_dest, 'r') as z:
+                names = z.namelist()
+                # Vid 0 and Vid 1 embedded
+                self.assertIn("videos/vid_0.mp4", names)
+                self.assertIn("videos/vid_1.mp4", names)
+                # Vid 2 (oversize) and Vid 3 (is_too_big) NOT in videos/
+                self.assertNotIn("videos/vid_2.mp4", names)
+                self.assertNotIn("videos/vid_3.mp4", names)
+
+                # All video posters included
+                self.assertIn("images/vid_poster_0.webp", names)
+                self.assertIn("images/vid_poster_1.webp", names)
+                self.assertIn("images/vid_poster_2.webp", names)
+                self.assertIn("images/vid_poster_3.webp", names)
+
+                html_doc = z.read("index.html").decode("utf-8")
+                # Embedded videos have <video controls> and <source src="videos/vid_..."
+                self.assertIn('<video controls', html_doc)
+                self.assertIn('videos/vid_0.mp4', html_doc)
+                self.assertIn('videos/vid_1.mp4', html_doc)
+
+                # Overflow videos have preview card and Telegram link button
+                self.assertIn('video-overflow-card', html_doc)
+                self.assertIn('Смотреть все видео в Telegram ↗', html_doc)
+                self.assertIn('https://t.me/chtddd/96722', html_doc)
+        finally:
+            if os.path.exists(xdc_dest):
+                try: os.unlink(xdc_dest)
+                except: pass
+
+    def test_download_video_with_limit(self):
+        # 1. Reject if Content-Length header is larger than max_bytes
+        mock_head = MagicMock()
+        mock_head.status_code = 200
+        mock_head.headers = {"content-length": "25000000"}  # 25 MB
+
+        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head_call:
+            mock_head_call.return_value = mock_head
+            tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
+            os.close(tmp_fd)
+            try:
+                ok = asyncio.run(bot._download_video_with_limit("https://example.com/large.mp4", tmp_file, max_bytes=20 * 1024 * 1024))
+                self.assertFalse(ok)
+            finally:
+                if os.path.exists(tmp_file):
+                    try: os.unlink(tmp_file)
+                    except: pass
+
+        # 2. Reject and clean up if streamed chunks exceed max_bytes
+        class FakeStreamResponse:
+            status_code = 200
+            headers = {}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b'x' * (5 * 1024 * 1024)
+                yield b'y' * (5 * 1024 * 1024)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head_call, \
+             patch('httpx.AsyncClient.stream', return_value=FakeStreamResponse()):
+            mock_head_call.side_effect = Exception("HEAD failed")
+            tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
+            os.close(tmp_fd)
+            try:
+                # Limit is 6 MB, stream produces 10 MB
+                ok = asyncio.run(bot._download_video_with_limit("https://example.com/stream.mp4", tmp_file, max_bytes=6 * 1024 * 1024))
+                self.assertFalse(ok)
+                self.assertFalse(os.path.exists(tmp_file))
+            finally:
+                if os.path.exists(tmp_file):
+                    try: os.unlink(tmp_file)
+                    except: pass
+
 if __name__ == '__main__':
     unittest.main()

@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.19.3"
+VERSION = "2.20.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1033,6 +1033,15 @@ def _is_media_group_processed(group_id: str | int | None) -> bool:
 
 
 @dataclass
+class TelegramRichVideo:
+    """Represents a video embedded in a Telegram channel post."""
+    video_url: str = ""
+    poster_url: str = ""
+    duration: str = ""
+    is_too_big: bool = False
+
+
+@dataclass
 class TelegramRichPost:
     """Structured representation of a Telegram post, channel article, or media album."""
     username: str
@@ -1044,6 +1053,7 @@ class TelegramRichPost:
     teaser: str = ""
     image_urls: list[str] = field(default_factory=list)
     video_urls: list[str] = field(default_factory=list)
+    videos: list[TelegramRichVideo] = field(default_factory=list)
     published_date: str = ""
     views: str = ""
     is_rich: bool = False
@@ -1266,6 +1276,99 @@ TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
         .gallery-item img:hover {{
             transform: scale(1.02);
         }}
+        .video-container {{
+            position: relative;
+            margin: 18px 0;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000000;
+            text-align: center;
+        }}
+        .video-container video {{
+            width: 100%;
+            max-height: 550px;
+            display: block;
+            border-radius: 12px;
+            outline: none;
+        }}
+        .video-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+            margin: 18px 0;
+        }}
+        .video-overflow-card {{
+            position: relative;
+            margin: 16px 0;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            background: var(--quote-bg);
+        }}
+        .video-overflow-thumb {{
+            position: relative;
+            width: 100%;
+            height: 240px;
+            background-size: cover;
+            background-position: center;
+            background-color: #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .video-play-icon {{
+            width: 54px;
+            height: 54px;
+            background: rgba(0, 0, 0, 0.65);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            cursor: pointer;
+        }}
+        .video-duration-badge {{
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.75);
+            color: #ffffff;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }}
+        .video-overflow-footer {{
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }}
+        .video-overflow-title {{
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-color);
+        }}
+        .tg-video-btn {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--accent-color);
+            color: #ffffff !important;
+            text-decoration: none !important;
+            padding: 7px 14px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: background 0.2s;
+        }}
+        .tg-video-btn:hover {{
+            background: var(--accent-hover);
+        }}
         footer.post-footer {{
             margin-top: 24px;
             padding-top: 14px;
@@ -1308,6 +1411,8 @@ TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
         </header>
 
         {gallery_top_html}
+
+        {video_html}
 
         <article class="post-content">
             {content_html}
@@ -1476,6 +1581,66 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
     return False
 
 
+async def _download_video_with_limit(url: str, output_path: str, max_bytes: int) -> bool:
+    """Stream download a video file up to max_bytes. Abort and return False if exceeded or failed."""
+    if not url or max_bytes <= 0:
+        return False
+    if url.startswith('//'):
+        url = 'https:' + url
+    try:
+        import httpx
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://t.me/'
+        }
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            # 1. Quick HEAD check if Content-Length header is present
+            try:
+                head_resp = await client.head(url, headers=headers)
+                cl = head_resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    logger.info(f"Video {url} exceeds limit ({int(cl)} > {max_bytes} bytes), skipping download")
+                    return False
+            except Exception:
+                pass
+
+            # 2. Streaming GET with chunk byte counting
+            async with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code != 200:
+                    return False
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    logger.info(f"Video Content-Length ({int(cl)}) exceeds limit {max_bytes}, skipping download")
+                    return False
+
+                downloaded = 0
+                exceeded = False
+                with open(output_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            logger.info(f"Video download exceeded limit {max_bytes} bytes, aborting")
+                            exceeded = True
+                            break
+                        f.write(chunk)
+                if exceeded:
+                    if os.path.exists(output_path):
+                        try:
+                            os.unlink(output_path)
+                        except Exception:
+                            pass
+                    return False
+                return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except Exception as e:
+        logger.warning(f"Failed to download video {url}: {e}")
+        if os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except Exception:
+                pass
+        return False
+
+
 def _get_channel_avatar_path(dc_chat_id: Optional[int] = None, username: Optional[str] = None) -> Optional[str]:
     """Retrieve local profile image path for a bridged Delta Chat channel from Delta Chat core."""
     global dc_bot_instance, dc_accid
@@ -1519,6 +1684,10 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         tmp_dir = tempfile.mkdtemp(prefix="tg_webxdc_")
         images_dir = os.path.join(tmp_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
+        videos_dir = os.path.join(tmp_dir, "videos")
+        os.makedirs(videos_dir, exist_ok=True)
+
+        source_url = f"https://t.me/{post.username}/{post.post_id}" if post.username else "https://t.me"
 
         # 1. Generate Application Icon (128x128 square PNG)
         icon_bytes = None
@@ -1560,10 +1729,101 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
             )
             gallery_top_html = f'<div class="gallery-grid">\n{items_html}\n</div>'
 
-        # 4. Clean content HTML
+        # 4. Download & Budget Videos
+        # Limits: single video <= 20 MB, cumulative videos package <= 50 MB.
+        # Overflow/oversize/unsupported videos rendered as preview poster cards with a Telegram link button.
+        MAX_SINGLE_VIDEO_BYTES = 20 * 1024 * 1024   # 20 MB
+        MAX_TOTAL_VIDEO_BYTES = 50 * 1024 * 1024    # 50 MB
+        total_video_bytes = 0
+        embedded_videos: list[dict] = []
+        overflow_videos: list[dict] = []
+
+        for idx, vid in enumerate(post.videos):
+            poster_fname = f"vid_poster_{idx}.webp"
+            poster_dest = os.path.join(images_dir, poster_fname)
+            poster_rel = ""
+            if vid.poster_url:
+                if await _download_image_to_file(vid.poster_url, poster_dest, max_dim=1280, fmt="WEBP", quality=80):
+                    poster_rel = f"images/{poster_fname}"
+
+            remaining_budget = MAX_TOTAL_VIDEO_BYTES - total_video_bytes
+            allowable_bytes = min(MAX_SINGLE_VIDEO_BYTES, remaining_budget)
+
+            is_embedded = False
+            if not vid.is_too_big and vid.video_url and allowable_bytes > 0:
+                vid_fname = f"vid_{idx}.mp4"
+                vid_dest = os.path.join(videos_dir, vid_fname)
+                if await _download_video_with_limit(vid.video_url, vid_dest, allowable_bytes):
+                    v_size = os.path.getsize(vid_dest)
+                    total_video_bytes += v_size
+                    embedded_videos.append({
+                        "video_path": f"videos/{vid_fname}",
+                        "poster_path": poster_rel,
+                        "duration": vid.duration,
+                        "full_path": vid_dest,
+                    })
+                    is_embedded = True
+
+            if not is_embedded:
+                overflow_videos.append({
+                    "poster_path": poster_rel,
+                    "duration": vid.duration,
+                    "is_too_big": vid.is_too_big,
+                })
+
+        # 5. Build Video HTML
+        video_elements = []
+        if len(embedded_videos) == 1:
+            v = embedded_videos[0]
+            poster_attr = f' poster="{v["poster_path"]}"' if v["poster_path"] else ''
+            video_elements.append(
+                f'<div class="video-container">\n'
+                f'    <video controls playsinline preload="metadata"{poster_attr}>\n'
+                f'        <source src="{v["video_path"]}" type="video/mp4">\n'
+                f'        Your browser does not support the video tag.\n'
+                f'    </video>\n'
+                f'</div>'
+            )
+        elif len(embedded_videos) > 1:
+            grid_items = []
+            for v in embedded_videos:
+                poster_attr = f' poster="{v["poster_path"]}"' if v["poster_path"] else ''
+                grid_items.append(
+                    f'<div class="video-container">\n'
+                    f'    <video controls playsinline preload="metadata"{poster_attr}>\n'
+                    f'        <source src="{v["video_path"]}" type="video/mp4">\n'
+                    f'        Your browser does not support the video tag.\n'
+                    f'    </video>\n'
+                    f'</div>'
+                )
+            video_elements.append(f'<div class="video-grid">\n' + "\n".join(grid_items) + '\n</div>')
+
+        for ov in overflow_videos:
+            dur_text = f'<div class="video-duration-badge">{html.escape(ov["duration"])}</div>' if ov["duration"] else ''
+            bg_style = f"background-image: url('{ov['poster_path']}');" if ov['poster_path'] else "background-color: #1a1a1a;"
+            label_text = f"📹 Video ({html.escape(ov['duration'])})" if ov["duration"] else "📹 Video"
+            card_html = (
+                f'<div class="video-overflow-card">\n'
+                f'    <a href="{source_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:block;">\n'
+                f'        <div class="video-overflow-thumb" style="{bg_style}">\n'
+                f'            <div class="video-play-icon">▶</div>\n'
+                f'            {dur_text}\n'
+                f'        </div>\n'
+                f'    </a>\n'
+                f'    <div class="video-overflow-footer">\n'
+                f'        <div class="video-overflow-title">{label_text}</div>\n'
+                f'        <a href="{source_url}" target="_blank" rel="noopener noreferrer" class="tg-video-btn">Смотреть все видео в Telegram ↗</a>\n'
+                f'    </div>\n'
+                f'</div>'
+            )
+            video_elements.append(card_html)
+
+        video_html = "\n".join(video_elements)
+
+        # 6. Clean content HTML
         cleaned_content = _clean_html_for_webxdc(post.text_html)
 
-        # 5. Build Header & Meta
+        # 7. Build Header & Meta
         avatar_html = '<div class="avatar" style="display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;background:var(--accent-color);">TG</div>'
         if icon_bytes:
             avatar_html = '<img src="icon.png" alt="Avatar" class="avatar" />'
@@ -1577,9 +1837,8 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         meta_text = " • ".join(meta_parts) if meta_parts else "Telegram Post"
 
         views_text = f"👁️ {post.views} views" if post.views else ""
-        source_url = f"https://t.me/{post.username}/{post.post_id}" if post.username else "https://t.me"
 
-        # 6. Fill HTML Template
+        # 8. Fill HTML Template
         from datetime import datetime, timezone
         bridged_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M GMT")
         doc_title = f"{post.author_name or 'Telegram'}: {post.teaser[:60]}" if post.teaser else (post.author_name or "Telegram Post")
@@ -1590,6 +1849,7 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
             source_url=source_url,
             avatar_html=avatar_html,
             gallery_top_html=gallery_top_html,
+            video_html=video_html,
             content_html=cleaned_content,
             gallery_bottom_html=gallery_bottom_html,
             views_text=html.escape(views_text),
@@ -1600,7 +1860,7 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         with open(index_html_path, "w", encoding="utf-8") as f:
             f.write(html_doc)
 
-        # 7. Build manifest.toml
+        # 9. Build manifest.toml
         app_name = _clean_toml_string(doc_title[:80])
         manifest_lines = [
             f'name = "{app_name}"',
@@ -1610,16 +1870,23 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
             manifest_lines.append(f'icon = "{icon_name}"')
         manifest_content = "\n".join(manifest_lines) + "\n"
 
-        # 8. Package into .xdc ZIP
+        # 10. Package into .xdc ZIP
         with zipfile.ZipFile(output_xdc_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
             zf.write(index_html_path, arcname="index.html")
             zf.writestr("manifest.toml", manifest_content)
             if icon_bytes:
                 zf.writestr(icon_name, icon_bytes)
-            for img_rel in local_images:
-                full_img_path = os.path.join(tmp_dir, img_rel)
-                if os.path.exists(full_img_path):
-                    zf.write(full_img_path, arcname=img_rel)
+            # Write all downloaded images (photos + video posters)
+            for root, _, files in os.walk(images_dir):
+                for f in files:
+                    f_full = os.path.join(root, f)
+                    rel = os.path.relpath(f_full, tmp_dir)
+                    zf.write(f_full, arcname=rel)
+            # Write embedded videos using ZIP_STORED (MP4 is already compressed)
+            for v in embedded_videos:
+                full_vid = v.get("full_path")
+                if full_vid and os.path.exists(full_vid):
+                    zf.write(full_vid, arcname=v["video_path"], compress_type=zipfile.ZIP_STORED)
 
         return os.path.exists(output_xdc_path) and os.path.getsize(output_xdc_path) > 0
     except Exception as e:
@@ -1676,12 +1943,49 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
                 raw_html = re.sub(r'<[^>]+>', '', raw_html)
                 text_md = html.unescape(raw_html).strip()
 
-            teaser = _make_teaser(text_md)
+            # Videos
+            videos: list[TelegramRichVideo] = []
+            v_posters: set[str] = set()
+            for v_m in re.finditer(r'<a[^>]*tgme_widget_message_video_player[^>]*>(.*?)</a>', content, re.DOTALL):
+                v_block = v_m.group(0)
 
-            # Images
+                v_src_m = re.search(r'<video[^>]*src="([^"]+)"', v_block)
+                v_src = html.unescape(v_src_m.group(1)).strip() if v_src_m else ""
+                if v_src.startswith('//'):
+                    v_src = 'https:' + v_src
+
+                v_poster_m = re.search(r'background-image:url\(\'([^\']+)\'\)', v_block)
+                v_poster = v_poster_m.group(1).strip() if v_poster_m else ""
+                if v_poster.startswith('//'):
+                    v_poster = 'https:' + v_poster
+                if v_poster:
+                    v_posters.add(v_poster)
+
+                v_dur_m = re.search(r'<time[^>]*message_video_duration[^>]*>(.*?)</time>', v_block, re.DOTALL)
+                v_dur = html.unescape(v_dur_m.group(1)).strip() if v_dur_m else ""
+
+                is_too_big = "Media is too big" in v_block or not v_src
+
+                videos.append(TelegramRichVideo(
+                    video_url=v_src,
+                    poster_url=v_poster,
+                    duration=v_dur,
+                    is_too_big=is_too_big
+                ))
+
+            teaser = _make_teaser(text_md)
+            if not teaser and videos:
+                if len(videos) == 1:
+                    teaser = f"📹 Video ({videos[0].duration})" if videos[0].duration else "📹 Video"
+                else:
+                    teaser = f"📹 {len(videos)} videos"
+
+            # Images (excluding video posters to prevent duplicating thumbnails into the photo gallery)
             image_urls = []
             for u in re.findall(r'background-image:url\(\'([^\']+)\'\)', content):
-                if 'telegram.org/img/emoji' not in u and u not in image_urls:
+                if u.startswith('//'):
+                    u = 'https:' + u
+                if 'telegram.org/img/emoji' not in u and u not in v_posters and u != avatar_url and u not in image_urls:
                     image_urls.append(u)
 
             # Views
@@ -1697,7 +2001,7 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
             is_grouped = 'tgme_widget_message_grouped' in content
             is_unsupported = 'text_not_supported_wrap' in content
             is_long = len(text_md) > 1500
-            is_rich = len(image_urls) > 1 or has_tables or is_grouped or is_unsupported or (len(image_urls) >= 1 and is_long)
+            is_rich = len(image_urls) > 1 or len(videos) > 0 or has_tables or is_grouped or is_unsupported or ((len(image_urls) >= 1 or len(videos) >= 1) and is_long)
 
             return TelegramRichPost(
                 username=username,
@@ -1708,6 +2012,8 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
                 text_markdown=text_md,
                 teaser=teaser,
                 image_urls=image_urls,
+                video_urls=[v.video_url for v in videos if v.video_url],
+                videos=videos,
                 published_date=published_date,
                 views=views,
                 is_rich=is_rich
