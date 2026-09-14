@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.20.2"
+VERSION = "2.21.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1545,14 +1545,41 @@ def _clean_html_for_webxdc(raw_html: str) -> str:
 
 
 async def _download_image_to_file(url: str, output_path: str, max_dim: int = 1280, fmt: str = "WEBP", quality: int = 80) -> bool:
-    """Download and optionally optimize an image to a specific path."""
+    """Download and optionally optimize an image to a specific path. Supports remote URLs and local file paths."""
     if not url:
         return False
+    from PIL import Image
+
+    # 1. Handle local file paths directly
+    if os.path.isfile(url):
+        try:
+            with Image.open(url) as img:
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                w, h = img.size
+                if max(w, h) > max_dim:
+                    scale = max_dim / max(w, h)
+                    new_size = (int(w * scale), int(h * scale))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+                if fmt.upper() == "WEBP":
+                    img.save(output_path, format="WEBP", quality=quality, method=3)
+                elif fmt.upper() == "PNG":
+                    img.save(output_path, format="PNG", optimize=True)
+                else:
+                    img.save(output_path, format="JPEG", quality=quality, optimize=True)
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to process local image {url}: {e}")
+            try:
+                shutil.copy2(url, output_path)
+                return True
+            except Exception:
+                return False
+
     if url.startswith('//'):
         url = 'https:' + url
     try:
         import httpx
-        from PIL import Image
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
@@ -1586,9 +1613,22 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
 
 
 async def _download_video_with_limit(url: str, output_path: str, max_bytes: int) -> bool:
-    """Stream download a video file up to max_bytes. Abort and return False if exceeded or failed."""
+    """Stream download a video file up to max_bytes. Abort and return False if exceeded or failed. Supports local files."""
     if not url or max_bytes <= 0:
         return False
+    if os.path.isfile(url):
+        try:
+            sz = os.path.getsize(url)
+            if sz <= max_bytes:
+                shutil.copy2(url, output_path)
+                return True
+            else:
+                logger.info(f"Local video {url} exceeds limit ({sz} > {max_bytes} bytes), skipping")
+                return False
+        except Exception as e:
+            logger.warning(f"Failed to copy local video {url}: {e}")
+            return False
+
     if url.startswith('//'):
         url = 'https:' + url
     try:
@@ -1845,10 +1885,10 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         meta_parts = []
         if post.username:
             meta_parts.append(f"@{post.username}")
-        if post.published_date:
+        if post.published_date and isinstance(post.published_date, str):
             date_clean = post.published_date.replace("T", " ").split("+")[0]
             meta_parts.append(date_clean)
-        meta_text = " • ".join(meta_parts) if meta_parts else "Telegram Post"
+        meta_text = " • ".join(str(p) for p in meta_parts) if meta_parts else "Telegram Post"
 
         views_text = f"👁️ {post.views} views" if post.views else ""
 
@@ -2059,9 +2099,11 @@ async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional
 
 
 async def _download_image_url(url: str) -> Optional[str]:
-    """Download an image from a URL into a temporary file for Delta Chat relay."""
+    """Download an image from a URL or return existing local path for Delta Chat relay."""
     if not url:
         return None
+    if os.path.isfile(url):
+        return url
     if url.startswith('//'):
         url = 'https:' + url
     try:
@@ -2083,6 +2125,319 @@ async def _download_image_url(url: str) -> Optional[str]:
     except Exception as e:
         logger.debug(f"Failed to download image from {url}: {e}")
     return None
+
+
+def _rich_text_to_markdown(rt) -> str:
+    """Convert Telethon TypeRichText AST object to a Markdown formatted string."""
+    if rt is None:
+        return ""
+    name = type(rt).__name__
+    if name == 'TextEmpty':
+        return ""
+    if name == 'TextPlain':
+        return getattr(rt, 'text', '') or ""
+    if name == 'TextBold':
+        return f"**{_rich_text_to_markdown(getattr(rt, 'text', None))}**"
+    if name == 'TextItalic':
+        return f"*{_rich_text_to_markdown(getattr(rt, 'text', None))}*"
+    if name == 'TextUnderline':
+        return f"__{_rich_text_to_markdown(getattr(rt, 'text', None))}__"
+    if name == 'TextStrike':
+        return f"~{_rich_text_to_markdown(getattr(rt, 'text', None))}~"
+    if name == 'TextFixed':
+        return f"`{_rich_text_to_markdown(getattr(rt, 'text', None))}`"
+    if name == 'TextSpoiler':
+        return f"||{_rich_text_to_markdown(getattr(rt, 'text', None))}||"
+    if name in ('TextUrl', 'TextAutoUrl'):
+        url = getattr(rt, 'url', '') or ""
+        inner = _rich_text_to_markdown(getattr(rt, 'text', None))
+        return f"[{inner}]({url})" if url else inner
+    if name == 'TextEmail':
+        email = getattr(rt, 'email', '') or ""
+        inner = _rich_text_to_markdown(getattr(rt, 'text', None))
+        return f"[{inner}](mailto:{email})" if email else inner
+    if name == 'TextConcat':
+        texts = getattr(rt, 'texts', []) or []
+        return "".join(_rich_text_to_markdown(t) for t in texts)
+    if hasattr(rt, 'text'):
+        return _rich_text_to_markdown(getattr(rt, 'text', None))
+    return str(rt)
+
+
+def _rich_text_to_html(rt) -> str:
+    """Convert Telethon TypeRichText AST object to sanitized HTML for WebXDC."""
+    if rt is None:
+        return ""
+    name = type(rt).__name__
+    if name == 'TextEmpty':
+        return ""
+    if name == 'TextPlain':
+        return html.escape(getattr(rt, 'text', '') or "")
+    if name == 'TextBold':
+        return f"<b>{_rich_text_to_html(getattr(rt, 'text', None))}</b>"
+    if name == 'TextItalic':
+        return f"<i>{_rich_text_to_html(getattr(rt, 'text', None))}</i>"
+    if name == 'TextUnderline':
+        return f"<u>{_rich_text_to_html(getattr(rt, 'text', None))}</u>"
+    if name == 'TextStrike':
+        return f"<s>{_rich_text_to_html(getattr(rt, 'text', None))}</s>"
+    if name == 'TextFixed':
+        return f"<code>{_rich_text_to_html(getattr(rt, 'text', None))}</code>"
+    if name == 'TextSpoiler':
+        return f'<span class="spoiler">{_rich_text_to_html(getattr(rt, 'text', None))}</span>'
+    if name in ('TextUrl', 'TextAutoUrl'):
+        url = getattr(rt, 'url', '') or ""
+        inner = _rich_text_to_html(getattr(rt, 'text', None))
+        escaped_url = html.escape(url)
+        return f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">{inner}</a>' if url else inner
+    if name == 'TextEmail':
+        email = getattr(rt, 'email', '') or ""
+        inner = _rich_text_to_html(getattr(rt, 'text', None))
+        escaped_email = html.escape(email)
+        return f'<a href="mailto:{escaped_email}">{inner}</a>' if email else inner
+    if name == 'TextConcat':
+        texts = getattr(rt, 'texts', []) or []
+        return "".join(_rich_text_to_html(t) for t in texts)
+    if hasattr(rt, 'text'):
+        return _rich_text_to_html(getattr(rt, 'text', None))
+    return html.escape(str(rt))
+
+
+async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Optional[int] = None) -> Optional[TelegramRichPost]:
+    """Extract full rich post metadata from Telethon Message containing a RichMessage object."""
+    rich_msg = getattr(msg, 'rich_message', None)
+    if not rich_msg:
+        return None
+
+    try:
+        chat_username = getattr(msg.chat, 'username', '') if getattr(msg, 'chat', None) else ""
+        chat_title = getattr(msg.chat, 'title', '') if getattr(msg, 'chat', None) else ""
+        author_name = chat_title or (f"@{chat_username}" if chat_username else "Telegram")
+        post_id = getattr(msg, 'id', 0)
+        published_date = ""
+        msg_date = getattr(msg, 'date', None)
+        if msg_date and hasattr(msg_date, 'strftime') and type(msg_date).__name__ != 'MagicMock':
+            try:
+                published_date = str(msg_date.strftime("%b %d at %H:%M"))
+            except Exception:
+                published_date = ""
+
+        views = ""
+        msg_views = getattr(msg, 'views', None)
+        if msg_views is not None and type(msg_views).__name__ != 'MagicMock':
+            views = str(msg_views)
+
+        photos_map = {getattr(p, 'id', None): p for p in (getattr(rich_msg, 'photos', []) or []) if getattr(p, 'id', None)}
+        docs_map = {getattr(d, 'id', None): d for d in (getattr(rich_msg, 'documents', []) or []) if getattr(d, 'id', None)}
+
+        md_parts = []
+        htm_parts = []
+        image_urls = []
+        videos = []
+        downloaded_photo_ids = set()
+        downloaded_doc_ids = set()
+
+        blocks = getattr(rich_msg, 'blocks', []) or []
+        for b in blocks:
+            b_type = type(b).__name__
+            if b_type == 'PageBlockParagraph':
+                md = _rich_text_to_markdown(getattr(b, 'text', None))
+                htm = f"<p>{_rich_text_to_html(getattr(b, 'text', None))}</p>"
+                if md:
+                    md_parts.append(md)
+                if htm:
+                    htm_parts.append(htm)
+            elif b_type in ('PageBlockHeader', 'PageBlockHeading1', 'PageBlockHeading2', 'PageBlockHeading3', 'PageBlockTitle'):
+                md = f"### {_rich_text_to_markdown(getattr(b, 'text', None))}"
+                htm = f"<h3>{_rich_text_to_html(getattr(b, 'text', None))}</h3>"
+                if md:
+                    md_parts.append(md)
+                if htm:
+                    htm_parts.append(htm)
+            elif b_type in ('PageBlockSubheader', 'PageBlockSubtitle', 'PageBlockHeading4', 'PageBlockHeading5', 'PageBlockHeading6'):
+                md = f"#### {_rich_text_to_markdown(getattr(b, 'text', None))}"
+                htm = f"<h4>{_rich_text_to_html(getattr(b, 'text', None))}</h4>"
+                if md:
+                    md_parts.append(md)
+                if htm:
+                    htm_parts.append(htm)
+            elif b_type in ('PageBlockBlockquote', 'PageBlockPullquote'):
+                q_md = _rich_text_to_markdown(getattr(b, 'text', None))
+                q_htm = _rich_text_to_html(getattr(b, 'text', None))
+                if q_md:
+                    md_parts.append("\n".join(f"> {line}" for line in q_md.split("\n")))
+                if q_htm:
+                    htm_parts.append(f"<blockquote>{q_htm}</blockquote>")
+            elif b_type == 'PageBlockPreformatted':
+                lang = getattr(b, 'language', '') or ''
+                c_md = _rich_text_to_markdown(getattr(b, 'text', None))
+                c_htm = _rich_text_to_html(getattr(b, 'text', None))
+                md_parts.append(f"```{lang}\n{c_md}\n```")
+                htm_parts.append(f'<pre><code class="{lang}">{c_htm}</code></pre>')
+            elif b_type == 'PageBlockDivider':
+                md_parts.append("---")
+                htm_parts.append("<hr/>")
+            elif b_type == 'PageBlockList':
+                items = getattr(b, 'items', []) or []
+                l_md = []
+                l_htm = []
+                for item in items:
+                    if hasattr(item, 'text'):
+                        t_m = _rich_text_to_markdown(item.text)
+                        t_h = _rich_text_to_html(item.text)
+                        if t_m:
+                            l_md.append(f"- {t_m}")
+                        if t_h:
+                            l_htm.append(f"<li>{t_h}</li>")
+                if l_md:
+                    md_parts.append("\n".join(l_md))
+                if l_htm:
+                    htm_parts.append(f"<ul>{''.join(l_htm)}</ul>")
+            elif b_type == 'PageBlockOrderedList':
+                items = getattr(b, 'items', []) or []
+                start = getattr(b, 'start', 1) or 1
+                l_md = []
+                l_htm = []
+                for idx, item in enumerate(items, start=start):
+                    if hasattr(item, 'text'):
+                        t_m = _rich_text_to_markdown(item.text)
+                        t_h = _rich_text_to_html(item.text)
+                        if t_m:
+                            l_md.append(f"{idx}. {t_m}")
+                        if t_h:
+                            l_htm.append(f"<li>{t_h}</li>")
+                if l_md:
+                    md_parts.append("\n".join(l_md))
+                if l_htm:
+                    htm_parts.append(f"<ol>{''.join(l_htm)}</ol>")
+            elif b_type == 'PageBlockTable':
+                rows = getattr(b, 'rows', []) or []
+                t_md = []
+                t_htm = ['<div class="table-wrap"><table>']
+                for r in rows:
+                    cells = getattr(r, 'cells', []) or []
+                    r_md = []
+                    r_htm = ['<tr>']
+                    for c in cells:
+                        c_m = _rich_text_to_markdown(getattr(c, 'text', None))
+                        c_h = _rich_text_to_html(getattr(c, 'text', None))
+                        tag = 'th' if getattr(c, 'header', False) else 'td'
+                        r_md.append(c_m)
+                        r_htm.append(f"<{tag}>{c_h}</{tag}>")
+                    r_htm.append('</tr>')
+                    t_md.append("| " + " | ".join(r_md) + " |")
+                    t_htm.append("".join(r_htm))
+                t_htm.append('</table></div>')
+                if t_md:
+                    md_parts.append("\n".join(t_md))
+                htm_parts.append("".join(t_htm))
+            elif b_type == 'PageBlockPhoto':
+                photo_id = getattr(b, 'photo_id', None)
+                photo_obj = photos_map.get(photo_id)
+                if photo_obj and userbot_client:
+                    try:
+                        downloaded_path = await userbot_client.download_media(photo_obj)
+                        if downloaded_path and os.path.exists(downloaded_path):
+                            image_urls.append(downloaded_path)
+                            downloaded_photo_ids.add(photo_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to download inline photo {photo_id} in post {post_id}: {e}")
+                caption = getattr(b, 'caption', None)
+                if caption and hasattr(caption, 'text') and caption.text:
+                    c_m = _rich_text_to_markdown(caption.text)
+                    c_h = _rich_text_to_html(caption.text)
+                    if c_m:
+                        md_parts.append(f"*{c_m}*")
+                    if c_h:
+                        htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
+            elif b_type == 'PageBlockVideo':
+                video_id = getattr(b, 'video_id', None)
+                doc_obj = docs_map.get(video_id)
+                if doc_obj and userbot_client:
+                    doc_size = getattr(doc_obj, 'size', 0) or 0
+                    if 0 < doc_size <= TG_WEBXDC_VIDEO_MAX_BYTES:
+                        try:
+                            vid_path = await userbot_client.download_media(doc_obj)
+                            if vid_path and os.path.exists(vid_path):
+                                videos.append(TelegramRichVideo(
+                                    video_url=vid_path,
+                                    duration="",
+                                    is_playable=True,
+                                ))
+                                downloaded_doc_ids.add(video_id)
+                        except Exception as e:
+                            logger.warning(f"Failed to download inline video {video_id} in post {post_id}: {e}")
+                    else:
+                        videos.append(TelegramRichVideo(
+                            video_url="",
+                            duration="",
+                            is_playable=False,
+                            is_too_big=True,
+                        ))
+                caption = getattr(b, 'caption', None)
+                if caption and hasattr(caption, 'text') and caption.text:
+                    c_m = _rich_text_to_markdown(caption.text)
+                    c_h = _rich_text_to_html(caption.text)
+                    if c_m:
+                        md_parts.append(f"*{c_m}*")
+                    if c_h:
+                        htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
+
+        # Also download any photos/videos attached to rich_msg that were not explicitly referenced in blocks
+        for pid, pobj in photos_map.items():
+            if pid not in downloaded_photo_ids and userbot_client:
+                try:
+                    p_path = await userbot_client.download_media(pobj)
+                    if p_path and os.path.exists(p_path):
+                        image_urls.append(p_path)
+                        downloaded_photo_ids.add(pid)
+                except Exception as e:
+                    logger.warning(f"Failed to download remaining photo {pid} in post {post_id}: {e}")
+
+        text_markdown = "\n\n".join(p for p in md_parts if p).strip()
+        text_html = "\n".join(p for p in htm_parts if p).strip()
+        teaser = _make_teaser(text_markdown)
+
+        has_content = bool(text_markdown or image_urls or videos)
+        if not has_content:
+            return None
+
+        has_structured_blocks = any(
+            type(b).__name__ in (
+                'PageBlockHeader', 'PageBlockHeading1', 'PageBlockHeading2', 'PageBlockHeading3',
+                'PageBlockHeading4', 'PageBlockHeading5', 'PageBlockHeading6', 'PageBlockTitle',
+                'PageBlockSubheader', 'PageBlockSubtitle', 'PageBlockBlockquote', 'PageBlockPullquote',
+                'PageBlockPreformatted', 'PageBlockList', 'PageBlockOrderedList', 'PageBlockTable',
+                'PageBlockPhoto', 'PageBlockVideo'
+            )
+            for b in blocks
+        )
+        is_rich = bool(
+            has_structured_blocks or
+            len(image_urls) > 1 or
+            len(videos) > 0 or
+            '<table' in text_html or
+            len(text_markdown) > 500 or
+            (len(image_urls) >= 1 and len(text_markdown) > 200)
+        )
+
+        return TelegramRichPost(
+            username=chat_username or "",
+            post_id=post_id,
+            author_name=author_name,
+            text_html=text_html,
+            text_markdown=text_markdown,
+            teaser=teaser,
+            image_urls=image_urls,
+            videos=videos,
+            published_date=published_date,
+            views=views,
+            is_rich=is_rich,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to extract Telethon RichMessage: {e}", exc_info=True)
+        return None
+
 
 
 def _inline_links(text: str, entities) -> str:
@@ -7987,6 +8342,26 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     rich_post = None
     rich_mode = database.get_rich_mode()
 
+    # Native Telethon RichMessage support (Layer 229+)
+    rich_msg = getattr(msg, 'rich_message', None)
+    if rich_msg:
+        rich_post = await _extract_telethon_rich_message(msg, userbot_client, dc_chat_id=dc_chat_id)
+        if rich_post:
+            if not text and rich_post.text_markdown:
+                text = rich_post.text_markdown
+            has_rich_content = bool(rich_post.text_markdown.strip() or rich_post.image_urls or rich_post.videos)
+            if has_rich_content and rich_mode in ("webxdc", "both") and not is_edit:
+                tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
+                os.close(tmp_fd)
+                if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
+                    file_path = xdc_path
+                    clean_title = rich_post.author_name or (f"@{msg.chat.username}" if getattr(msg, 'chat', None) and getattr(msg.chat, 'username', None) else "Telegram")
+                    text = f"📰 **{clean_title}**\n\n{rich_post.teaser}" if rich_post.teaser else f"📰 **{clean_title}**"
+            elif rich_post.image_urls and not file_path:
+                file_path = rich_post.image_urls[0]
+            elif rich_post.videos and not file_path and rich_post.videos[0].video_url:
+                file_path = rich_post.videos[0].video_url
+
     # Extract media text and descriptions for Telethon media types
     if msg.media:
         m_type = type(msg.media).__name__
@@ -8089,7 +8464,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     if msg.chat and getattr(msg.chat, 'username', None):
         formatted_msg = (formatted_msg + f"\n\n🔗 t.me/{msg.chat.username}/{msg.id}").strip()
 
-    if not formatted_msg and not msg.media:
+    if not formatted_msg and not msg.media and not file_path:
         return
 
     chat_username = getattr(msg.chat, 'username', None) if getattr(msg, 'chat', None) else None

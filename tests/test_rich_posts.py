@@ -686,5 +686,233 @@ class TestRichPosts(unittest.TestCase):
         self.assertIn("open in Telegram to view", sent_data.text)
         self.assertIn("t.me/qwerty_live/8889", sent_data.text)
 
+    def test_rich_text_to_markdown_and_html(self):
+        try:
+            from telethon.tl import types as tl_types
+        except ImportError:
+            self.skipTest("Telethon not available")
+
+        t_bold = tl_types.TextBold(tl_types.TextPlain("Bold text"))
+        t_italic = tl_types.TextItalic(tl_types.TextPlain("Italic text"))
+        t_url = tl_types.TextUrl(text=tl_types.TextPlain("Link"), url="https://example.com", webpage_id=0)
+        t_spoiler = tl_types.TextSpoiler(tl_types.TextPlain("Secret"))
+        t_concat = tl_types.TextConcat([t_bold, tl_types.TextPlain(" and "), t_italic, tl_types.TextPlain(" with "), t_url, tl_types.TextPlain(" and "), t_spoiler])
+
+        md = bot._rich_text_to_markdown(t_concat)
+        self.assertIn("**Bold text**", md)
+        self.assertIn("*Italic text*", md)
+        self.assertIn("[Link](https://example.com)", md)
+        self.assertIn("||Secret||", md)
+
+        htm = bot._rich_text_to_html(t_concat)
+        self.assertIn("<b>Bold text</b>", htm)
+        self.assertIn("<i>Italic text</i>", htm)
+        self.assertIn('<a href="https://example.com"', htm)
+        self.assertIn('<span class="spoiler">Secret</span>', htm)
+
+    def test_extract_telethon_rich_message_blocks(self):
+        try:
+            from telethon.tl import types as tl_types
+        except ImportError:
+            self.skipTest("Telethon not available")
+
+        # Create dummy image on disk for mock download
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            if hasattr(Image, 'new'):
+                im = Image.new("RGB", (50, 50), color="blue")
+                im.save(f.name, format="PNG")
+            else:
+                f.write(b"dummy")
+            img_path = f.name
+
+        try:
+            p1 = tl_types.PageBlockParagraph(tl_types.TextPlain("Opening paragraph about operations."))
+            h1 = tl_types.PageBlockHeader(tl_types.TextBold(tl_types.TextPlain("Statistics Breakdown")))
+            photo_block = tl_types.PageBlockPhoto(photo_id=999, caption=tl_types.PageCaption(text=tl_types.TextPlain("Operation map"), credit=tl_types.TextEmpty()))
+            q1 = tl_types.PageBlockBlockquote(text=tl_types.TextPlain("Crucial insight quote."), caption=tl_types.TextEmpty())
+            l1 = tl_types.PageBlockList(items=[
+                tl_types.PageListItemText(text=tl_types.TextPlain("First target")),
+                tl_types.PageListItemText(text=tl_types.TextPlain("Second target")),
+            ])
+            p2 = tl_types.PageBlockParagraph(tl_types.TextPlain("Closing paragraph with summary."))
+
+            mock_photo = MagicMock()
+            mock_photo.id = 999
+            rich_msg = tl_types.RichMessage(
+                blocks=[p1, h1, photo_block, q1, l1, p2],
+                photos=[mock_photo],
+                documents=[]
+            )
+
+            mock_msg = MagicMock()
+            mock_msg.id = 3407
+            mock_msg.chat.username = "artjockey"
+            mock_msg.chat.title = "Artjockey Channel"
+            mock_msg.rich_message = rich_msg
+            mock_msg.date = None
+            mock_msg.views = 15000
+
+            mock_userbot = MagicMock()
+            mock_userbot.download_media = AsyncMock(return_value=img_path)
+
+            rich_post = asyncio.run(bot._extract_telethon_rich_message(mock_msg, mock_userbot))
+
+            self.assertIsNotNone(rich_post)
+            self.assertEqual(rich_post.post_id, 3407)
+            self.assertEqual(rich_post.username, "artjockey")
+            self.assertEqual(rich_post.author_name, "Artjockey Channel")
+            self.assertIn("Opening paragraph about operations.", rich_post.text_markdown)
+            self.assertIn("### **Statistics Breakdown**", rich_post.text_markdown)
+            self.assertIn("> Crucial insight quote.", rich_post.text_markdown)
+            self.assertIn("- First target", rich_post.text_markdown)
+            self.assertIn("- Second target", rich_post.text_markdown)
+            self.assertIn("Closing paragraph with summary.", rich_post.text_markdown)
+            self.assertIn("<p>Opening paragraph about operations.</p>", rich_post.text_html)
+            self.assertIn("<h3><b>Statistics Breakdown</b></h3>", rich_post.text_html)
+            self.assertIn("<blockquote>Crucial insight quote.</blockquote>", rich_post.text_html)
+            self.assertEqual(len(rich_post.image_urls), 1)
+            self.assertEqual(rich_post.image_urls[0], img_path)
+            self.assertTrue(rich_post.is_rich)
+        finally:
+            if os.path.exists(img_path):
+                try: os.unlink(img_path)
+                except: pass
+
+    def test_userbot_relay_rich_message_webxdc(self):
+        try:
+            from telethon.tl import types as tl_types
+        except ImportError:
+            self.skipTest("Telethon not available")
+
+        tg_channel_id = -100184218
+        dc_chat_id = 300
+        database.add_channel_by_id(tg_channel_id, dc_chat_id, username="artjockey")
+        database.set_rich_mode("webxdc")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            if hasattr(Image, 'new'):
+                im = Image.new("RGB", (60, 60), color="green")
+                im.save(f.name, format="PNG")
+            else:
+                f.write(b"dummy_img")
+            img_path = f.name
+
+        try:
+            p1 = tl_types.PageBlockParagraph(tl_types.TextPlain("Detailed text about strikes... " * 10))
+            photo_block = tl_types.PageBlockPhoto(photo_id=123, caption=tl_types.PageCaption(text=tl_types.TextEmpty(), credit=tl_types.TextEmpty()))
+            mock_photo = MagicMock()
+            mock_photo.id = 123
+            rich_msg = tl_types.RichMessage(
+                blocks=[p1, photo_block],
+                photos=[mock_photo],
+                documents=[]
+            )
+
+            mock_msg = MagicMock()
+            mock_msg.id = 3407
+            mock_msg.chat_id = tg_channel_id
+            mock_msg.chat.username = "artjockey"
+            mock_msg.chat.title = "artjockey"
+            mock_msg.grouped_id = None
+            mock_msg.media = MagicMock()
+            type(mock_msg.media).__name__ = "MessageMediaUnsupported"
+            mock_msg.rich_message = rich_msg
+            mock_msg.raw_text = ""
+            mock_msg.message = ""
+            mock_msg.text = ""
+            mock_msg.entities = []
+            mock_msg.is_channel = True
+            mock_msg.is_group = False
+
+            mock_dc_bot = MagicMock()
+            mock_dc_bot.rpc.send_msg.return_value = 112233
+            mock_userbot = MagicMock()
+            mock_userbot.is_connected.return_value = True
+            mock_userbot.download_media = AsyncMock(return_value=img_path)
+
+            with patch('bot.dc_bot_instance', mock_dc_bot), \
+                 patch('bot.dc_accid', 1), \
+                 patch('bot.userbot_client', mock_userbot):
+                asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg))
+
+            mock_dc_bot.rpc.send_msg.assert_called_once()
+            sent_data = mock_dc_bot.rpc.send_msg.call_args[0][2]
+            self.assertIsNotNone(sent_data.file)
+            self.assertTrue(sent_data.file.endswith(".xdc"))
+            self.assertIn("artjockey", sent_data.text)
+        finally:
+            if os.path.exists(img_path):
+                try: os.unlink(img_path)
+                except: pass
+
+    def test_userbot_relay_rich_message_split_mode(self):
+        try:
+            from telethon.tl import types as tl_types
+        except ImportError:
+            self.skipTest("Telethon not available")
+
+        tg_channel_id = -100184218
+        dc_chat_id = 300
+        database.add_channel_by_id(tg_channel_id, dc_chat_id, username="artjockey")
+        database.set_rich_mode("split")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            if hasattr(Image, 'new'):
+                im = Image.new("RGB", (60, 60), color="yellow")
+                im.save(f.name, format="PNG")
+            else:
+                f.write(b"dummy_img")
+            img_path = f.name
+
+        try:
+            p1 = tl_types.PageBlockParagraph(tl_types.TextPlain("Direct telegram text without WebXDC."))
+            photo_block = tl_types.PageBlockPhoto(photo_id=456, caption=tl_types.PageCaption(text=tl_types.TextEmpty(), credit=tl_types.TextEmpty()))
+            mock_photo = MagicMock()
+            mock_photo.id = 456
+            rich_msg = tl_types.RichMessage(
+                blocks=[p1, photo_block],
+                photos=[mock_photo],
+                documents=[]
+            )
+
+            mock_msg = MagicMock()
+            mock_msg.id = 3407
+            mock_msg.chat_id = tg_channel_id
+            mock_msg.chat.username = "artjockey"
+            mock_msg.chat.title = "artjockey"
+            mock_msg.grouped_id = None
+            mock_msg.media = MagicMock()
+            type(mock_msg.media).__name__ = "MessageMediaUnsupported"
+            mock_msg.rich_message = rich_msg
+            mock_msg.raw_text = ""
+            mock_msg.message = ""
+            mock_msg.text = ""
+            mock_msg.entities = []
+            mock_msg.is_channel = True
+            mock_msg.is_group = False
+
+            mock_dc_bot = MagicMock()
+            mock_dc_bot.rpc.send_msg.return_value = 112234
+            mock_userbot = MagicMock()
+            mock_userbot.is_connected.return_value = True
+            mock_userbot.download_media = AsyncMock(return_value=img_path)
+
+            with patch('bot.dc_bot_instance', mock_dc_bot), \
+                 patch('bot.dc_accid', 1), \
+                 patch('bot.userbot_client', mock_userbot):
+                asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg))
+
+            mock_dc_bot.rpc.send_msg.assert_called()
+            sent_data = mock_dc_bot.rpc.send_msg.call_args_list[0][0][2]
+            # Should have sent image file and the actual text (not fallback)
+            self.assertEqual(sent_data.file, img_path)
+            self.assertIn("Direct telegram text without WebXDC.", sent_data.text)
+            self.assertNotIn("unsupported media", sent_data.text)
+        finally:
+            if os.path.exists(img_path):
+                try: os.unlink(img_path)
+                except: pass
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -2,6 +2,6 @@ deltabot-cli==8.1.2
 deltachat2[full]<1.0.0
 python-telegram-bot==22.7
 qrcode==7.4.2
-telethon==1.36.0
+telethon>=1.45.0
 Pillow>=10.0.0
 httpx>=0.25.0

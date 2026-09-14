@@ -1,3 +1,20 @@
+## [2.21.0] - 2026-09-14
+- **Native Telegram RichMessage & Inline Media Support**:
+  - Upgraded `telethon` dependency to `>=1.45.0` (raising the MTProto protocol layer to Layer 229). This unlocks native support for Telegram's Rich Text Editor and inline media messages without falling back to MTProto's downgraded `MessageMediaUnsupported` placeholder.
+  - Implemented `TypeRichText` decoders (`_rich_text_to_markdown` and `_rich_text_to_html`) supporting formatted text components: `TextBold`, `TextItalic`, `TextUnderline`, `TextStrike`, `TextFixed`, `TextSpoiler`, `TextUrl`, and `TextConcat`.
+  - Added native block parser `_extract_telethon_rich_message` to extract and format `PageBlock` structures into rich post content:
+    - `PageBlockParagraph` for text paragraphs.
+    - `PageBlockHeader`, `PageBlockSubheader`, and `PageBlockHeading1`..`6` for hierarchical section headings.
+    - `PageBlockBlockquote` and `PageBlockPullquote` for blockquotes.
+    - `PageBlockPreformatted` for code blocks with language highlighting.
+    - `PageBlockList` and `PageBlockOrderedList` for bulleted and numbered lists.
+    - `PageBlockDivider` for thematic breaks.
+    - `PageBlockTable` for tables with wrapped layout.
+    - `PageBlockPhoto` and `PageBlockVideo` for inline media downloaded directly via Telethon MTProto client without relying on Telegram's web widget.
+  - Extended `_download_image_to_file`, `_download_video_with_limit`, and `_download_image_url` to seamlessly handle local file paths downloaded by Telethon.
+  - Seamlessly relayed `RichMessage` posts via WebXDC apps (with interleaved text and embedded images) in `webxdc` mode, or as photo messages with full formatted captions in `split` / standard mode.
+  - Added full test coverage for `TypeRichText` AST formatting, `RichMessage` block extraction, and Userbot relay in both WebXDC and split modes.
+
 ## [2.20.2] - 2026-09-11
 - **Prevent Empty WebXDC Applications on Unsupported Media**:
   - Added strict displayable content check (`has_displayable_content`) to `_package_tg_post_webxdc`: immediately rejects creating WebXDC packages when posts contain 0 text, 0 images, and 0 videos.
