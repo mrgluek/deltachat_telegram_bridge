@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.21.0"
+VERSION = "2.21.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2184,7 +2184,8 @@ def _rich_text_to_html(rt) -> str:
     if name == 'TextFixed':
         return f"<code>{_rich_text_to_html(getattr(rt, 'text', None))}</code>"
     if name == 'TextSpoiler':
-        return f'<span class="spoiler">{_rich_text_to_html(getattr(rt, 'text', None))}</span>'
+        inner = _rich_text_to_html(getattr(rt, 'text', None))
+        return f'<span class="spoiler">{inner}</span>'
     if name in ('TextUrl', 'TextAutoUrl'):
         url = getattr(rt, 'url', '') or ""
         inner = _rich_text_to_html(getattr(rt, 'text', None))

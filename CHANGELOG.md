@@ -1,3 +1,7 @@
+## [2.21.1] - 2026-09-14
+- **Fix SyntaxError on Python < 3.12**:
+  - Fixed nested single quote within single-quoted f-string in `_rich_text_to_html` (`TextSpoiler` handler) to maintain backward compatibility with Python 3.9, 3.10, and 3.11 runtimes in Docker containers.
+
 ## [2.21.0] - 2026-09-14
 - **Native Telegram RichMessage & Inline Media Support**:
   - Upgraded `telethon` dependency to `>=1.45.0` (raising the MTProto protocol layer to Layer 229). This unlocks native support for Telegram's Rich Text Editor and inline media messages without falling back to MTProto's downgraded `MessageMediaUnsupported` placeholder.
