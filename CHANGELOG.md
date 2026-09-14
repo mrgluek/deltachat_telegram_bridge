@@ -1,3 +1,11 @@
+## [2.21.4] - 2026-09-14
+- **Clean In-Place Post Edits for Broadcast Channels**:
+  - Restored `send_edit_request` in-place message updates for Delta Chat broadcast channels and groups. When an existing post is edited in Telegram, the message text in Delta Chat is updated in-place on the existing message bubble with native Delta Chat `Edited` status.
+  - Stripped `✏️ [Edited]` prefix when editing in-place to prevent nested blockquotes or clutter on edited posts.
+  - Guaranteed zero duplicate messages: for existing messages in broadcast channels, if in-place edit request fails or cannot be applied (e.g. attachment modification), the bridge gracefully logs a warning, updates the content hash and watermark, and **never** falls through to `send_msg`.
+  - Optimized media handling during edits: skips re-downloading media files or re-packaging WebXDC when editing existing posts in-place, conserving network bandwidth and CPU.
+  - Added unit test suite covering in-place broadcast channel edits, clean text assertions, and failure resilience.
+
 ## [2.21.3] - 2026-09-14
 - **Channel Post De-duplication & Broadcast Channel Edit Suppression**:
   - Normalized Telegram channel and chat IDs with and without `-100` prefix across all database queries (`_normalize_tg_id_variants`) and memory caches. Resolves ID representation mismatches between Telethon (`3408...`), Telegram Bot API (`-1003408...`), and database records.

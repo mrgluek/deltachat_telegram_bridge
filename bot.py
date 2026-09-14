@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.21.3"
+VERSION = "2.21.4"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -7119,11 +7119,17 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     try:
         old_dc_msg_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
         if old_dc_msg_id:
-            # Broadcast channels are email lists in DC; skip sending edit emails/requests to avoid quoting/spamming
-            database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
-            _update_cached_last_msg_id(tg_channel_id, post.message_id)
-            logger.info(f"Bot API: Skipping edit relay for broadcast channel post {post.message_id} (already relayed as dc_msg_id={old_dc_msg_id}). Updated content hash and watermark.")
-            return
+            try:
+                dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
+                database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
+                _update_cached_last_msg_id(tg_channel_id, post.message_id)
+                logger.info(f"Bot API: In-place edited broadcast channel post {post.message_id} (dc_msg_id={old_dc_msg_id}).")
+                return
+            except Exception as edit_err:
+                logger.warning(f"Bot API: In-place edit failed for post {post.message_id} (dc_msg_id={old_dc_msg_id}): {edit_err}")
+                database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
+                _update_cached_last_msg_id(tg_channel_id, post.message_id)
+                return
 
         # If not relayed yet, relay cleanly as a fresh post (without [Edited] prefix)
         msg_data = MsgData(text=formatted_msg)
@@ -8509,6 +8515,25 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
 
     clean_msg = _truncate(formatted_msg, DC_MAX_MSG_LEN)
     is_broadcast_channel = bool(database.get_channel_by_tg_id(tg_channel_id) or database.get_channel_by_dc_chat_id(dc_chat_id) or (getattr(msg, 'is_channel', False) and not getattr(msg, 'is_group', False)))
+
+    old_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id) if is_edit else None
+    if is_edit and old_dc_msg_id:
+        try:
+            dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, clean_msg)
+            c_hash = _get_content_hash(msg)
+            database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+            _update_cached_last_msg_id(tg_channel_id, msg.id)
+            logger.info(f"Userbot: In-place edited {'broadcast channel ' if is_broadcast_channel else ''}post {old_dc_msg_id} for TG msg {msg.id} in DC chat {dc_chat_id}")
+            return
+        except Exception as edit_err:
+            logger.warning(f"Userbot: Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
+            if is_broadcast_channel:
+                # In broadcast channels, NEVER fall back to sending a new message to avoid duplicates
+                c_hash = _get_content_hash(msg)
+                database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
+                _update_cached_last_msg_id(tg_channel_id, msg.id)
+                return
+
     if is_edit and not is_broadcast_channel:
         formatted_msg = f"✏️ [Edited]\n\n{clean_msg}"
     else:
@@ -8605,36 +8630,6 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                     elif hasattr(sender, 'title'):
                         display_author = sender.title
 
-        # For edits: attempt in-place edit request for group chats
-        if is_edit:
-            old_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id)
-            if is_broadcast_channel:
-                if old_dc_msg_id:
-                    # In Delta Chat, broadcast channels are mailing lists where send_edit_request sends a quoted reply email.
-                    # Since the post was already delivered to channel subscribers, do not send duplicate messages or edit requests.
-                    c_hash = _get_content_hash(msg)
-                    database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
-                    _update_cached_last_msg_id(tg_channel_id, msg.id)
-                    logger.info(f"Userbot: Skipping edit notification for broadcast channel post {msg.id} (already relayed as dc_msg_id={old_dc_msg_id}). Updated content hash and watermark.")
-                    return
-                # If old_dc_msg_id is None, this post was never relayed before; relay cleanly as a fresh post
-            else:
-                if old_dc_msg_id:
-                    try:
-                        old_msg = dc_bot_instance.rpc.get_message(dc_accid, old_dc_msg_id)
-                        old_text = old_msg.get('text') if isinstance(old_msg, dict) else getattr(old_msg, 'text', '')
-                        is_info = old_msg.get('isInfo') if isinstance(old_msg, dict) else getattr(old_msg, 'isInfo', False)
-                        has_html = old_msg.get('hasHtml') if isinstance(old_msg, dict) else getattr(old_msg, 'hasHtml', False)
-                        view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
-
-                        if old_text and not is_info and not has_html and view_type != 'Call' and not file_path:
-                            dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, clean_msg)
-                            c_hash = _get_content_hash(msg)
-                            database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
-                            logger.info(f"Userbot: Edited post {old_dc_msg_id} in-place for TG msg {msg.id} in DC chat {dc_chat_id}")
-                            return
-                    except Exception as edit_err:
-                        logger.debug(f"Userbot: Could not edit old DC msg {old_dc_msg_id} in-place: {edit_err}")
 
         if display_author:
             msg_data.override_sender_name = display_author
@@ -8884,16 +8879,11 @@ async def _process_userbot_event_internal(event, is_edit=False):
         # Content hasn't changed, ignore metadata update (reactions, views)
         return
 
-    # For broadcast channel edits: avoid sending duplicate/quoted edit emails in DC broadcast channels
+    # For broadcast channel edits: if post was never relayed to DC before, relay cleanly as a fresh post
     is_broadcast_channel = bool(database.get_channel_by_tg_id(tg_channel_id) or database.get_channel_by_dc_chat_id(dc_chat_id) or (getattr(msg, 'is_channel', False) and not getattr(msg, 'is_group', False)))
     if is_edit and is_broadcast_channel:
         existing_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id)
-        if existing_dc_msg_id:
-            database.save_message_map(existing_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=new_hash)
-            _update_cached_last_msg_id(tg_channel_id, msg.id)
-            logger.info(f"USERBOT: Skipping edit relay for broadcast channel post {msg.id} (already relayed as dc_msg_id={existing_dc_msg_id}). Updated content hash and watermark.")
-            return
-        else:
+        if not existing_dc_msg_id:
             # Post was never relayed to DC before; relay cleanly as a fresh post without [Edited]
             is_edit = False
 

@@ -64,10 +64,12 @@ class TestTelegramBridge(unittest.TestCase):
         database.init_db()
         with bot._last_msg_id_cache_lock:
             bot._last_msg_id_cache.clear()
+        bot._edit_timestamps.clear()
 
     def tearDown(self):
         with bot._last_msg_id_cache_lock:
             bot._last_msg_id_cache.clear()
+        bot._edit_timestamps.clear()
         # Clean up database files
         if os.path.exists(TEST_DB):
             try:
@@ -999,7 +1001,7 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
-    def test_userbot_edit_broadcast_channel_suppressed(self):
+    def test_userbot_edit_broadcast_channel_in_place(self):
         database.add_channel_by_id(tg_channel_id=-100555, dc_chat_id=123, username="test_ch")
         database.save_message_map(dc_msg_id=777, dc_chat_id=123, tg_msg_id=544, tg_chat_id=-100555, content_hash="hash1")
 
@@ -1026,10 +1028,56 @@ class TestTelegramBridge(unittest.TestCase):
 
             asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg, is_edit=True))
 
-            # Broadcast channel must NOT call send_edit_request or send_msg
-            mock_dc_bot.rpc.send_edit_request.assert_not_called()
+            # Broadcast channel must call send_edit_request in-place with clean text
+            mock_dc_bot.rpc.send_edit_request.assert_called_once()
+            call_args = mock_dc_bot.rpc.send_edit_request.call_args
+            self.assertEqual(call_args[0][0], 1)
+            self.assertEqual(call_args[0][1], 777)
+            self.assertIn("НОВЫЙ ТЕКСТ", call_args[0][2])
+            self.assertNotIn("✏️ [Edited]", call_args[0][2])
+
+            # Must NOT send duplicate new message
             mock_dc_bot.rpc.send_msg.assert_not_called()
             # Watermark must be advanced
+            self.assertEqual(bot._get_cached_last_msg_id(-100555), 544)
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
+    def test_userbot_edit_broadcast_channel_in_place_failure_does_not_resend(self):
+        database.add_channel_by_id(tg_channel_id=-100555, dc_chat_id=123, username="test_ch")
+        database.save_message_map(dc_msg_id=777, dc_chat_id=123, tg_msg_id=544, tg_chat_id=-100555, content_hash="hash1")
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.send_edit_request.side_effect = Exception("DC RPC error")
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100555
+            mock_msg.id = 544
+            mock_msg.message = "НОВЫЙ ТЕКСТ"
+            mock_msg.media = None
+            mock_msg.entities = []
+            mock_msg.is_channel = True
+            mock_msg.is_group = False
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg, is_edit=True))
+
+            # Attempted send_edit_request
+            mock_dc_bot.rpc.send_edit_request.assert_called_once()
+            # Must NOT fall through to send_msg
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            # Watermark must still be advanced
             self.assertEqual(bot._get_cached_last_msg_id(-100555), 544)
         finally:
             bot.userbot_client = orig_ub
@@ -1341,7 +1389,7 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
-    def test_userbot_event_broadcast_channel_edit_skips_relay(self):
+    def test_userbot_event_broadcast_channel_edit_in_place(self):
         ch_id = -10012345
         dc_chat_id = 700
         database.add_channel_by_id(ch_id, dc_chat_id, username="test_dedup_ch")
@@ -1362,6 +1410,7 @@ class TestTelegramBridge(unittest.TestCase):
             mock_event = MagicMock()
             mock_event.message.chat_id = ch_id
             mock_event.message.id = 3409
+            mock_event.message.message = "Edited text"
             mock_event.message.text = "Edited text"
             mock_event.message.media = None
             mock_event.message.out = False
@@ -1371,9 +1420,9 @@ class TestTelegramBridge(unittest.TestCase):
 
             asyncio.run(bot._process_userbot_event_internal(mock_event, is_edit=True))
 
-            # Must NOT send new message or edit request to broadcast channel
+            # Must call in-place send_edit_request, NOT send_msg
+            mock_dc_bot.rpc.send_edit_request.assert_called_once()
             mock_dc_bot.rpc.send_msg.assert_not_called()
-            mock_dc_bot.rpc.send_edit_request.assert_not_called()
             # Watermark must be at least 3409
             self.assertEqual(bot._get_cached_last_msg_id(ch_id), 3409)
             # Hash must be updated
