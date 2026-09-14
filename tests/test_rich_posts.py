@@ -463,7 +463,7 @@ class TestRichPosts(unittest.TestCase):
 
                 # Overflow videos have preview card and Telegram link button
                 self.assertIn('video-overflow-card', html_doc)
-                self.assertIn('Смотреть все видео в Telegram ↗', html_doc)
+                self.assertIn('View all videos in Telegram ↗', html_doc)
                 self.assertIn('https://t.me/chtddd/96722', html_doc)
         finally:
             if os.path.exists(xdc_dest):
@@ -481,7 +481,7 @@ class TestRichPosts(unittest.TestCase):
             tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
             os.close(tmp_fd)
             try:
-                ok = asyncio.run(bot._download_video_with_limit("https://example.com/large.mp4", tmp_file, max_bytes=20 * 1024 * 1024))
+                ok = asyncio.run(bot._download_video_with_limit("https://cdn-telegram.org/large.mp4", tmp_file, max_bytes=20 * 1024 * 1024))
                 self.assertFalse(ok)
             finally:
                 if os.path.exists(tmp_file):
@@ -510,13 +510,25 @@ class TestRichPosts(unittest.TestCase):
             os.close(tmp_fd)
             try:
                 # Limit is 6 MB, stream produces 10 MB
-                ok = asyncio.run(bot._download_video_with_limit("https://example.com/stream.mp4", tmp_file, max_bytes=6 * 1024 * 1024))
+                ok = asyncio.run(bot._download_video_with_limit("https://cdn-telegram.org/stream.mp4", tmp_file, max_bytes=6 * 1024 * 1024))
                 self.assertFalse(ok)
                 self.assertFalse(os.path.exists(tmp_file))
             finally:
                 if os.path.exists(tmp_file):
                     try: os.unlink(tmp_file)
                     except: pass
+
+        # 3. Reject untrusted host via SSRF guard
+        tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
+        os.close(tmp_fd)
+        try:
+            ok = asyncio.run(bot._download_video_with_limit("https://malicious-host.com/evil.mp4", tmp_file, max_bytes=10 * 1024 * 1024))
+            self.assertFalse(ok)
+            self.assertFalse(os.path.exists(tmp_file))
+        finally:
+            if os.path.exists(tmp_file):
+                try: os.unlink(tmp_file)
+                except: pass
 
     def test_userbot_relay_album_maps_all_post_ids(self):
         tg_channel_id = -100888999

@@ -7,13 +7,57 @@ from typing import Optional
 
 DB_PATH = os.getenv("DB_PATH", "bridge.db")
 _lock = threading.Lock()
+_shared_conn: Optional[sqlite3.Connection] = None
+_shared_db_path: Optional[str] = None
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+class _SharedConnectionProxy:
+    """Proxy wrapping the shared sqlite3 connection so conn.close() is a no-op."""
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def close(self):
+        # Do not close underlying shared connection
+        pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        if name == "_conn":
+            super().__setattr__(name, value)
+        else:
+            setattr(self._conn, name, value)
+
+def _connect() -> _SharedConnectionProxy:
+    global _shared_conn, _shared_db_path
+    if _shared_conn is not None:
+        if _shared_db_path != DB_PATH or (DB_PATH != ":memory:" and not os.path.exists(DB_PATH)):
+            try:
+                _shared_conn.close()
+            except Exception:
+                pass
+            _shared_conn = None
+
+    if _shared_conn is None:
+        conn = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        _shared_conn = conn
+        _shared_db_path = DB_PATH
+    return _SharedConnectionProxy(_shared_conn)
+
+def close_db():
+    """Explicitly close the shared database connection (for tests or clean shutdown)."""
+    global _shared_conn, _shared_db_path
+    with _lock:
+        if _shared_conn is not None:
+            try:
+                _shared_conn.close()
+            except Exception:
+                pass
+            _shared_conn = None
+            _shared_db_path = None
 
 def init_db():
     with _lock:

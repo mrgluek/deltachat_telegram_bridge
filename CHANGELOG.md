@@ -1,3 +1,24 @@
+## [2.22.0] - 2026-09-14
+- **Security & Authorization Hardening**:
+  - Closed fail-open authorization vulnerabilities in `/id`, `/bridge`, `/unbridge`, and channel administrative commands. Permission checks now strictly fail-closed when API lookups fail or user permissions cannot be verified.
+  - Restricted Telegram `/bridge`, `/unbridge`, and channel management to private chats with the configured bot owner, disallowing unauthorized configuration attempts in private chats when `admin_tg_id` is unset.
+  - Masked internal technical IDs in channel addition confirmation messages and sanitized exception messages returned to users across channel bridging and catchup commands.
+  - Hardened WebXDC HTML sanitizer (`_clean_html_for_webxdc`): disarmed `iframe`, `object`, `embed`, and `applet` tags, stripped inline event handlers (`on*`), and blocked dangerous URI schemes (`javascript:`, `data:`, `vbscript:`).
+  - Added SSRF protection (`_is_safe_telegram_url`) for remote media downloads in `_download_image_to_file` and `_download_video_with_limit`, restricting remote targets to verified Telegram and CDN domains.
+  - Added permission validation for `/userbotjoin` and `/userbotsync` commands, preventing non-admins from triggering background syncs.
+- **Performance & Concurrency Optimization**:
+  - Implemented persistent SQLite connection management with thread safety (`_SharedConnectionProxy`) to eliminate expensive per-query file re-opening and lock contention across high-throughput operations.
+  - Replaced unthrottled thread creation in `AdminLogHandler` with a dedicated asynchronous queue worker and 60-second duplicate message TTL cache, preventing thread exhaustion during error storms.
+  - Pre-compiled message filter patterns into a unified case-insensitive regular expression (`_filter_regex`) for O(1) keyword filtering.
+  - Added in-memory channel ID caching (`_get_cached_dc_channel_chat_id`) with thread-safe invalidation to reduce database reads on incoming posts and edits.
+  - Offloaded blocking Delta Chat JSON-RPC calls (`send_msg`, `send_edit_request`, `send_reaction`) inside `async` handlers to worker threads via `asyncio.to_thread`, keeping the asyncio event loop responsive.
+- **UI/UX & Localization**:
+  - Translated Russian WebXDC video overflow button text to English: «View all videos in Telegram ↗».
+  - Cleaned up `/help` command output in Delta Chat: removed duplicate `/catchup` documentation, added `/locupdate` documentation, and clarified private chat command requirements.
+  - Truncated long channel titles in `/channels` listings on both Delta Chat and Telegram sides to 40 characters to prevent message layout wrapping.
+  - Standardized feedback emoji in `/resilient` disabled response to `ℹ️`.
+  - Added completion notifications when `/userbotsync` finishes synchronizing channels.
+
 ## [2.21.4] - 2026-09-14
 - **Clean In-Place Post Edits for Broadcast Channels**:
   - Restored `send_edit_request` in-place message updates for Delta Chat broadcast channels and groups. When an existing post is edited in Telegram, the message text in Delta Chat is updated in-place on the existing message bubble with native Delta Chat `Edited` status.

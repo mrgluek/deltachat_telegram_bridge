@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import hashlib
 import zipfile
 import shutil
+import queue
 
 from deltachat2 import EventType, MsgData, SystemMessageType, events
 from deltabot_cli import BotCli
@@ -200,10 +201,51 @@ except Exception as _patch_err:
 
 _admin_dc_chat_id_cache = None
 _admin_dc_chat_id_lock = threading.Lock()
+_admin_dc_queue = queue.Queue(maxsize=100)
+_admin_dc_worker_started = False
+_admin_dc_worker_lock = threading.Lock()
+
+_admin_cached_at = 0.0
+_cached_admin_tg_id = None
+_cached_admin_dc_email = None
+
+def _get_cached_admin_targets() -> tuple[Optional[str], Optional[str]]:
+    global _admin_cached_at, _cached_admin_tg_id, _cached_admin_dc_email
+    now = time.time()
+    if now - _admin_cached_at > 60.0:
+        try:
+            _cached_admin_tg_id = database.get_config("admin_tg_id")
+            _cached_admin_dc_email = database.get_config("admin_dc_email")
+            _admin_cached_at = now
+        except Exception:
+            pass
+    return _cached_admin_tg_id, _cached_admin_dc_email
+
+def _admin_dc_worker_loop():
+    while True:
+        try:
+            text = _admin_dc_queue.get()
+            _send_admin_dc_message_bg(text)
+        except Exception:
+            pass
+        finally:
+            _admin_dc_queue.task_done()
+
+def _enqueue_admin_dc_message(text: str):
+    global _admin_dc_worker_started
+    with _admin_dc_worker_lock:
+        if not _admin_dc_worker_started:
+            t = threading.Thread(target=_admin_dc_worker_loop, daemon=True, name="AdminDCLogWorker")
+            t.start()
+            _admin_dc_worker_started = True
+    try:
+        _admin_dc_queue.put_nowait(text)
+    except queue.Full:
+        pass  # Drop if queue is full during error storms
 
 def _send_admin_dc_message_bg(text: str):
     global _admin_dc_chat_id_cache, dc_bot_instance, dc_accid
-    admin_dc_email = database.get_config("admin_dc_email")
+    _, admin_dc_email = _get_cached_admin_targets()
     if not (admin_dc_email and dc_bot_instance and dc_accid):
         return
 
@@ -262,8 +304,9 @@ class AdminLogHandler(logging.Handler):
             local_dc_bot = dc_bot_instance
             local_dc_accid = dc_accid
             
+            admin_tg_id, admin_dc_email = _get_cached_admin_targets()
+
             # Send to TG
-            admin_tg_id = database.get_config("admin_tg_id")
             if admin_tg_id and local_tg_app and local_main_loop:
                 try:
                     tg_id = int(admin_tg_id)
@@ -275,11 +318,10 @@ class AdminLogHandler(logging.Handler):
                 except Exception:
                     pass
 
-            # Send to DC (offloaded to non-blocking background thread to prevent JSON-RPC pipe deadlocks)
-            admin_dc_email = database.get_config("admin_dc_email")
+            # Send to DC (offloaded to persistent bounded queue worker to prevent thread exhaustion)
             if admin_dc_email and local_dc_bot and local_dc_accid:
                 dc_msg_text = f"⚠️ Bot Error Log\n\n{_truncate(log_entry, DC_MAX_MSG_LEN - 100)}"
-                threading.Thread(target=_send_admin_dc_message_bg, args=(dc_msg_text,), daemon=True).start()
+                _enqueue_admin_dc_message(dc_msg_text)
         finally:
             self._is_emitting.flag = False
 
@@ -425,7 +467,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.21.4"
+VERSION = "2.22.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -439,31 +481,69 @@ def _custom_unraisablehook(unraisable):
 
 sys.unraisablehook = _custom_unraisablehook
 
-# In-memory message filter cache
-_filter_cache = []
+# In-memory message filter cache (compiled regex for O(1) matching)
+_filter_cache: list[str] = []
+_filter_regex: Optional[re.Pattern] = None
 _filter_cache_lock = threading.Lock()
 
 def _reload_filter_cache():
-    """Reload active filter patterns into memory."""
-    global _filter_cache
+    """Reload active filter patterns into memory and compile into a unified regex."""
+    global _filter_cache, _filter_regex
     with _filter_cache_lock:
         try:
-            _filter_cache = [p.lower() for p in database.get_all_filter_patterns()]
+            patterns = database.get_all_filter_patterns()
+            _filter_cache = [p.lower() for p in patterns]
+            if _filter_cache:
+                sorted_pats = sorted(_filter_cache, key=len, reverse=True)
+                escaped = [re.escape(p) for p in sorted_pats]
+                _filter_regex = re.compile("|".join(escaped), re.IGNORECASE)
+            else:
+                _filter_regex = None
         except Exception as e:
             logger.error(f"Failed to reload filter cache: {e}")
 
 _reload_filter_cache()
 
 def is_text_filtered(text: str | None) -> tuple[bool, str | None]:
-    """Check if text contains any configured filter pattern (case-insensitive)."""
+    """Check if text contains any configured filter pattern (case-insensitive) via compiled regex."""
     if not text:
         return False, None
-    lower_text = text.lower()
     with _filter_cache_lock:
-        for pat in _filter_cache:
-            if pat in lower_text:
-                return True, pat
+        regex = _filter_regex
+    if not regex:
+        return False, None
+    m = regex.search(text)
+    if m:
+        return True, m.group(0).lower()
     return False, None
+
+# In-memory channel ID cache to reduce DB queries on incoming posts
+_tg_channel_dc_id_cache: dict[int, int] = {}
+_tg_channel_dc_id_lock = threading.Lock()
+
+def _get_cached_dc_channel_chat_id(tg_channel_id: int) -> int | None:
+    v1, v2 = database._normalize_tg_id_variants(tg_channel_id)
+    with _tg_channel_dc_id_lock:
+        if v1 in _tg_channel_dc_id_cache:
+            return _tg_channel_dc_id_cache[v1]
+        if v2 in _tg_channel_dc_id_cache:
+            return _tg_channel_dc_id_cache[v2]
+    
+    dc_id = database.get_dc_channel_chat_id(tg_channel_id)
+    if dc_id:
+        with _tg_channel_dc_id_lock:
+            _tg_channel_dc_id_cache[v1] = dc_id
+            _tg_channel_dc_id_cache[v2] = dc_id
+    return dc_id
+
+def _invalidate_dc_channel_cache(tg_channel_id: Optional[int] = None):
+    with _tg_channel_dc_id_lock:
+        if tg_channel_id is None:
+            _tg_channel_dc_id_cache.clear()
+        else:
+            v1, v2 = database._normalize_tg_id_variants(tg_channel_id)
+            _tg_channel_dc_id_cache.pop(v1, None)
+            _tg_channel_dc_id_cache.pop(v2, None)
 
 
 
@@ -1554,18 +1634,51 @@ def _make_teaser(text: str, max_len: int = 280) -> str:
     return truncated.strip() + "…"
 
 
+def _is_safe_telegram_url(url: str) -> bool:
+    """Validate that remote URL uses http(s) and targets legitimate Telegram/CDN hosts."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return False
+        hostname = (p.hostname or "").lower()
+        if not hostname:
+            return False
+        if hostname in ("localhost", "127.0.0.1", "::1") or hostname.endswith((".local", ".internal")):
+            return False
+        allowed_suffixes = (
+            "t.me", "telegram.me", "telegram.org",
+            "telesco.pe", "cdn-telegram.org", "stel.com"
+        )
+        return any(hostname == s or hostname.endswith("." + s) for s in allowed_suffixes)
+    except Exception:
+        return False
+
+
 def _clean_html_for_webxdc(raw_html: str) -> str:
     """Clean and normalize HTML for inclusion inside WebXDC application."""
     if not raw_html:
         return ""
+    # Strip script and embed elements
     cleaned = re.sub(r'<script[^>]*>.*?</script>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'<(?:iframe|object|embed|applet)[^>]*>.*?</(?:iframe|object|embed|applet)>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'<(?:iframe|object|embed|applet)[^>]*/?>', '', cleaned, flags=re.IGNORECASE)
+    # Strip dangerous inline event handlers (onload, onclick, onerror, etc.)
+    cleaned = re.sub(r'\s+on[a-zA-Z]+\s*=\s*(?:\"[^\"]*\"|\'[^\']*\'|[^\s>]+)', '', cleaned, flags=re.IGNORECASE)
+
     cleaned = re.sub(r'<tg-emoji[^>]*>(?:<i[^>]*>)?(.*?)(?:</i>)?</tg-emoji>', r'\1', cleaned, flags=re.DOTALL)
     cleaned = re.sub(r'<tg-spoiler[^>]*>(.*?)</tg-spoiler>', r"""<span class="spoiler" onclick="this.classList.toggle('revealed')">\1</span>""", cleaned, flags=re.DOTALL)
     cleaned = re.sub(r'<span class="tg-spoiler"[^>]*>(.*?)</span>', r"""<span class="spoiler" onclick="this.classList.toggle('revealed')">\1</span>""", cleaned, flags=re.DOTALL)
     cleaned = re.sub(r'<blockquote[^>]*\bexpandable\b[^>]*>(.*?)</blockquote>', r'<blockquote class="expandable" onclick="this.classList.toggle(\'expanded\')">\1</blockquote>', cleaned, flags=re.DOTALL)
     def _link_sub(m):
-        href = m.group(1)
+        href = m.group(1).strip()
         text = m.group(2)
+        # Block dangerous URI schemes
+        clean_scheme = href.lower()
+        if clean_scheme.startswith(("javascript:", "data:", "vbscript:", "file:")):
+            return text
         return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{text}</a>'
     cleaned = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', _link_sub, cleaned, flags=re.DOTALL)
     if '<table' in cleaned and 'table-wrap' not in cleaned:
@@ -1607,6 +1720,16 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
 
     if url.startswith('//'):
         url = 'https:' + url
+
+    if not _is_safe_telegram_url(url):
+        logger.warning(f"SSRF guard: Rejected unsafe image URL: {url}")
+        if os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+        return False
+
     try:
         import httpx
         headers = {
@@ -1632,13 +1755,13 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
                         else:
                             img.save(output_path, format="JPEG", quality=quality, optimize=True)
                         return True
-                except Exception:
-                    with open(output_path, 'wb') as f:
-                        f.write(resp.content)
-                    return True
+                except Exception as e:
+                    logger.warning(f"Image processing failed for {url}: {e}")
+                    return False
+            return False
     except Exception as e:
         logger.warning(f"Failed to download image {url}: {e}")
-    return False
+        return False
 
 
 async def _download_video_with_limit(url: str, output_path: str, max_bytes: int) -> bool:
@@ -1660,6 +1783,16 @@ async def _download_video_with_limit(url: str, output_path: str, max_bytes: int)
 
     if url.startswith('//'):
         url = 'https:' + url
+
+    if not _is_safe_telegram_url(url):
+        logger.warning(f"SSRF guard: Rejected unsafe video URL: {url}")
+        if os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+        return False
+
     try:
         import httpx
         headers = {
@@ -1895,7 +2028,7 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
                 f'    </a>\n'
                 f'    <div class="video-overflow-footer">\n'
                 f'        <div class="video-overflow-title">{label_text}</div>\n'
-                f'        <a href="{source_url}" target="_blank" rel="noopener noreferrer" class="tg-video-btn">Смотреть все видео в Telegram ↗</a>\n'
+                f'        <a href="{source_url}" target="_blank" rel="noopener noreferrer" class="tg-video-btn">View all videos in Telegram ↗</a>\n'
                 f'    </div>\n'
                 f'</div>'
             )
@@ -3104,7 +3237,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
         f"I'm the TG Bridge bot. Current mode: {mode}\n\n"
         f"I relay messages between Delta Chat and Telegram groups.\n\n"
         f"Commands:\n"
-        f"/channels — List public Telegram channels to subscribe to\n"
+        f"/channels — List bridged Telegram channels\n"
         f"/channelN — Get invite link for channel #N\n"
         f"/channelNqr — Get QR code invite for channel #N\n"
         f"/stats — Show bridge statistics for current chat\n"
@@ -3124,6 +3257,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/channelremove N — Remove a channel bridge\n"
             f"/channels — List bridged channels\n"
             f"/channelssync — Refresh channel names & avatars from TG\n"
+            f"/locupdate — Refresh local channel avatars and info\n"
             f"/botsend @bot or ID <text> — Send a command/message to a bridged TG bot\n"
             f"/catchup [@channel] — Catch up missed posts for channel(s)\n"
             f"/userbotjoin <link> — Join channel via Userbot (no admin needed)\n"
@@ -3135,7 +3269,6 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
             f"/cleanup — Clean up stale, duplicate & orphaned bridges\n"
-            f"/catchup [@channel] — Catch up missed channel posts\n"
             f"/userbotsync — Force Userbot re-sync\n"
             f"/status — Show detailed bot and userbot status\n"
             f"/transports — Show configured mail relays & stats\n"
@@ -3156,7 +3289,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
     admin_tg = database.get_config("admin_tg_id")
     mode = "Private (bot owner only)" if admin_tg else "Public (group admins only)"
     lines = [
-        f"👋 Hi {name} (<code>{user_id}</code>)!\n",
+        f"👋 Hi {name} (<code>{user_id}</code>)!",
         f"I'm the DC Bridge bot. Current mode: <b>{mode}</b>\n",
         f"I relay messages between Telegram and Delta Chat groups.\n",
         f"Commands:",
@@ -3170,7 +3303,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         f"/donate — Support bot development ❤️",
     ]
     if database.is_owner(user_id):
-        lines.append(f"\n<b>⚙️ Channel, Bot & Userbot (Owner):</b>")
+        lines.append(f"\n<b>⚙️ Channel, Bot & Userbot (Owner, private chat):</b>")
         lines.append(f"/channeladd @name or ID — Bridge a channel/group/bot (bot as admin OR Userbot)")
         lines.append(f"/userbotjoin link — Join channel/group via Userbot (no admin needed; use before /channeladd)")
         lines.append(f"/botsend @bot or ID text — Send a command/message to a bridged TG bot")
@@ -3194,7 +3327,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/adminremove <i>user_id</i> — Remove a sub-admin")
         lines.append(f"/admins — List sub-admins")
     else:
-        lines.append(f"\n<b>📡 Channels (Public):</b>")
+        lines.append(f"\n<b>📡 Channels (Private chat only):</b>")
         lines.append(f"/channeladd @name or ID — Bridge a channel/group")
         lines.append(f"/userbotjoin link — Join channel/group via Userbot")
         lines.append(f"/channels — List bridged channels")
@@ -3429,7 +3562,7 @@ def resilient_command(bot, accid, event):
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports."))
         elif arg in ("off", "0", "false"):
             database.set_config("resilient", "0")
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Resilient sending mode disabled."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="ℹ️ Resilient sending mode disabled."))
         else:
             _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status."))
     except Exception as e:
@@ -3763,6 +3896,8 @@ def _notify_and_remove_channel_bridge(ch: dict) -> int | None:
     if removed_tg_id:
         if dc_chat_id:
             _clear_dc_caches(dc_chat_id)
+        if tg_channel_id:
+            _invalidate_dc_channel_cache(tg_channel_id)
         invalidate_channels_cache()
         # 3. Trigger Userbot leave in background
         if main_loop and main_loop.is_running():
@@ -3914,8 +4049,10 @@ def bridge_command(bot, accid, event):
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
                 _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only group admins can use /bridge. (Or set a global admin via /initadmin)"))
                 return
-        except Exception:
-            pass  # If we can't check, allow it (backward compat)
+        except Exception as e:
+            logger.warning(f"Could not verify DC chat contacts for /bridge: {e}")
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Could not verify group administrator status."))
+            return
 
     try:
         payload = event.payload.strip()
@@ -3954,8 +4091,10 @@ def unbridge_command(bot, accid, event):
             if msg.from_id not in contacts[:1] and msg.from_id != 1:
                 _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only group admins can use /unbridge. (Or set a global admin via /initadmin)"))
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not verify DC chat contacts for /unbridge: {e}")
+            _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Could not verify group administrator status."))
+            return
 
     tg_chat_ids = database.remove_bridge(chat_id)
     if tg_chat_ids:
@@ -4569,11 +4708,12 @@ def channels_command_dc(bot, accid, event):
         except Exception:
             dc_sub_count = "?"
 
+        disp_title = (title[:37] + "...") if len(title) > 40 else title
         # Format: /channel22 — [42 секунды](https://t.me/ftsec) — 👤 19,373 TG / 2 DC — 💬 118
         if tg_username:
-            title_display = f"[{title}](https://t.me/{tg_username})"
+            title_display = f"[{disp_title}](https://t.me/{tg_username})"
         else:
-            title_display = f"{title} (ID: {tg_id})"
+            title_display = f"{disp_title} (ID: {tg_id})"
         stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
         line = f"/channel{ch['id']} — {title_display} — {stats_str}"
         lines.append(line)
@@ -5363,8 +5503,10 @@ async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.status not in ("administrator", "creator"):
             await update.message.reply_text("❌ Only group admins can use /id.")
             return
-    except Exception:
-        pass  # If we can't verify, allow it
+    except Exception as e:
+        logger.warning(f"Could not verify group admin permissions for /id: {e}")
+        await update.message.reply_text("❌ Could not verify your group admin permissions.")
+        return
 
     await update.message.reply_text(f"Group ID: <code>{chat.id}</code>", parse_mode='HTML')
 
@@ -5500,8 +5642,10 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if member.status not in ("administrator", "creator"):
                 await update.message.reply_text("❌ Only group admins can use /bridge.")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not verify group admin permissions for /bridge: {e}")
+            await update.message.reply_text("❌ Could not verify your group admin permissions.")
+            return
 
     # Check if already bridged
     existing = database.get_dc_chats(chat.id)
@@ -5558,7 +5702,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"TG bridge: user {user.id} bridged TG {tg_chat_id} -> DC {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to create TG bridge: {e}")
-        await update.message.reply_text(f"❌ Error: {html.escape(str(e))}", parse_mode='HTML')
+        await update.message.reply_text("❌ Failed to create bridge. Please check logs for details.", parse_mode='HTML')
 
 
 async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5589,8 +5733,10 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             if member.status not in ("administrator", "creator"):
                 await update.message.reply_text("❌ Only group admins can use /unbridge.")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not verify group admin permissions for /unbridge: {e}")
+            await update.message.reply_text("❌ Could not verify your group admin permissions.")
+            return
 
     # Get dc_chat_ids before deletion to clear caches
     dc_chat_ids = database.get_dc_chats(chat.id)
@@ -5709,21 +5855,29 @@ async def _check_invite_permissions(update: Update) -> bool:
 
     # Permission check
     admin_tg_id = database.get_config("admin_tg_id")
-    if admin_tg_id:
+    if chat.type == "private":
+        if not admin_tg_id:
+            await update.message.reply_text("❌ Bot administrator is not configured yet. Invite generation in private chat is restricted.")
+            return False
         if not database.is_owner_or_admin(user.id):
             await update.message.reply_text("❌ Only the bot admin can generate invite links.")
             return False
-            
-    if chat.type != "private":
-        if not admin_tg_id:
+    else:
+        if admin_tg_id:
+            if not database.is_owner_or_admin(user.id):
+                await update.message.reply_text("❌ Only the bot admin can generate invite links.")
+                return False
+        else:
             try:
                 member = await chat.get_member(user.id)
                 if member.status not in ("administrator", "creator"):
                     await update.message.reply_text("❌ Only group admins can generate invite links.")
                     return False
-            except Exception:
-                pass
-            
+            except Exception as e:
+                logger.warning(f"Could not verify group admin permissions for invite: {e}")
+                await update.message.reply_text("❌ Could not verify your group admin permissions.")
+                return False
+
     return True
 
 async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5854,7 +6008,10 @@ async def _check_channel_admin(update: Update) -> bool:
         await update.message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
         return False
     admin_tg_id = database.get_config("admin_tg_id")
-    if admin_tg_id and not database.is_owner_or_admin(user.id):
+    if not admin_tg_id:
+        await update.message.reply_text("❌ Bot administrator is not configured yet. Channel management is restricted until configured.")
+        return False
+    if not database.is_owner_or_admin(user.id):
         await update.message.reply_text("❌ Only the bot admin can manage channels.")
         return False
     return True
@@ -6017,7 +6174,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         # 2. Check if already bridged
         existing = database.get_dc_channel_chat_id(tg_channel_id)
         if existing:
-            return f"⚠️ Channel {html.escape(channel_title)} is already bridged to DC Chat ID {existing}."
+            return f"⚠️ Channel {html.escape(channel_title)} is already bridged to Delta Chat."
 
         # 3. Create DC Broadcast Group
         dc_chat_id = dc_bot_instance.rpc.create_broadcast(dc_accid, channel_title)
@@ -6039,7 +6196,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         except Exception as e:
             logger.warning(f"Could not copy avatar for {channel_title}: {e}")
 
-        # 4. Generate invite link
+        # 4. Generate Invite Link
         invite_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, dc_chat_id)
         if invite_link.startswith("OPEN-CHAT:"):
             invite_link = "https://i.delta.chat/#" + invite_link[10:]
@@ -6050,6 +6207,8 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
         row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id)
 
         if row_id:
+            _invalidate_dc_channel_cache(tg_channel_id)
+            invalidate_channels_cache()
             # Register in cooldown so subsequent joins immediately after creation don't trigger history relay again
             _history_cooldowns[dc_chat_id] = time.time()
             
@@ -6064,14 +6223,14 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
                 ub_target = resolved_username if resolved_username else tg_channel_id
                 ub_entity = await asyncio.wait_for(userbot_client.get_entity(ub_target), timeout=15.0)
                 await update_tg_channel_stats(row_id, ub_entity)
-            except Exception as e:
-                logger.debug(f"Failed to sync immediate stats for {channel_title}: {e}")
-                
+            except Exception as se:
+                logger.debug(f"Could not sync stats immediately for new channel #{row_id}: {se}")
+
+            target_type = "Bot" if (is_bot or target.strip().lower().endswith("bot")) else "Channel"
             title_display = f"<b>{html.escape(channel_title)}</b>"
             if resolved_username:
                 title_display += f" (@{html.escape(resolved_username)})"
             
-            target_type = "Bot" if is_bot else "Channel"
             return (
                 f"✅ {target_type} {title_display} bridged!\n\n"
                 f"📺 DC Channel: <b>{html.escape(channel_title)}</b>\n"
@@ -6083,7 +6242,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
 
     except Exception as e:
         logger.error(f"Failed to bridge channel: {e}")
-        return f"❌ Internal Error: {html.escape(str(e))}"
+        return "❌ Failed to bridge channel. Please check the channel link or bot permissions."
 
 
 async def _send_bot_message(target: str, message_text: str) -> str:
@@ -6114,7 +6273,7 @@ async def _send_bot_message(target: str, message_text: str) -> str:
         return f"🤖 Sent command to <b>{html.escape(str(bot_name))}</b>:\n<code>{html.escape(message_text)}</code>"
     except Exception as e:
         logger.error(f"Failed to send message to bot {target_clean}: {e}")
-        return f"❌ Failed to send message to bot: {html.escape(str(e))}"
+        return "❌ Failed to deliver message to bot. Please check bot username and try again."
 
 
 async def tg_botsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6175,12 +6334,13 @@ async def tg_catchup_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await status_msg.edit_text(res_text, parse_mode='HTML', disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error during TG /catchup: {e}")
-        await status_msg.edit_text(f"❌ Catchup error: {html.escape(str(e))}", parse_mode='HTML')
+        await status_msg.edit_text("❌ Catchup failed. Please check logs for details.", parse_mode='HTML')
 
 
 async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually trigger a Userbot subscription sync."""
     if not database.is_owner(update.effective_user.id):
+        await update.message.reply_text("❌ Only the bot owner can use /userbotsync.")
         return
     
     if not (userbot_client and userbot_client.is_connected()):
@@ -6188,12 +6348,20 @@ async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     
     await update.message.reply_text("⏳ Starting Userbot synchronization...")
-    asyncio.create_task(sync_userbot_channels(force=True))
+    async def _sync_and_notify():
+        try:
+            await sync_userbot_channels(force=True)
+            await update.message.reply_text("✅ Userbot channel synchronization completed.")
+        except Exception as e:
+            logger.error(f"Userbot synchronization failed: {e}")
+            await update.message.reply_text("❌ Userbot synchronization failed. Please check logs.")
+    asyncio.create_task(_sync_and_notify())
 
 
 async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Join a channel/group via Userbot using an invite link. Owner only."""
     if not database.is_owner(update.effective_user.id):
+        await update.message.reply_text("❌ Only the bot owner can use /userbotjoin.")
         return
 
     if not (userbot_client and userbot_client.is_connected()):
@@ -6463,10 +6631,11 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception:
                     pass
 
+            disp_title = (title[:37] + "...") if len(title) > 40 else title
             if ch.get('tg_channel_username'):
-                title_display = f'<a href="https://t.me/{ch["tg_channel_username"]}">{html.escape(title)}</a>'
+                title_display = f'<a href="https://t.me/{ch["tg_channel_username"]}">{html.escape(disp_title)}</a>'
             else:
-                title_display = f"<b>{html.escape(title)}</b> (ID: {ch['tg_channel_id']})"
+                title_display = f"<b>{html.escape(disp_title)}</b> (ID: {ch['tg_channel_id']})"
             stats_str = f"👤 {tg_sub_count:,} TG / {dc_sub_count} DC — 💬 {m_count}"
             lines.append(f"/channel{ch['id']} — {title_display} — {stats_str}")
         lines.append(f"\nUse <code>/channel N</code> for invite link")
@@ -6738,7 +6907,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     tg_username = post.chat.username
 
     # Look up by numeric ID first, then by username
-    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+    dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
 
     if not dc_chat_id and tg_username:
         # First post — resolve username to numeric ID (for channels added by @username)
@@ -6746,6 +6915,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         if ch:
             if not ch.get('tg_channel_id'):
                 database.update_channel_tg_id(tg_username, tg_channel_id)
+                _invalidate_dc_channel_cache(tg_channel_id)
             dc_chat_id = ch['dc_chat_id']
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
@@ -6969,7 +7139,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             msg_data.override_sender_name = author
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
-        dc_msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        dc_msg_id = await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, msg_data)
         if dc_msg_id:
             c_hash = _get_content_hash(post)
             pids_to_map = set(rich_post.album_post_ids) if (rich_post and rich_post.album_post_ids) else {post.message_id}
@@ -6990,7 +7160,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
                         try:
                             sub_cap = f"📷 [{idx + 1}/{len(rich_post.image_urls)}] {rich_post.author_name or tg_username}\n🔗 t.me/{tg_username}/{post.message_id}"
                             sub_data = MsgData(text=sub_cap, file=sub_img_path)
-                            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, sub_data)
+                            await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, sub_data)
                         except Exception as sub_err:
                             logger.warning(f"Failed to send follow-up image {idx+1} for post {post.message_id}: {sub_err}")
                         finally:
@@ -7054,7 +7224,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
                 # Live location ended either manually or expired.
                 LIVE_LOCATIONS.pop(post.message_id, None)
                 final_text = f"🛑 Live Location Ended\nFinal coordinates: https://maps.google.com/?q={lat},{lon}"
-                dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+                dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
                 if not dc_chat_id and tg_username:
                     ch = database.get_channel_by_tg_username(tg_username)
                     if ch:
@@ -7065,7 +7235,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
                         msg_data = MsgData(text=final_text)
                         if dc_reply_id:
                             msg_data.quoted_message_id = dc_reply_id
-                        dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                        await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, msg_data)
                     except Exception as e:
                         logger.error(f"Failed to send final location: {e}")
                 return
@@ -7074,7 +7244,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
                 return
 
     # Look up DC broadcast
-    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+    dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
     if not dc_chat_id and tg_username:
         ch = database.get_channel_by_tg_username(tg_username)
         if ch:
@@ -7120,7 +7290,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         old_dc_msg_id = database.get_dc_msg_id(post.message_id, tg_channel_id, dc_chat_id)
         if old_dc_msg_id:
             try:
-                dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, formatted_msg)
+                await asyncio.to_thread(dc_bot_instance.rpc.send_edit_request, dc_accid, old_dc_msg_id, formatted_msg)
                 database.save_message_map(old_dc_msg_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
                 _update_cached_last_msg_id(tg_channel_id, post.message_id)
                 logger.info(f"Bot API: In-place edited broadcast channel post {post.message_id} (dc_msg_id={old_dc_msg_id}).")
@@ -7135,7 +7305,7 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
         msg_data = MsgData(text=formatted_msg)
         if author:
             msg_data.override_sender_name = author
-        dc_sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        dc_sent_id = await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, msg_data)
         if dc_sent_id:
             database.save_message_map(dc_sent_id, dc_chat_id, post.message_id, tg_channel_id, content_hash=new_hash)
             _update_cached_last_msg_id(tg_channel_id, post.message_id)
@@ -7615,7 +7785,7 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     dc_chats = database.get_dc_chats(tg_chat_id)
     if not dc_chats:
-        chan_dc_id = database.get_dc_channel_chat_id(tg_chat_id)
+        chan_dc_id = _get_cached_dc_channel_chat_id(tg_chat_id)
         if chan_dc_id:
             dc_chats = [chan_dc_id]
         else:
@@ -7635,9 +7805,9 @@ async def handle_tg_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             try:
                 # send_reaction expects a list of emojis; empty list to clear
                 emoji_list = [primary_emoji] if primary_emoji else []
-                dc_bot_instance.rpc.send_reaction(dc_accid, dc_msg_id, emoji_list)
+                await asyncio.to_thread(dc_bot_instance.rpc.send_reaction, dc_accid, dc_msg_id, emoji_list)
                 if primary_emoji:
-                    if database.get_dc_channel_chat_id(tg_chat_id):
+                    if _get_cached_dc_channel_chat_id(tg_chat_id):
                         database.increment_channel_reaction_count(tg_chat_id)
                     else:
                         database.increment_bridge_reaction_count(dc_chat_id, tg_chat_id)
@@ -7914,6 +8084,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
         info, _ = get_dc_info(dc_cid)
         if info is None:
             database.remove_channel(ch_id)
+            _invalidate_dc_channel_cache(ch.get('tg_channel_id'))
             _clear_dc_caches(dc_cid)
             stats['orphaned_channels_removed'] += 1
             logger.info(f"Cleanup: Removed orphaned channel #{ch_id} (DC {dc_cid} no longer exists in DC)")
@@ -8519,7 +8690,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     old_dc_msg_id = database.get_dc_msg_id(msg.id, tg_channel_id, dc_chat_id) if is_edit else None
     if is_edit and old_dc_msg_id:
         try:
-            dc_bot_instance.rpc.send_edit_request(dc_accid, old_dc_msg_id, clean_msg)
+            await asyncio.to_thread(dc_bot_instance.rpc.send_edit_request, dc_accid, old_dc_msg_id, clean_msg)
             c_hash = _get_content_hash(msg)
             database.save_message_map(old_dc_msg_id, dc_chat_id, msg.id, tg_channel_id, content_hash=c_hash)
             _update_cached_last_msg_id(tg_channel_id, msg.id)
@@ -8638,14 +8809,14 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             msg_data.file = file_path
 
         await _wait_for_global_dc_rate_limit()
-        sent_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+        sent_id = await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, msg_data)
         if sent_id:
             c_hash = _get_content_hash(msg)
             pids_to_map = set(rich_post.album_post_ids) if (rich_post and rich_post.album_post_ids) else {msg.id}
             pids_to_map.add(msg.id)
             for pid in pids_to_map:
                 database.save_message_map(sent_id, dc_chat_id, pid, tg_channel_id, content_hash=c_hash)
-            channel_dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+            channel_dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
             if channel_dc_chat_id == dc_chat_id:
                 _update_cached_last_msg_id(tg_channel_id, max(pids_to_map))
             if grouped_id:
@@ -8662,7 +8833,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                             if display_author:
                                 sub_data.override_sender_name = display_author
                             await _wait_for_global_dc_rate_limit()
-                            dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, sub_data)
+                            await asyncio.to_thread(dc_bot_instance.rpc.send_msg, dc_accid, dc_chat_id, sub_data)
                         except Exception as sub_err:
                             logger.warning(f"Failed to send follow-up userbot image {idx+1} for msg {msg.id}: {sub_err}")
                         finally:
@@ -8843,7 +9014,7 @@ async def _process_userbot_event_internal(event, is_edit=False):
             logger.warning(f"Userbot: Failed to check message age for post {msg.id}: {e}")
 
     # Check database
-    dc_chat_id = database.get_dc_channel_chat_id(tg_channel_id)
+    dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
 
     # Fallback: if not found by ID, try finding by username (useful if added via Bot API without ID)
     if not dc_chat_id:
@@ -8854,6 +9025,7 @@ async def _process_userbot_event_internal(event, is_edit=False):
                 dc_chat_id = chan_data['dc_chat_id']
                 logger.info(f"USERBOT: Found matching channel by username @{chat_username}. Updating numeric ID to {tg_channel_id}...")
                 database.update_channel_tg_id(chat_username, tg_channel_id)
+                _invalidate_dc_channel_cache(tg_channel_id)
 
     if not dc_chat_id or not dc_bot_instance or not dc_accid:
         return

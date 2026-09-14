@@ -1483,6 +1483,72 @@ class TestTelegramBridge(unittest.TestCase):
             bot.userbot_client = orig_ub
             bot._queue_userbot_event = orig_queue
 
+    def test_tg_id_command_fail_closed_on_get_member_error(self):
+        mock_update = MagicMock()
+        mock_update.effective_chat.type = "supergroup"
+        mock_update.effective_chat.get_member = AsyncMock(side_effect=Exception("Telegram API network timeout"))
+        mock_update.effective_user.id = 99999
+        mock_update.message.reply_text = AsyncMock()
+        mock_context = MagicMock()
+
+        asyncio.run(bot.tg_id_command(mock_update, mock_context))
+        mock_update.message.reply_text.assert_called_once()
+        text = mock_update.message.reply_text.call_args[0][0]
+        self.assertIn("Could not verify your group admin permissions", text)
+
+    def test_check_channel_admin_rejects_when_admin_unset(self):
+        mock_update = MagicMock()
+        mock_update.effective_user.id = 88888
+        mock_update.effective_chat.type = "private"
+        mock_update.message.reply_text = AsyncMock()
+
+        self.assertIsNone(database.get_config("admin_tg_id"))
+        is_admin = asyncio.run(bot._check_channel_admin(mock_update))
+        self.assertFalse(is_admin)
+        mock_update.message.reply_text.assert_called_once()
+        self.assertIn("Bot administrator is not configured yet", mock_update.message.reply_text.call_args[0][0])
+
+    def test_clean_html_for_webxdc_hardening(self):
+        dirty_html = (
+            '<div>Hello <script>alert(1)</script>'
+            '<iframe src="https://evil.com"></iframe>'
+            '<object data="bad.swf"></object>'
+            '<embed src="bad.pdf">'
+            '<img src="pic.jpg" onerror="alert(2)">'
+            '<a href="javascript:alert(3)">Click</a>'
+            '<a href="data:text/html,<script>alert(4)</script>">Data</a>'
+            '<a href="https://t.me/good">Valid Link</a></div>'
+        )
+        cleaned = bot._clean_html_for_webxdc(dirty_html)
+        self.assertNotIn('<script', cleaned.lower())
+        self.assertNotIn('<iframe', cleaned.lower())
+        self.assertNotIn('<object', cleaned.lower())
+        self.assertNotIn('<embed', cleaned.lower())
+        self.assertNotIn('onerror', cleaned.lower())
+        self.assertNotIn('javascript:', cleaned.lower())
+        self.assertNotIn('data:', cleaned.lower())
+        self.assertIn('https://t.me/good', cleaned)
+        self.assertIn('Hello', cleaned)
+
+    def test_compiled_filter_regex_performance(self):
+        database.add_filter("casino")
+        database.add_filter("crypto promo")
+        bot._reload_filter_cache()
+
+        self.assertIsNotNone(bot._filter_regex)
+
+        matched, pat = bot.is_text_filtered("Win at the big CaSiNo tonight!")
+        self.assertTrue(matched)
+        self.assertEqual(pat, "casino")
+
+        matched, pat = bot.is_text_filtered("Join our CRYPTO PROMO today!")
+        self.assertTrue(matched)
+        self.assertEqual(pat, "crypto promo")
+
+        matched, pat = bot.is_text_filtered("Just a normal conversation message")
+        self.assertFalse(matched)
+        self.assertIsNone(pat)
+
 
 if __name__ == "__main__":
     unittest.main()
