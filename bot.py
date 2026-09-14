@@ -1650,7 +1650,7 @@ def _is_safe_telegram_url(url: str) -> bool:
             return False
         allowed_suffixes = (
             "t.me", "telegram.me", "telegram.org",
-            "telesco.pe", "cdn-telegram.org", "stel.com"
+            "telesco.pe", "cdn-telegram.org", "telegram-cdn.org", "stel.com"
         )
         return any(hostname == s or hostname.endswith("." + s) for s in allowed_suffixes)
     except Exception:
@@ -1756,8 +1756,13 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
                             img.save(output_path, format="JPEG", quality=quality, optimize=True)
                         return True
                 except Exception as e:
-                    logger.warning(f"Image processing failed for {url}: {e}")
-                    return False
+                    logger.warning(f"Image processing failed for {url} ({e}), falling back to raw bytes")
+                    try:
+                        with open(output_path, 'wb') as f:
+                            f.write(resp.content)
+                        return True
+                    except Exception:
+                        return False
             return False
     except Exception as e:
         logger.warning(f"Failed to download image {url}: {e}")
@@ -2268,6 +2273,9 @@ async def _download_image_url(url: str) -> Optional[str]:
         return url
     if url.startswith('//'):
         url = 'https:' + url
+    if not _is_safe_telegram_url(url):
+        logger.warning(f"SSRF guard: Rejected unsafe image URL in _download_image_url: {url}")
+        return None
     try:
         import httpx
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:

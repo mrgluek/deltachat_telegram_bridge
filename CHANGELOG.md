@@ -4,7 +4,7 @@
   - Restricted Telegram `/bridge`, `/unbridge`, and channel management to private chats with the configured bot owner, disallowing unauthorized configuration attempts in private chats when `admin_tg_id` is unset.
   - Masked internal technical IDs in channel addition confirmation messages and sanitized exception messages returned to users across channel bridging and catchup commands.
   - Hardened WebXDC HTML sanitizer (`_clean_html_for_webxdc`): disarmed `iframe`, `object`, `embed`, and `applet` tags, stripped inline event handlers (`on*`), and blocked dangerous URI schemes (`javascript:`, `data:`, `vbscript:`).
-  - Added SSRF protection (`_is_safe_telegram_url`) for remote media downloads in `_download_image_to_file` and `_download_video_with_limit`, restricting remote targets to verified Telegram and CDN domains.
+  - Added SSRF protection (`_is_safe_telegram_url`) for remote media downloads in `_download_image_to_file`, `_download_image_url`, and `_download_video_with_limit`, restricting remote targets to verified Telegram and CDN domains (including `telegram-cdn.org`). Added fallback raw-byte saving if image re-encoding fails.
   - Added permission validation for `/userbotjoin` and `/userbotsync` commands, preventing non-admins from triggering background syncs.
 - **Performance & Concurrency Optimization**:
   - Implemented persistent SQLite connection management with thread safety (`_SharedConnectionProxy`) to eliminate expensive per-query file re-opening and lock contention across high-throughput operations.
