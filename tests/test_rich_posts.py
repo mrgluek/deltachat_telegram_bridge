@@ -913,6 +913,93 @@ class TestRichPosts(unittest.TestCase):
                 try: os.unlink(img_path)
                 except: pass
 
+    def test_format_poll_text(self):
+        class MessageEntityBold:
+            offset = 0
+            length = 4
+
+        class MockTextWithEntities:
+            def __init__(self, text, entities=None):
+                self.text = text
+                self.entities = entities or []
+
+            def __str__(self):
+                return f"TextWithEntities(text='{self.text}', entities={self.entities})"
+
+        # None / empty handling
+        self.assertEqual(bot._format_poll_text(None), "")
+        self.assertEqual(bot._format_poll_text(""), "")
+
+        # Plain string
+        self.assertEqual(bot._format_poll_text("Plain Question"), "Plain Question")
+
+        # TextWithEntities without entities
+        twe_plain = MockTextWithEntities("Poll Question Without Formatting")
+        self.assertEqual(bot._format_poll_text(twe_plain), "Poll Question Without Formatting")
+        self.assertNotIn("TextWithEntities", bot._format_poll_text(twe_plain))
+
+        # TextWithEntities with bold entity
+        twe_bold = MockTextWithEntities("Test text", [MessageEntityBold()])
+        formatted = bot._format_poll_text(twe_bold)
+        self.assertEqual(formatted, "**Test** text")
+
+    def test_userbot_relay_poll_text_with_entities(self):
+        class MockTextWithEntities:
+            def __init__(self, text, entities=None):
+                self.text = text
+                self.entities = entities or []
+
+            def __str__(self):
+                return f"TextWithEntities(text='{self.text}', entities={self.entities})"
+
+        class MockAnswer:
+            def __init__(self, text):
+                self.text = text
+
+        dc_chat_id = 500
+        database.add_channel_by_id(-1001234567, dc_chat_id)
+
+        mock_msg = MagicMock()
+        mock_msg.id = 777
+        mock_msg.chat_id = -1001234567
+        mock_msg.chat.username = "gaming_channel"
+        mock_msg.grouped_id = None
+        mock_msg.media = MagicMock()
+        type(mock_msg.media).__name__ = "MessageMediaPoll"
+
+        mock_poll = MagicMock()
+        mock_poll.question = MockTextWithEntities("Выбираем лучшую игрулю из новинок")
+        mock_poll.answers = [
+            MockAnswer(MockTextWithEntities("Charlie's Angels")),
+            MockAnswer(MockTextWithEntities("Silent Storm")),
+        ]
+        mock_msg.media.poll = mock_poll
+        mock_msg.raw_text = ""
+        mock_msg.message = ""
+        mock_msg.text = ""
+        mock_msg.entities = []
+        mock_msg.file = None
+        mock_msg.document = None
+
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.send_msg.return_value = 888
+        mock_userbot = MagicMock()
+        mock_userbot.is_connected.return_value = True
+
+        with patch('bot.dc_bot_instance', mock_dc_bot), \
+             patch('bot.dc_accid', 1), \
+             patch('bot.userbot_client', mock_userbot):
+            asyncio.run(bot._relay_userbot_message(dc_chat_id, mock_msg))
+
+        mock_dc_bot.rpc.send_msg.assert_called()
+        sent_data = mock_dc_bot.rpc.send_msg.call_args_list[0][0][2]
+        self.assertIn("📊 Выбираем лучшую игрулю из новинок", sent_data.text)
+        self.assertIn("▫️ Charlie's Angels", sent_data.text)
+        self.assertIn("▫️ Silent Storm", sent_data.text)
+        self.assertNotIn("TextWithEntities", sent_data.text)
+
+
 if __name__ == '__main__':
     unittest.main()
+
 

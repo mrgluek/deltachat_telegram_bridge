@@ -425,7 +425,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.21.1"
+VERSION = "2.21.2"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -768,7 +768,12 @@ def _get_media_size(msg) -> int:
     """Helper to reliably extract media file size from a Telethon Message object."""
     if not (msg and msg.media):
         return 0
-    if type(msg.media).__name__ in ('MessageMediaWebPage', 'MessageMediaUnsupported'):
+    if type(msg.media).__name__ in (
+        'MessageMediaWebPage', 'MessageMediaUnsupported', 'MessageMediaPoll',
+        'MessageMediaContact', 'MessageMediaGeo', 'MessageMediaGeoLive',
+        'MessageMediaStory', 'MessageMediaGiveaway', 'MessageMediaGiveawayResults',
+        'MessageMediaEmpty'
+    ):
         return 0
     
     if type(msg.media).__name__ == 'MessageMediaPaidMedia':
@@ -1013,6 +1018,22 @@ def _format_telegram_entities(text: str, entities) -> str:
         formatted = '\n'.join(new_lines)
 
     return formatted
+
+
+def _format_poll_text(obj) -> str:
+    """Safely extract and format text from a poll question or answer (supports str and TextWithEntities)."""
+    if not obj:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    raw = getattr(obj, 'text', None)
+    if raw is not None:
+        raw_str = str(raw)
+        entities = getattr(obj, 'entities', []) or []
+        if entities:
+            return _format_telegram_entities(raw_str, entities)
+        return raw_str
+    return str(obj)
 
 
 _processed_media_groups: dict[str, float] = {}
@@ -6808,9 +6829,9 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
 
     if getattr(post, 'poll', None):
         poll = post.poll
-        poll_text = f"📊 {poll.question}\n"
+        poll_text = f"📊 {_format_poll_text(poll.question)}\n"
         for option in poll.options:
-            poll_text += f"▫️ {option.text}\n"
+            poll_text += f"▫️ {_format_poll_text(option.text)}\n"
         text = (text + "\n\n" + poll_text).strip()
 
     if getattr(post, 'contact', None):
@@ -7302,9 +7323,9 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Detect and format polls
     if update.message.poll:
         poll = update.message.poll
-        poll_text = f"📊 {poll.question}\n"
+        poll_text = f"📊 {_format_poll_text(poll.question)}\n"
         for option in poll.options:
-            poll_text += f"▫️ {option.text}\n"
+            poll_text += f"▫️ {_format_poll_text(option.text)}\n"
         text = (text + "\n\n" + poll_text).strip()
         
         # Save context so we can update DC when the poll closes
@@ -7546,14 +7567,16 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Format final results
     total_voter_count = poll.total_voter_count
     
-    text = f"🏁 **Poll closed:** {html.escape(poll.question)}\n\n"
+    q_title = _format_poll_text(poll.question)
+    text = f"🏁 **Poll closed:** {q_title}\n\n"
     
     # Sort options by voter count descending
     sorted_options = sorted(poll.options, key=lambda x: x.voter_count, reverse=True)
     
     for option in sorted_options:
         percentage = (option.voter_count / total_voter_count * 100) if total_voter_count > 0 else 0
-        text += f"▫️ {html.escape(option.text)} — {option.voter_count} votes ({percentage:.1f}%)\n"
+        ans_text = _format_poll_text(option.text)
+        text += f"▫️ {ans_text} — {option.voter_count} votes ({percentage:.1f}%)\n"
         
     text += f"\n*Total votes: {total_voter_count}*"
     
@@ -8391,14 +8414,12 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         elif m_type == 'MessageMediaPoll':
             poll = getattr(msg.media, 'poll', None)
             if poll:
-                poll_text = f"📊 {getattr(poll, 'question', 'Poll')}\n"
+                q_text = _format_poll_text(getattr(poll, 'question', 'Poll'))
+                poll_text = f"📊 {q_text}\n"
                 answers = getattr(poll, 'answers', []) or []
                 for ans in answers:
-                    ans_text = getattr(ans, 'text', '')
-                    if isinstance(ans_text, str):
-                        poll_text += f"▫️ {ans_text}\n"
-                    elif hasattr(ans_text, 'text'):
-                        poll_text += f"▫️ {ans_text.text}\n"
+                    ans_text = _format_poll_text(getattr(ans, 'text', ''))
+                    poll_text += f"▫️ {ans_text}\n"
                 text = (text + "\n\n" + poll_text).strip()
         elif m_type == 'MessageMediaContact':
             c_name = f"{getattr(msg.media, 'first_name', '')} {getattr(msg.media, 'last_name', '')}".strip()
@@ -8496,7 +8517,12 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 if sub:
                     media_to_download = sub
                     break
-        elif m_type not in ('MessageMediaWebPage', 'MessageMediaUnsupported'):
+        elif m_type not in (
+            'MessageMediaWebPage', 'MessageMediaUnsupported', 'MessageMediaPoll',
+            'MessageMediaContact', 'MessageMediaGeo', 'MessageMediaGeoLive',
+            'MessageMediaStory', 'MessageMediaGiveaway', 'MessageMediaGiveawayResults',
+            'MessageMediaEmpty'
+        ):
             media_to_download = msg.media
         elif m_type == 'MessageMediaWebPage':
             webpage = msg.media.webpage

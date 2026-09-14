@@ -1,3 +1,11 @@
+## [2.21.2] - 2026-09-14
+- **Sanitize Poll Questions and Options Formatting**:
+  - Added `_format_poll_text` helper to safely handle Telegram polls where questions or options are represented as `TextWithEntities` objects (introduced in MTProto Layer 229+ / Telethon 1.45+).
+  - Extracted formatted text and mapped Telegram inline entities (`MessageEntity*`) into Delta Chat Markdown, preventing raw `TextWithEntities(text='...', entities=[])` string representations from leaking into messages.
+  - Applied sanitized poll formatting across all poll handlers: userbot relay (`MessageMediaPoll`), channel posts (`handle_tg_channel_post`), incoming messages (`handle_tg_message`), and poll closure results (`handle_tg_poll`).
+  - Added non-file media check in userbot media handler and `_get_media_size` to prevent unnecessary media download attempts for poll objects.
+  - Added unit test suite covering `_format_poll_text` and userbot poll forwarding with `TextWithEntities`.
+
 ## [2.21.1] - 2026-09-14
 - **Fix SyntaxError on Python < 3.12**:
   - Fixed nested single quote within single-quoted f-string in `_rich_text_to_html` (`TextSpoiler` handler) to maintain backward compatibility with Python 3.9, 3.10, and 3.11 runtimes in Docker containers.
