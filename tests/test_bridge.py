@@ -62,8 +62,12 @@ class TestTelegramBridge(unittest.TestCase):
         # Enforce isolated test DB path and initialize schema
         database.DB_PATH = TEST_DB
         database.init_db()
+        with bot._last_msg_id_cache_lock:
+            bot._last_msg_id_cache.clear()
 
     def tearDown(self):
+        with bot._last_msg_id_cache_lock:
+            bot._last_msg_id_cache.clear()
         # Clean up database files
         if os.path.exists(TEST_DB):
             try:
@@ -948,7 +952,7 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_accid = orig_dc_accid
 
     def test_userbot_edit_in_place_relay(self):
-        database.add_channel_by_id(tg_channel_id=-100555, dc_chat_id=123, username="test_ch")
+        database.add_bridge(dc_chat_id=123, tg_chat_id=-100555)
         database.save_message_map(dc_msg_id=777, dc_chat_id=123, tg_msg_id=544, tg_chat_id=-100555, content_hash="hash1")
 
         mock_ub = MagicMock()
@@ -976,8 +980,8 @@ class TestTelegramBridge(unittest.TestCase):
             mock_msg.message = "ОБНОВЛЕНИЕ ПОДПИСКИ"
             mock_msg.media = None
             mock_msg.entities = []
-            mock_msg.is_channel = True
-            mock_msg.is_group = False
+            mock_msg.is_channel = False
+            mock_msg.is_group = True
 
             asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg, is_edit=True))
 
@@ -990,6 +994,43 @@ class TestTelegramBridge(unittest.TestCase):
 
             # Verify NO new message was sent
             mock_dc_bot.rpc.send_msg.assert_not_called()
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
+    def test_userbot_edit_broadcast_channel_suppressed(self):
+        database.add_channel_by_id(tg_channel_id=-100555, dc_chat_id=123, username="test_ch")
+        database.save_message_map(dc_msg_id=777, dc_chat_id=123, tg_msg_id=544, tg_chat_id=-100555, content_hash="hash1")
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100555
+            mock_msg.id = 544
+            mock_msg.message = "НОВЫЙ ТЕКСТ"
+            mock_msg.media = None
+            mock_msg.entities = []
+            mock_msg.is_channel = True
+            mock_msg.is_group = False
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg, is_edit=True))
+
+            # Broadcast channel must NOT call send_edit_request or send_msg
+            mock_dc_bot.rpc.send_edit_request.assert_not_called()
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            # Watermark must be advanced
+            self.assertEqual(bot._get_cached_last_msg_id(-100555), 544)
         finally:
             bot.userbot_client = orig_ub
             bot.dc_bot_instance = orig_dc
@@ -1261,6 +1302,137 @@ class TestTelegramBridge(unittest.TestCase):
         # Calling _safe_telethon_reconnect on a sender with _connection = None should abort immediately without error
         asyncio.run(bot._safe_telethon_reconnect(dummy_sender, None))
         dummy_sender._log.info.assert_called_with('Cannot reconnect MTProtoSender: _connection is None.')
+
+    def test_userbot_event_deduplication_via_message_map(self):
+        ch_id = -10012345
+        dc_chat_id = 700
+        database.add_channel_by_id(ch_id, dc_chat_id, username="test_dedup_ch")
+        # Pre-populate message_map as if post 3408 was already sent to DC
+        database.save_message_map(dc_msg_id=901, dc_chat_id=dc_chat_id, tg_msg_id=3408, tg_chat_id=ch_id, content_hash="hash3408")
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_event = MagicMock()
+            mock_event.message.chat_id = ch_id
+            mock_event.message.id = 3408
+            mock_event.message.text = "Hello world"
+            mock_event.message.media = None
+            mock_event.message.out = False
+            mock_event.message.sender_id = 111
+
+            asyncio.run(bot._process_userbot_event_internal(mock_event, is_edit=False))
+
+            # Must NOT relay since it already exists in message_map
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            # Watermark must advance to 3408
+            self.assertEqual(bot._get_cached_last_msg_id(ch_id), 3408)
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
+    def test_userbot_event_broadcast_channel_edit_skips_relay(self):
+        ch_id = -10012345
+        dc_chat_id = 700
+        database.add_channel_by_id(ch_id, dc_chat_id, username="test_dedup_ch")
+        database.save_message_map(dc_msg_id=902, dc_chat_id=dc_chat_id, tg_msg_id=3409, tg_chat_id=ch_id, content_hash="old_hash")
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_event = MagicMock()
+            mock_event.message.chat_id = ch_id
+            mock_event.message.id = 3409
+            mock_event.message.text = "Edited text"
+            mock_event.message.media = None
+            mock_event.message.out = False
+            mock_event.message.sender_id = 111
+            mock_event.message.is_channel = True
+            mock_event.message.is_group = False
+
+            asyncio.run(bot._process_userbot_event_internal(mock_event, is_edit=True))
+
+            # Must NOT send new message or edit request to broadcast channel
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            mock_dc_bot.rpc.send_edit_request.assert_not_called()
+            # Watermark must be at least 3409
+            self.assertEqual(bot._get_cached_last_msg_id(ch_id), 3409)
+            # Hash must be updated
+            self.assertNotEqual(database.get_message_content_hash(3409, ch_id, dc_chat_id), "old_hash")
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+
+    def test_reconcile_channel_skips_already_mapped_messages(self):
+        ch_id = -100888777
+        dc_chat_id = 701
+        chan_data = database.add_channel_by_id(ch_id, dc_chat_id, username="test_reconcile_dedup")
+        chan = database.get_channel_by_tg_id(ch_id)
+        database.update_channel_last_msg_id(ch_id, 50)
+        bot._update_cached_last_msg_id(ch_id, 50)
+
+        # Message 51 is already in message_map
+        database.save_message_map(dc_msg_id=951, dc_chat_id=dc_chat_id, tg_msg_id=51, tg_chat_id=ch_id)
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+
+        class MockEntity:
+            left = False
+
+        class MockMsg:
+            def __init__(self, msg_id):
+                self.id = msg_id
+                self.chat_id = ch_id
+
+        async def mock_get_entity(target):
+            return MockEntity()
+
+        async def mock_get_messages(entity, min_id=None, limit=None, reverse=None):
+            if limit == 1:
+                return [MockMsg(53)]
+            return [MockMsg(51), MockMsg(52), MockMsg(53)]
+
+        mock_ub.get_entity = mock_get_entity
+        mock_ub.get_messages = mock_get_messages
+
+        orig_ub = bot.userbot_client
+        orig_queue = bot._queue_userbot_event
+        queued_items = []
+        async def mock_queue(tg_id, evt_type, evt):
+            queued_items.append(evt.message.id)
+
+        try:
+            bot.userbot_client = mock_ub
+            bot._queue_userbot_event = mock_queue
+
+            queued, missed = asyncio.run(bot.reconcile_channel(chan))
+            # 51 was already in message_map, so only 52 and 53 should be queued
+            self.assertEqual(queued, 2)
+            self.assertEqual(queued_items, [52, 53])
+        finally:
+            bot.userbot_client = orig_ub
+            bot._queue_userbot_event = orig_queue
 
 
 if __name__ == "__main__":

@@ -354,6 +354,24 @@ def get_dc_chats(tg_chat_id: int) -> list[int]:
         finally:
             conn.close()
 
+def _normalize_tg_id_variants(val: int | str) -> tuple[int, int]:
+    """Return (id_with_prefix, id_without_prefix) for a Telegram channel/chat ID."""
+    try:
+        n = int(val)
+        s = str(n)
+        if s.startswith("-100"):
+            clean = s[4:]
+            return int(f"-100{clean}"), int(clean)
+        elif n < 0:
+            return n, n
+        else:
+            clean = s
+            if clean.startswith("100") and len(clean) > 10:
+                clean = clean[3:]
+            return int(f"-100{clean}"), int(clean)
+    except (ValueError, TypeError):
+        return 0, 0
+
 def save_message_map(dc_msg_id: int, dc_chat_id: int, tg_msg_id: int, tg_chat_id: int, content_hash: str | None = None):
     """Save a mapping between a DC message and a TG message."""
     with _lock:
@@ -365,8 +383,8 @@ def save_message_map(dc_msg_id: int, dc_chat_id: int, tg_msg_id: int, tg_chat_id
                 (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, int(time.time()))
             )
             conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error saving message map (dc={dc_msg_id}, tg={tg_msg_id}, tg_chat={tg_chat_id}): {e}")
         finally:
             conn.close()
 
@@ -376,9 +394,10 @@ def get_dc_msgs_by_tg_msg_id(tg_msg_id: int, tg_chat_id: int) -> list[tuple[int,
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_chat_id)
             cursor.execute(
-                "SELECT dc_msg_id, dc_chat_id FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ?",
-                (tg_msg_id, tg_chat_id)
+                "SELECT dc_msg_id, dc_chat_id FROM message_map WHERE tg_msg_id = ? AND tg_chat_id IN (?, ?)",
+                (tg_msg_id, v1, v2)
             )
             rows = cursor.fetchall()
             return rows
@@ -406,7 +425,8 @@ def delete_message_map_entry_by_tg(tg_msg_id: int, tg_chat_id: int | None = None
         try:
             cursor = conn.cursor()
             if tg_chat_id is not None:
-                cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ?", (tg_msg_id, tg_chat_id))
+                v1, v2 = _normalize_tg_id_variants(tg_chat_id)
+                cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ? AND tg_chat_id IN (?, ?)", (tg_msg_id, v1, v2))
             else:
                 cursor.execute("DELETE FROM message_map WHERE tg_msg_id = ?", (tg_msg_id,))
             conn.commit()
@@ -419,9 +439,10 @@ def get_tg_msg_id(dc_msg_id: int, dc_chat_id: int, tg_chat_id: int) -> int | Non
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_chat_id)
             cursor.execute(
-                "SELECT tg_msg_id FROM message_map WHERE dc_msg_id = ? AND dc_chat_id = ? AND tg_chat_id = ?",
-                (dc_msg_id, dc_chat_id, tg_chat_id)
+                "SELECT tg_msg_id FROM message_map WHERE dc_msg_id = ? AND dc_chat_id = ? AND tg_chat_id IN (?, ?)",
+                (dc_msg_id, dc_chat_id, v1, v2)
             )
             row = cursor.fetchone()
             return row[0] if row else None
@@ -464,9 +485,10 @@ def get_dc_msg_id(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -> int | Non
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_chat_id)
             cursor.execute(
-                "SELECT dc_msg_id FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ? AND dc_chat_id = ?",
-                (tg_msg_id, tg_chat_id, dc_chat_id)
+                "SELECT dc_msg_id FROM message_map WHERE tg_msg_id = ? AND tg_chat_id IN (?, ?) AND dc_chat_id = ?",
+                (tg_msg_id, v1, v2, dc_chat_id)
             )
             row = cursor.fetchone()
             return row[0] if row else None
@@ -479,9 +501,10 @@ def get_message_content_hash(tg_msg_id: int, tg_chat_id: int, dc_chat_id: int) -
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_chat_id)
             cursor.execute(
-                "SELECT content_hash FROM message_map WHERE tg_msg_id = ? AND tg_chat_id = ? AND dc_chat_id = ?",
-                (tg_msg_id, tg_chat_id, dc_chat_id)
+                "SELECT content_hash FROM message_map WHERE tg_msg_id = ? AND tg_chat_id IN (?, ?) AND dc_chat_id = ?",
+                (tg_msg_id, v1, v2, dc_chat_id)
             )
             row = cursor.fetchone()
             return row[0] if row else None
@@ -587,9 +610,10 @@ def increment_channel_reaction_count(tg_channel_id: int):
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
             cursor.execute(
-                "UPDATE channels SET reactions_count = reactions_count + 1 WHERE tg_channel_id = ?",
-                (tg_channel_id,)
+                "UPDATE channels SET reactions_count = reactions_count + 1 WHERE tg_channel_id IN (?, ?)",
+                (v1, v2)
             )
             conn.commit()
         finally:
@@ -616,9 +640,10 @@ def get_channel_reaction_count(tg_channel_id: int) -> int:
         conn = _connect()
         try:
             cursor = conn.cursor()
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
             cursor.execute(
-                "SELECT reactions_count FROM channels WHERE tg_channel_id = ?",
-                (tg_channel_id,)
+                "SELECT reactions_count FROM channels WHERE tg_channel_id IN (?, ?)",
+                (v1, v2)
             )
             row = cursor.fetchone()
             return row[0] if row else 0
@@ -692,7 +717,8 @@ def get_channel_by_tg_id(tg_channel_id: int) -> dict | None:
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
+            cursor.execute("SELECT * FROM channels WHERE tg_channel_id IN (?, ?)", (v1, v2))
             row = cursor.fetchone()
             return dict(row) if row else None
         finally:
@@ -820,7 +846,8 @@ def get_dc_channel_chat_id(tg_channel_id: int) -> int | None:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT dc_chat_id FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
+            cursor.execute("SELECT dc_chat_id FROM channels WHERE tg_channel_id IN (?, ?)", (v1, v2))
             row = cursor.fetchone()
             return row[0] if row else None
         finally:
@@ -845,7 +872,8 @@ def get_channel_last_msg_id(tg_channel_id: int) -> int:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT last_msg_id FROM channels WHERE tg_channel_id = ?", (tg_channel_id,))
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
+            cursor.execute("SELECT last_msg_id FROM channels WHERE tg_channel_id IN (?, ?)", (v1, v2))
             row = cursor.fetchone()
             return row[0] if row and row[0] is not None else 0
         finally:
@@ -857,7 +885,8 @@ def update_channel_last_msg_id(tg_channel_id: int, last_msg_id: int):
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("UPDATE channels SET last_msg_id = MAX(COALESCE(last_msg_id, 0), ?) WHERE tg_channel_id = ?", (last_msg_id, tg_channel_id))
+            v1, v2 = _normalize_tg_id_variants(tg_channel_id)
+            cursor.execute("UPDATE channels SET last_msg_id = MAX(COALESCE(last_msg_id, 0), ?) WHERE tg_channel_id IN (?, ?)", (last_msg_id, v1, v2))
             conn.commit()
         finally:
             conn.close()

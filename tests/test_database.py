@@ -147,6 +147,50 @@ class TestDatabase(unittest.TestCase):
         database.update_channel_last_msg_id(ch_id, 150)
         self.assertEqual(database.get_channel_last_msg_id(ch_id), 150)
 
+    def test_normalize_tg_id_variants(self):
+        # -100 prefix int
+        self.assertEqual(database._normalize_tg_id_variants(-1001234567890), (-1001234567890, 1234567890))
+        # Positive int
+        self.assertEqual(database._normalize_tg_id_variants(1234567890), (-1001234567890, 1234567890))
+        # String with -100
+        self.assertEqual(database._normalize_tg_id_variants("-1001234567890"), (-1001234567890, 1234567890))
+        # String without -100
+        self.assertEqual(database._normalize_tg_id_variants("1234567890"), (-1001234567890, 1234567890))
+        # Legacy group (negative without 100)
+        self.assertEqual(database._normalize_tg_id_variants(-123456), (-123456, -123456))
+        # Invalid
+        self.assertEqual(database._normalize_tg_id_variants("invalid"), (0, 0))
+
+    def test_cross_format_id_lookups(self):
+        # Add channel with -100 prefix
+        database.add_channel_by_id(-100999888, 50, username="testchan")
+        
+        # Look up channel by positive ID
+        chan = database.get_channel_by_tg_id(999888)
+        self.assertIsNotNone(chan)
+        self.assertEqual(chan["dc_chat_id"], 50)
+
+        # get_dc_channel_chat_id cross-lookup
+        self.assertEqual(database.get_dc_channel_chat_id(999888), 50)
+        self.assertEqual(database.get_dc_channel_chat_id(-100999888), 50)
+
+        # Update last_msg_id using positive ID
+        database.update_channel_last_msg_id(999888, 42)
+        self.assertEqual(database.get_channel_last_msg_id(-100999888), 42)
+        self.assertEqual(database.get_channel_last_msg_id(999888), 42)
+
+        # Save message_map with positive ID, lookup with -100 prefix
+        database.save_message_map(dc_msg_id=101, dc_chat_id=50, tg_msg_id=77, tg_chat_id=999888, content_hash="abc")
+        self.assertEqual(database.get_dc_msg_id(77, -100999888, 50), 101)
+        self.assertEqual(database.get_dc_msg_id(77, 999888, 50), 101)
+        self.assertEqual(database.get_message_content_hash(77, -100999888, 50), "abc")
+        self.assertEqual(database.get_message_content_hash(77, 999888, 50), "abc")
+
+        # Save message_map with -100 prefix, lookup with positive ID
+        database.save_message_map(dc_msg_id=102, dc_chat_id=50, tg_msg_id=78, tg_chat_id=-100999888, content_hash="def")
+        self.assertEqual(database.get_dc_msg_id(78, 999888, 50), 102)
+        self.assertEqual(database.get_dc_msg_id(78, -100999888, 50), 102)
+
 
 if __name__ == "__main__":
     unittest.main()

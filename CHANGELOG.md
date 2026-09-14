@@ -1,3 +1,12 @@
+## [2.21.3] - 2026-09-14
+- **Channel Post De-duplication & Broadcast Channel Edit Suppression**:
+  - Normalized Telegram channel and chat IDs with and without `-100` prefix across all database queries (`_normalize_tg_id_variants`) and memory caches. Resolves ID representation mismatches between Telethon (`3408...`), Telegram Bot API (`-1003408...`), and database records.
+  - Suppressed in-place edit requests (`send_edit_request`) and duplicate message re-sends for broadcast channels in Delta Chat. In Delta Chat, broadcast channels are SMTP mailing lists where calling `send_edit_request` generates an email quoting the original post (`> ...`) and appending modified text. For broadcast channels, existing posts now update content hashes in SQLite and advance the channel watermark silently without re-sending duplicate emails.
+  - If an edit event arrives for a channel post that was never relayed before, it is now cleanly relayed as a fresh post without `[Edited]` prefix.
+  - Added direct `message_map` verification in `_process_userbot_event_internal`, `handle_tg_channel_post`, and `reconcile_channel` to ensure already relayed Telegram messages are never re-sent as new messages even if `last_msg_id` was lagging.
+  - Ensured channel watermark (`last_msg_id`) unconditionally advances upon relaying channel posts, preventing startup reconciliation and catchup sweeps from re-forwarding delivered posts across bot restarts.
+  - Added unit test suite covering Telegram ID normalization, cross-format database lookups, broadcast channel edit suppression, and reconciliation de-duplication.
+
 ## [2.21.2] - 2026-09-14
 - **Sanitize Poll Questions and Options Formatting**:
   - Added `_format_poll_text` helper to safely handle Telegram polls where questions or options are represented as `TextWithEntities` objects (introduced in MTProto Layer 229+ / Telethon 1.45+).
