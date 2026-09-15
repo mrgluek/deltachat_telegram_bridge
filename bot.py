@@ -506,7 +506,7 @@ _reload_filter_cache()
 
 def is_text_filtered(text: str | None) -> tuple[bool, str | None]:
     """Check if text contains any configured filter pattern (case-insensitive) via compiled regex."""
-    if not text:
+    if not isinstance(text, str) or not text:
         return False, None
     with _filter_cache_lock:
         regex = _filter_regex
