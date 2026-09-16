@@ -1,5 +1,9 @@
 name: Notify TG Bridge Changelog
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   notify:
