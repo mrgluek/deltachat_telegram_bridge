@@ -467,7 +467,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.22.0"
+VERSION = "2.22.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1635,24 +1635,60 @@ def _make_teaser(text: str, max_len: int = 280) -> str:
 
 
 def _is_safe_telegram_url(url: str) -> bool:
-    """Validate that remote URL uses http(s) and targets legitimate Telegram/CDN hosts."""
+    """Validate that remote URL uses http(s) and targets legitimate Telegram/CDN hosts without resolving to private/internal networks."""
     if not url or not isinstance(url, str):
         return False
     try:
         from urllib.parse import urlparse
+        import ipaddress
+        import socket
+
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
             return False
-        hostname = (p.hostname or "").lower()
+        hostname = (p.hostname or "").lower().strip()
         if not hostname:
             return False
-        if hostname in ("localhost", "127.0.0.1", "::1") or hostname.endswith((".local", ".internal")):
+        if hostname in ("localhost", "127.0.0.1", "::1") or hostname.endswith((".local", ".internal", ".lan")):
             return False
+
+        # Reject direct IP addresses (Telegram media and embed endpoints are hosted on named domains)
+        try:
+            ipaddress.ip_address(hostname)
+            return False
+        except ValueError:
+            pass
+
         allowed_suffixes = (
             "t.me", "telegram.me", "telegram.org",
             "telesco.pe", "cdn-telegram.org", "telegram-cdn.org", "stel.com"
         )
-        return any(hostname == s or hostname.endswith("." + s) for s in allowed_suffixes)
+        if not any(hostname == s or hostname.endswith("." + s) for s in allowed_suffixes):
+            return False
+
+        # DNS resolution check: block domains resolving to private, loopback, link-local, multicast, or reserved IPs
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            for _, _, _, _, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                ip = ipaddress.ip_address(ip_str)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+                    return False
+                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                    mapped_v4 = ip.ipv4_mapped
+                    if (
+                        mapped_v4.is_private
+                        or mapped_v4.is_loopback
+                        or mapped_v4.is_link_local
+                        or mapped_v4.is_multicast
+                        or mapped_v4.is_reserved
+                    ):
+                        return False
+        except (socket.gaierror, OSError):
+            # In offline or mock unit test environments, unresolvable allowed test hosts are tolerated
+            pass
+
+        return True
     except Exception:
         return False
 
@@ -1739,6 +1775,9 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200 and resp.content:
+                if len(resp.content) > 20 * 1024 * 1024:
+                    logger.warning(f"Image {url} exceeds limit (20 MB), skipping download")
+                    return False
                 try:
                     with Image.open(io.BytesIO(resp.content)) as img:
                         if img.mode in ("RGBA", "P"):
@@ -2123,7 +2162,12 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
     """Fetch public Telegram channel post embed and extract full rich post metadata."""
     if not username or not post_id:
         return None
-    url = f"https://t.me/{username}/{post_id}?embed=1"
+    clean_username = str(username).lstrip('@').strip()
+    if not re.match(r'^[a-zA-Z0-9_]{3,32}$', clean_username):
+        return None
+    if not isinstance(post_id, int) or post_id <= 0:
+        return None
+    url = f"https://t.me/{clean_username}/{post_id}?embed=1"
     try:
         import httpx
         headers = {
@@ -2131,7 +2175,7 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
         }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
-            if resp.status_code != 200 or not resp.text:
+            if resp.status_code != 200 or not resp.text or len(resp.text) > 2 * 1024 * 1024:
                 return None
             content = resp.text
 
@@ -2281,6 +2325,9 @@ async def _download_image_url(url: str) -> Optional[str]:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
             if resp.status_code == 200 and resp.content:
+                if len(resp.content) > 20 * 1024 * 1024:
+                    logger.warning(f"Image {url} exceeds limit (20 MB), skipping download")
+                    return None
                 ext = '.jpg'
                 if '.png' in url.lower():
                     ext = '.png'
