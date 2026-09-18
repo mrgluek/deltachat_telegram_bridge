@@ -277,6 +277,60 @@ class TestTelegramPostPreview(unittest.TestCase):
             bot.handle_dc_message(mock_bot, 1, mock_event)
             mock_handler.assert_called_once_with(mock_bot, 1, 10, "durov", 42, 55)
 
+    def test_handle_dc_message_skips_bot_card_prefixes(self):
+        """handle_dc_message must ignore messages starting with card prefixes like 📰, 📷, 💬, 🌐, 🤖."""
+        mock_bot = MagicMock()
+        mock_bot.has_command.return_value = False
+        mock_bot.rpc.get_basic_chat_info.return_value = {"type": 1}
+
+        with (
+            patch("bot._async_handle_direct_tg_post", new_callable=AsyncMock) as mock_handler,
+            patch("bot._is_dc_admin", return_value=False),
+        ):
+            for prefix in ("📰", "📷", "💬", "🌐", "🤖", "/"):
+                mock_event = MagicMock()
+                mock_event.command = None
+                mock_event.msg.chat_id = 10
+                mock_event.msg.from_id = 99
+                mock_event.msg.id = 56
+                mock_event.msg.text = f"{prefix} **Title**\n\nhttps://t.me/durov/42"
+                bot.handle_dc_message(mock_bot, 1, mock_event)
+                mock_handler.assert_not_called()
+
+    def test_handle_dc_message_skips_bot_sender_and_self(self):
+        """handle_dc_message must ignore messages from self (from_id=1) or bot contacts."""
+        mock_bot = MagicMock()
+        mock_bot.has_command.return_value = False
+        mock_bot.rpc.get_basic_chat_info.return_value = {"type": 1}
+
+        with (
+            patch("bot._async_handle_direct_tg_post", new_callable=AsyncMock) as mock_handler,
+            patch("bot._is_dc_admin", return_value=False),
+        ):
+            # 1. from_id == 1 (self)
+            mock_event = MagicMock()
+            mock_event.command = None
+            mock_event.msg.chat_id = 10
+            mock_event.msg.from_id = 1
+            mock_event.msg.id = 57
+            mock_event.msg.text = "https://t.me/durov/42"
+            bot.handle_dc_message(mock_bot, 1, mock_event)
+            mock_handler.assert_not_called()
+
+            # 2. msg.is_bot is True
+            mock_event.msg.from_id = 88
+            mock_event.msg.is_bot = True
+            bot.handle_dc_message(mock_bot, 1, mock_event)
+            mock_handler.assert_not_called()
+
+            # 3. contact.is_bot is True
+            mock_event.msg.is_bot = False
+            bot_contact = MagicMock()
+            bot_contact.is_bot = True
+            mock_bot.rpc.get_contact.return_value = bot_contact
+            bot.handle_dc_message(mock_bot, 1, mock_event)
+            mock_handler.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

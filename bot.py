@@ -471,7 +471,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.23.0"
+VERSION = "2.23.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -5098,32 +5098,44 @@ def handle_dc_message(bot, accid, event):
             return
 
     # Skip bot's own messages to prevent echo loops
-    if bot_contact_id and msg.from_id == bot_contact_id:
+    if msg.from_id == 1 or (bot_contact_id and msg.from_id == bot_contact_id):
         return
 
     # Check for direct Telegram post links (e.g. t.me/channel/123)
-    raw_text = msg.text or ""
-    tg_post_m = TG_POST_URL_RE.search(raw_text)
-    if tg_post_m:
-        post_username = tg_post_m.group(1)
-        post_id_str = tg_post_m.group(2)
-        if post_username.lower() != "c" and post_id_str.isdigit():
-            target_post_id = int(post_id_str)
-            logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
-            if main_loop and main_loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    _async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id),
-                    main_loop
-                )
-            else:
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.create_task(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+    raw_text = (msg.text or "").strip()
+    # Anti-loop guard: never process links from bot preview cards or from bot accounts
+    if raw_text and not raw_text.startswith(("/", "📰", "🌐", "🤖", "📷", "💬")):
+        is_bot_sender = getattr(msg, "is_bot", False) is True
+        if not is_bot_sender:
+            try:
+                c = bot.rpc.get_contact(accid, msg.from_id)
+                if getattr(c, "is_bot", False) is True:
+                    is_bot_sender = True
+            except Exception:
+                pass
+
+        if not is_bot_sender:
+            tg_post_m = TG_POST_URL_RE.search(raw_text)
+            if tg_post_m:
+                post_username = tg_post_m.group(1)
+                post_id_str = tg_post_m.group(2)
+                if post_username.lower() != "c" and post_id_str.isdigit():
+                    target_post_id = int(post_id_str)
+                    logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
+                    if main_loop and main_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            _async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id),
+                            main_loop
+                        )
                     else:
-                        loop.run_until_complete(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
-                except RuntimeError:
-                    asyncio.run(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                asyncio.create_task(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                            else:
+                                loop.run_until_complete(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                        except RuntimeError:
+                            asyncio.run(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
 
     # Only relay group messages
     try:

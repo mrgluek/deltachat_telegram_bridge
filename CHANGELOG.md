@@ -1,3 +1,9 @@
+## [2.23.1] - 2026-09-18
+- **Anti-Loop Defense Hardening**:
+  - Excluded messages starting with card and relay prefixes (`📰`, `📷`, `💬`, `🌐`, `🤖`, `/`) from direct Telegram link processing.
+  - Hardened bot sender detection: checks `msg.from_id == 1` (standard DC self contact ID) as well as strict boolean verification of `msg.is_bot is True` and `contact.is_bot is True` to ensure the bridge never echoes or re-processes bot cards or its own messages.
+  - Added unit test coverage for loop prevention (`test_handle_dc_message_skips_bot_card_prefixes`, `test_handle_dc_message_skips_bot_sender_and_self`).
+
 ## [2.23.0] - 2026-09-18
 - **Direct Telegram Post Link Previews & WebXDC Delivery**:
   - Added direct Telegram post link detection (`TG_POST_URL_RE`) in `handle_dc_message` for both group chats and 1:1 direct chats.
