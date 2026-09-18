@@ -264,6 +264,18 @@ def init_db():
             ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_pmg_created ON processed_media_groups (created_at)')
 
+            # Telegram post cache (for direct t.me link previews)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS telegram_post_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    post_type TEXT NOT NULL,
+                    text TEXT,
+                    file_path TEXT,
+                    created_at INTEGER NOT NULL
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_post_cache_created ON telegram_post_cache (created_at)')
+
             conn.commit()
         finally:
             conn.close()
@@ -306,6 +318,76 @@ def set_rich_mode(mode: str) -> bool:
         set_config("rich_mode", mode)
         return True
     return False
+
+def get_cached_tg_post(cache_key: str, max_age_seconds: int = 86400) -> Optional[dict]:
+    """Retrieve cached telegram post by cache_key (e.g. 'channel/123') if not expired."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            now = int(time.time())
+            min_time = now - max_age_seconds
+            cursor.execute(
+                "SELECT cache_key, post_type, text, file_path, created_at FROM telegram_post_cache WHERE cache_key = ? AND created_at >= ?",
+                (cache_key.lower(), min_time)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            file_path = row[3]
+            # If post expects a file, ensure the file still exists on disk
+            if file_path and not os.path.exists(file_path):
+                return None
+            
+            return {
+                "cache_key": row[0],
+                "post_type": row[1],
+                "text": row[2],
+                "file_path": file_path,
+                "created_at": row[4]
+            }
+        finally:
+            conn.close()
+
+def add_cached_tg_post(cache_key: str, post_type: str, text: str, file_path: Optional[str] = None):
+    """Store telegram post into cache."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            now = int(time.time())
+            cursor.execute(
+                "INSERT OR REPLACE INTO telegram_post_cache (cache_key, post_type, text, file_path, created_at) VALUES (?, ?, ?, ?, ?)",
+                (cache_key.lower(), post_type, text, file_path, now)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+def clear_expired_tg_post_cache(max_age_seconds: int = 86400):
+    """Delete expired telegram post cache entries and delete orphan cached files."""
+    with _lock:
+        conn = _connect()
+        try:
+            now = int(time.time())
+            min_time = now - max_age_seconds
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT file_path FROM telegram_post_cache WHERE created_at <= ? AND file_path IS NOT NULL",
+                (min_time,)
+            )
+            for row in cursor.fetchall():
+                fpath = row[0]
+                if fpath and os.path.exists(fpath):
+                    try:
+                        os.unlink(fpath)
+                    except Exception:
+                        pass
+            cursor.execute("DELETE FROM telegram_post_cache WHERE created_at <= ?", (min_time,))
+            conn.commit()
+        finally:
+            conn.close()
 
 def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = None):
     with _lock:

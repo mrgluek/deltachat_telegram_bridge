@@ -49,6 +49,10 @@ except ImportError:
     qrcode = None
 
 DC_FALLBACK_PATTERN = re.compile(r'\s*\[(?:Image|Video|Voice|Audio|Document|File|Sticker|Gif)[ \-–]+[^\]]+\]', re.IGNORECASE)
+TG_POST_URL_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/(?:s/)?([a-zA-Z0-9_]{3,32})/(\d+)',
+    re.IGNORECASE
+)
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -467,7 +471,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.22.1"
+VERSION = "2.23.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2655,6 +2659,147 @@ async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Option
     except Exception as e:
         logger.warning(f"Failed to extract Telethon RichMessage: {e}", exc_info=True)
         return None
+
+
+async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None):
+    """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
+    clean_username = str(username).lstrip('@').strip()
+    cache_key = f"{clean_username.lower()}/{post_id}"
+    try:
+        # 1. Periodic cleanup of expired cache entries
+        try:
+            database.clear_expired_tg_post_cache(86400)
+        except Exception:
+            pass
+
+        # 2. Check database cache
+        cached = database.get_cached_tg_post(cache_key)
+        if cached:
+            post_type = cached.get("post_type")
+            text = cached.get("text") or ""
+            file_path = cached.get("file_path")
+            if post_type in ("webxdc", "photo") and file_path and os.path.exists(file_path):
+                await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text, file=file_path))
+                logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache ({post_type})")
+                return
+            elif post_type == "text":
+                await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text))
+                logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache (text)")
+                return
+
+        # 3. Cache miss: Fetch post
+        rich_post: Optional[TelegramRichPost] = None
+        tg_msg = None
+
+        if userbot_client and userbot_client.is_connected():
+            try:
+                entity = await asyncio.wait_for(userbot_client.get_entity(clean_username), timeout=15.0)
+                msgs = await asyncio.wait_for(userbot_client.get_messages(entity, ids=post_id), timeout=15.0)
+                if msgs:
+                    tg_msg = msgs[0] if isinstance(msgs, list) else msgs
+            except Exception as ub_err:
+                logger.warning(f"Userbot entity/message fetch failed for @{clean_username}/{post_id}: {ub_err}")
+
+        # Native Telethon RichMessage support (Layer 229+)
+        if tg_msg and getattr(tg_msg, 'rich_message', None):
+            try:
+                rich_post = await _extract_telethon_rich_message(tg_msg, userbot_client, dc_chat_id=dc_chat_id)
+            except Exception as rm_err:
+                logger.warning(f"Failed extracting telethon rich message for @{clean_username}/{post_id}: {rm_err}")
+
+        # Fallback to public web embed extraction
+        if not rich_post:
+            try:
+                rich_post = await _extract_public_tg_post_rich(clean_username, post_id)
+            except Exception as ex_err:
+                logger.warning(f"Public rich post extraction failed for @{clean_username}/{post_id}: {ex_err}")
+
+        # Cache storage directory setup
+        db_dir = os.path.dirname(os.path.abspath(database.DB_PATH)) if database.DB_PATH != ":memory:" else "/tmp"
+        cache_dir = os.path.join(db_dir, "cache", "posts")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        rich_mode = database.get_rich_mode()
+
+        if rich_post:
+            clean_title = rich_post.author_name or f"@{clean_username}"
+            has_rich_content = bool(rich_post.text_markdown.strip() or rich_post.image_urls or rich_post.videos)
+            is_rich = bool(rich_post.is_rich or len(rich_post.image_urls) > 1 or len(rich_post.videos) > 0)
+
+            if has_rich_content and is_rich and rich_mode in ("webxdc", "both"):
+                # Package as WebXDC
+                xdc_name = f"{clean_username.lower()}_{post_id}.xdc"
+                xdc_path = os.path.join(cache_dir, xdc_name)
+                if await _package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
+                    caption = f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{clean_username}/{post_id}" if rich_post.teaser else f"📰 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
+                    database.add_cached_tg_post(cache_key, "webxdc", caption, xdc_path)
+                    await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=xdc_path))
+                    logger.info(f"Direct TG post @{clean_username}/{post_id}: packaged and delivered as WebXDC")
+                    return
+                else:
+                    if os.path.exists(xdc_path):
+                        try:
+                            os.unlink(xdc_path)
+                        except Exception:
+                            pass
+
+            if rich_post.image_urls:
+                # Single photo or split mode
+                img_url = rich_post.image_urls[0]
+                img_name = f"{clean_username.lower()}_{post_id}.jpg"
+                img_dest = os.path.join(cache_dir, img_name)
+                if await _download_image_to_file(img_url, img_dest, max_dim=1280, fmt="JPEG", quality=85):
+                    text_body = rich_post.text_markdown.strip()
+                    caption = f"📷 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}" if text_body else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
+                    caption = _truncate(caption, DC_MAX_MSG_LEN)
+                    database.add_cached_tg_post(cache_key, "photo", caption, img_dest)
+                    await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=img_dest))
+                    logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as photo")
+                    return
+
+            if rich_post.text_markdown.strip():
+                # Plain text post
+                text_body = rich_post.text_markdown.strip()
+                caption = f"💬 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}"
+                caption = _truncate(caption, DC_MAX_MSG_LEN)
+                database.add_cached_tg_post(cache_key, "text", caption, None)
+                await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
+                logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as text")
+                return
+
+        # Fallback: if rich_post failed or had no content, but tg_msg exists from userbot
+        if tg_msg:
+            clean_title = getattr(tg_msg.chat, 'title', '') or (f"@{clean_username}" if clean_username else "Telegram")
+            raw_text = tg_msg.raw_text or ""
+            entities = getattr(tg_msg, 'entities', None)
+            formatted_text = _format_telegram_entities(raw_text, entities) if entities else raw_text
+
+            if tg_msg.media and hasattr(userbot_client, 'download_media'):
+                media_type = type(tg_msg.media).__name__
+                if media_type == 'MessageMediaPhoto':
+                    img_name = f"{clean_username.lower()}_{post_id}.jpg"
+                    img_dest = os.path.join(cache_dir, img_name)
+                    try:
+                        downloaded = await asyncio.wait_for(userbot_client.download_media(tg_msg.media, file=img_dest), timeout=60.0)
+                        if downloaded and os.path.exists(downloaded):
+                            caption = f"📷 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}" if formatted_text else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
+                            caption = _truncate(caption, DC_MAX_MSG_LEN)
+                            database.add_cached_tg_post(cache_key, "photo", caption, downloaded)
+                            await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=downloaded))
+                            return
+                    except Exception as dl_err:
+                        logger.warning(f"Failed downloading userbot media for @{clean_username}/{post_id}: {dl_err}")
+
+            if formatted_text.strip():
+                caption = f"💬 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}"
+                caption = _truncate(caption, DC_MAX_MSG_LEN)
+                database.add_cached_tg_post(cache_key, "text", caption, None)
+                await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
+                return
+
+        logger.warning(f"Could not extract content for direct post link @{clean_username}/{post_id}")
+    except Exception as e:
+        logger.error(f"Error handling direct Telegram post @{clean_username}/{post_id}: {e}", exc_info=True)
 
 
 
@@ -4955,6 +5100,30 @@ def handle_dc_message(bot, accid, event):
     # Skip bot's own messages to prevent echo loops
     if bot_contact_id and msg.from_id == bot_contact_id:
         return
+
+    # Check for direct Telegram post links (e.g. t.me/channel/123)
+    raw_text = msg.text or ""
+    tg_post_m = TG_POST_URL_RE.search(raw_text)
+    if tg_post_m:
+        post_username = tg_post_m.group(1)
+        post_id_str = tg_post_m.group(2)
+        if post_username.lower() != "c" and post_id_str.isdigit():
+            target_post_id = int(post_id_str)
+            logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
+            if main_loop and main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    _async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id),
+                    main_loop
+                )
+            else:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                    else:
+                        loop.run_until_complete(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                except RuntimeError:
+                    asyncio.run(_async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
 
     # Only relay group messages
     try:

@@ -1,3 +1,13 @@
+## [2.23.0] - 2026-09-18
+- **Direct Telegram Post Link Previews & WebXDC Delivery**:
+  - Added direct Telegram post link detection (`TG_POST_URL_RE`) in `handle_dc_message` for both group chats and 1:1 direct chats.
+  - Implemented `_async_handle_direct_tg_post` with native MTProto userbot extraction (Layer 229+ `RichMessage`, media groups, polls, and photos) and fallback to public embed rich extraction (`_extract_public_tg_post_rich`).
+  - Delivered posts strictly aligned with `/richmode`: plain text for text-only posts, photo with caption for single-image posts, and interactive standalone WebXDC apps (`.xdc`) for rich posts, multi-photo albums, and videos.
+- **SQLite Post Caching**:
+  - Created `telegram_post_cache` table and helper functions (`get_cached_tg_post`, `add_cached_tg_post`, `clear_expired_tg_post_cache`) with 24-hour default TTL and persistent on-disk file verification, enabling instant 0ms responses on repeated links and preventing Telegram MTProto FloodWait rate limits.
+- **Unit Tests (`tests/test_post_preview.py`)**:
+  - Added unit test suite covering post cache round-tripping, missing file invalidation, TTL cleanup, URL regex matching, cache hit delivery, and WebXDC/photo/text delivery dispatching.
+
 ## [2.22.1] - 2026-09-16
 - **Security & Media Protection**:
   - Enhanced SSRF guard (`_is_safe_telegram_url`) with DNS resolution to block domains resolving to loopback, private, link-local, multicast, or cloud metadata IP ranges, plus rejection of raw IP literals and `.lan` hostnames.
