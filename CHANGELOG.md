@@ -1,3 +1,20 @@
+## [2.24.0] - 2026-09-18
+- **Inline Article Rendering for Rich Telegram Posts**:
+  - Completely redesigned WebXDC article layout: inline images are now embedded directly inside the post body as `<figure>` elements with optional captions, matching the original Telegram article reading experience.
+  - Added `_process_page_blocks()` — a new recursive async function that fully handles all Telegram MTProto `PageBlock` types: `PageBlockParagraph`, `PageBlockPhoto`, `PageBlockCollage`, `PageBlockSlideshow`, `PageBlockVideo`, `PageBlockDetails`, `PageBlockBlockquote`, `PageBlockList`/`PageBlockOrderedList`, `PageBlockCover`, `PageBlockFooter`, `PageBlockEmbedPost`, and `PageBlockPreformatted` (code blocks).
+  - `PageBlockDetails` (expandable/collapsible) sections are now rendered fully expanded inline — no folding inside WebXDC.
+  - Full `GetRichMessageRequest` fetch for partitioned (`part=True`) rich messages, ensuring complete content is always retrieved rather than truncated previews.
+- **Unified Gallery Lightbox**:
+  - Replaced single-image lightbox with a full multi-image gallery lightbox supporting previous/next navigation, thumbnail strip, caption display, image counter, keyboard arrow keys, and touch-swipe gestures.
+  - All images in a post (both top gallery and inline article images) are collected into a single shared `galleryImages[]` array, so clicking any image opens the unified lightbox and allows paging through all post images.
+- **Bot Avatar Fallback**:
+  - `_get_channel_avatar_path()` now correctly fetches the channel's own avatar from Telegram (not the requesting user's avatar), preventing copyright / avatar leakage issues.
+  - Added `_get_bot_self_avatar_path()`: uses the bot's own Delta Chat selfavatar as fallback icon when no channel avatar is available.
+  - Added `_generate_fallback_bridge_icon()`: generates a neutral SVG speech-bubble icon (bridge logo, no Telegram trademarks) as last-resort fallback.
+- **Paragraph & Formatting Fixes**:
+  - Added `_format_paragraph_html()`: properly converts double-newline paragraph boundaries to `<p>` tags and single newlines to `<br/>`, fixing broken paragraph spacing in article posts.
+  - Fixed word-break, line-height, and margin CSS for `.post-content p` elements.
+
 ## [2.23.1] - 2026-09-18
 - **Anti-Loop Defense Hardening**:
   - Excluded messages starting with card and relay prefixes (`📰`, `📷`, `💬`, `🌐`, `🤖`, `/`) from direct Telegram link processing.

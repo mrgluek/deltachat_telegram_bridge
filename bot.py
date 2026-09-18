@@ -471,7 +471,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.23.1"
+VERSION = "2.24.0"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -1286,7 +1286,36 @@ TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
             overflow-wrap: break-word;
         }}
         .post-content p {{
-            margin-bottom: 14px;
+            margin-bottom: 16px;
+            line-height: 1.6;
+            word-break: break-word;
+        }}
+        .post-figure {{
+            margin: 20px 0;
+            text-align: center;
+        }}
+        .post-figure img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            cursor: zoom-in;
+            display: block;
+            margin: 0 auto;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            transition: transform 0.2s;
+        }}
+        .post-figure img:hover {{
+            transform: scale(1.01);
+        }}
+        .post-figure figcaption {{
+            margin-top: 8px;
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            font-style: italic;
+            line-height: 1.4;
+        }}
+        .post-collage {{
+            margin: 20px 0;
         }}
         .post-content a {{
             color: var(--accent-color);
@@ -1501,16 +1530,106 @@ TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
             position: fixed;
             z-index: 9999;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.92);
-            justify-content: center;
+            background: rgba(0, 0, 0, 0.94);
+            flex-direction: column;
+            justify-content: space-between;
             align-items: center;
-            cursor: zoom-out;
+            user-select: none;
+        }}
+        .lightbox-header {{
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px;
+            color: #ffffff;
+            font-size: 0.95rem;
+            box-sizing: border-box;
+            z-index: 10001;
+        }}
+        .lightbox-close {{
+            background: none;
+            border: none;
+            color: #ffffff;
+            font-size: 28px;
+            cursor: pointer;
+            padding: 4px 10px;
+            line-height: 1;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }}
+        .lightbox-close:hover {{
+            background: rgba(255,255,255,0.15);
+        }}
+        .lightbox-content {{
+            position: relative;
+            max-width: 90vw;
+            max-height: calc(100vh - 170px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
         }}
         #lightbox-img {{
-            max-width: 95vw;
-            max-height: 95vh;
+            max-width: 90vw;
+            max-height: calc(100vh - 190px);
             object-fit: contain;
-            border-radius: 8px;
+            border-radius: 6px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+        }}
+        #lightbox-caption {{
+            margin-top: 10px;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            font-style: italic;
+            text-align: center;
+            max-width: 80vw;
+        }}
+        .lightbox-prev, .lightbox-next {{
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #ffffff;
+            font-size: 26px;
+            padding: 12px 16px;
+            cursor: pointer;
+            border-radius: 50%;
+            transition: background 0.2s, transform 0.1s;
+            z-index: 10001;
+        }}
+        .lightbox-prev {{ left: 16px; }}
+        .lightbox-next {{ right: 16px; }}
+        .lightbox-prev:hover, .lightbox-next:hover {{
+            background: rgba(255,255,255,0.25);
+        }}
+        .lightbox-thumbnails {{
+            width: 100%;
+            overflow-x: auto;
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.4);
+            box-sizing: border-box;
+            z-index: 10001;
+        }}
+        .lightbox-thumb {{
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 4px;
+            opacity: 0.6;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: opacity 0.2s, border-color 0.2s;
+            flex-shrink: 0;
+        }}
+        .lightbox-thumb.active {{
+            opacity: 1;
+            border-color: var(--accent-color);
         }}
     </style>
 </head>
@@ -1548,20 +1667,144 @@ TG_POST_WEBXDC_HTML_TEMPLATE = """<!DOCTYPE html>
         </footer>
     </div>
 
-    <div id="lightbox" onclick="closeLightbox()">
-        <img id="lightbox-img" src="" alt="Fullscreen view" />
+    <div id="lightbox">
+        <div class="lightbox-header">
+            <div id="lightbox-counter">1 / 1</div>
+            <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
+        </div>
+        <button class="lightbox-prev" onclick="prevLightboxImage(event)">&#10094;</button>
+        <div class="lightbox-content">
+            <img id="lightbox-img" src="" alt="Fullscreen view" />
+            <div id="lightbox-caption"></div>
+        </div>
+        <button class="lightbox-next" onclick="nextLightboxImage(event)">&#10095;</button>
+        <div id="lightbox-thumbnails" class="lightbox-thumbnails"></div>
     </div>
 
     <script>
-        function openLightbox(src) {{
+        var galleryImages = [];
+        var currentIndex = 0;
+
+        function initGallery() {{
+            var imgs = document.querySelectorAll('.post-content img, .gallery-grid img, .gallery-single img');
+            galleryImages = [];
+            imgs.forEach(function(img) {{
+                var fig = img.closest('figure');
+                var cap = fig ? (fig.querySelector('figcaption') ? fig.querySelector('figcaption').textContent : '') : (img.getAttribute('alt') || '');
+                var item = {{
+                    src: img.getAttribute('src'),
+                    caption: cap
+                }};
+                var existing = galleryImages.findIndex(function(g) {{ return g.src === item.src; }});
+                var pos = existing >= 0 ? existing : galleryImages.length;
+                if (existing < 0) {{
+                    galleryImages.push(item);
+                }}
+                img.style.cursor = 'zoom-in';
+                img.addEventListener('click', function(e) {{
+                    e.stopPropagation();
+                    openLightboxByIndex(pos);
+                }});
+            }});
+
+            var thumbContainer = document.getElementById('lightbox-thumbnails');
+            if (thumbContainer) {{
+                thumbContainer.innerHTML = '';
+                if (galleryImages.length > 1) {{
+                    galleryImages.forEach(function(item, idx) {{
+                        var thumb = document.createElement('img');
+                        thumb.src = item.src;
+                        thumb.className = 'lightbox-thumb';
+                        thumb.onclick = function(e) {{
+                            e.stopPropagation();
+                            openLightboxByIndex(idx);
+                        }};
+                        thumbContainer.appendChild(thumb);
+                    }});
+                    thumbContainer.style.display = 'flex';
+                }} else {{
+                    thumbContainer.style.display = 'none';
+                }}
+            }}
+        }}
+
+        function openLightboxByIndex(idx) {{
+            if (idx < 0 || idx >= galleryImages.length) return;
+            currentIndex = idx;
+            var item = galleryImages[idx];
+            document.getElementById('lightbox-img').src = item.src;
+            document.getElementById('lightbox-caption').textContent = item.caption || '';
+            document.getElementById('lightbox-counter').textContent = (idx + 1) + ' / ' + galleryImages.length;
+
+            var prevBtn = document.querySelector('.lightbox-prev');
+            var nextBtn = document.querySelector('.lightbox-next');
+            if (prevBtn && nextBtn) {{
+                prevBtn.style.display = galleryImages.length > 1 ? 'block' : 'none';
+                nextBtn.style.display = galleryImages.length > 1 ? 'block' : 'none';
+            }}
+
+            var thumbs = document.querySelectorAll('.lightbox-thumb');
+            thumbs.forEach(function(t, i) {{
+                if (i === idx) {{
+                    t.classList.add('active');
+                    t.scrollIntoView({{ behavior: 'smooth', inline: 'center', block: 'nearest' }});
+                }} else {{
+                    t.classList.remove('active');
+                }}
+            }});
+
             var lb = document.getElementById('lightbox');
-            var img = document.getElementById('lightbox-img');
-            img.src = src;
             lb.style.display = 'flex';
         }}
+
         function closeLightbox() {{
             document.getElementById('lightbox').style.display = 'none';
         }}
+
+        function prevLightboxImage(e) {{
+            if (e) e.stopPropagation();
+            if (galleryImages.length <= 1) return;
+            var prev = currentIndex > 0 ? currentIndex - 1 : galleryImages.length - 1;
+            openLightboxByIndex(prev);
+        }}
+
+        function nextLightboxImage(e) {{
+            if (e) e.stopPropagation();
+            if (galleryImages.length <= 1) return;
+            var next = currentIndex < galleryImages.length - 1 ? currentIndex + 1 : 0;
+            openLightboxByIndex(next);
+        }}
+
+        document.addEventListener('keydown', function(e) {{
+            var lb = document.getElementById('lightbox');
+            if (lb && lb.style.display === 'flex') {{
+                if (e.key === 'ArrowLeft') prevLightboxImage();
+                else if (e.key === 'ArrowRight') nextLightboxImage();
+                else if (e.key === 'Escape') closeLightbox();
+            }}
+        }});
+
+        var touchStartX = 0;
+        var touchEndX = 0;
+        var lbEl = document.getElementById('lightbox');
+        if (lbEl) {{
+            lbEl.addEventListener('touchstart', function(e) {{
+                touchStartX = e.changedTouches[0].screenX;
+            }}, {{ passive: true }});
+            lbEl.addEventListener('touchend', function(e) {{
+                touchEndX = e.changedTouches[0].screenX;
+                if (touchStartX - touchEndX > 50) nextLightboxImage();
+                else if (touchEndX - touchStartX > 50) prevLightboxImage();
+            }}, {{ passive: true }});
+            lbEl.addEventListener('click', function(e) {{
+                if (e.target === lbEl || e.target.classList.contains('lightbox-content')) {{
+                    closeLightbox();
+                }}
+            }});
+        }}
+
+        document.addEventListener('DOMContentLoaded', initGallery);
+        initGallery();
     </script>
 </body>
 </html>
@@ -1605,19 +1848,62 @@ def _make_square_icon(image_source_path: str | None, max_dim: int = 128, fmt: st
         return None, ""
 
 
-def _generate_fallback_telegram_icon() -> bytes:
-    """Generate a clean 128x128 PNG fallback Telegram icon using PIL."""
+def _generate_fallback_bridge_icon() -> bytes:
+    """Generate a clean 128x128 PNG fallback card icon using PIL (neutral bridge/message design, avoids Telegram copyright)."""
     try:
         from PIL import Image, ImageDraw
         img = Image.new("RGBA", (128, 128), color=(36, 129, 204, 255))
         d = ImageDraw.Draw(img)
-        d.polygon([(26, 64), (102, 28), (76, 100), (62, 74)], fill=(255, 255, 255, 255))
-        d.polygon([(62, 74), (102, 28), (56, 66)], fill=(220, 235, 248, 255))
+        # Rounded speech bubble
+        d.rounded_rectangle([(24, 28), (104, 86)], radius=16, fill=(255, 255, 255, 255))
+        d.polygon([(36, 86), (28, 104), (54, 86)], fill=(255, 255, 255, 255))
+        # Inner communication dots
+        d.ellipse([(44, 52), (54, 62)], fill=(36, 129, 204, 255))
+        d.ellipse([(59, 52), (69, 62)], fill=(36, 129, 204, 255))
+        d.ellipse([(74, 52), (84, 62)], fill=(36, 129, 204, 255))
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
     except Exception:
         return b""
+
+_generate_fallback_telegram_icon = _generate_fallback_bridge_icon
+
+
+def _get_bot_self_avatar_path() -> Optional[str]:
+    """Retrieve the bot's own profile image path from Delta Chat configuration."""
+    global dc_bot_instance, dc_accid
+    if not dc_bot_instance or not dc_accid:
+        return None
+    try:
+        self_av = dc_bot_instance.rpc.get_config(dc_accid, "selfavatar")
+        if self_av and os.path.isfile(self_av):
+            return self_av
+    except Exception:
+        pass
+    try:
+        cnt = dc_bot_instance.rpc.get_contact(dc_accid, 1)
+        prof_img = cnt.get("profile_image") if isinstance(cnt, dict) else getattr(cnt, "profile_image", None)
+        if prof_img and os.path.isfile(prof_img):
+            return prof_img
+    except Exception:
+        pass
+    return None
+
+
+def _format_paragraph_html(raw_htm: str) -> str:
+    """Format paragraph HTML: split multi-paragraph blocks by double newlines, use <br/> for single line breaks."""
+    if not raw_htm or not raw_htm.strip():
+        return ""
+    raw = raw_htm.replace('\r\n', '\n').replace('\r', '\n')
+    chunks = re.split(r'\n{2,}', raw)
+    paragraphs = []
+    for c in chunks:
+        c_clean = c.strip('\n')
+        if c_clean.strip():
+            p_html = c_clean.replace('\n', '<br/>')
+            paragraphs.append(f"<p>{p_html}</p>")
+    return "\n".join(paragraphs)
 
 
 def _make_teaser(text: str, max_len: int = 280) -> str:
@@ -1901,12 +2187,17 @@ def _get_channel_avatar_path(dc_chat_id: Optional[int] = None, username: Optiona
     if not dc_bot_instance or not dc_accid:
         return None
     try:
-        target_chat_id = dc_chat_id
-        if not target_chat_id and username:
+        target_chat_id = None
+        if username:
             clean_user = username.lstrip('@')
             ch = database.get_channel_by_tg_username(clean_user)
             if ch:
                 target_chat_id = ch.get('dc_chat_id')
+        if not target_chat_id and dc_chat_id:
+            # Crucial: only use dc_chat_id if it corresponds to an actual registered bridged channel
+            ch = database.get_channel_by_dc_chat_id(dc_chat_id)
+            if ch:
+                target_chat_id = dc_chat_id
         if not target_chat_id:
             return None
 
@@ -1957,20 +2248,29 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
         icon_bytes = None
         icon_name = "icon.png"
 
-        # 1a. Prioritize existing local Delta Chat channel avatar (already in the bot, 100% reliable)
+        # 1a. Prioritize existing local Delta Chat channel avatar (only if verified bridged channel)
         local_avatar = _get_channel_avatar_path(dc_chat_id=dc_chat_id, username=post.username)
         if local_avatar:
             icon_bytes, icon_name = _make_square_icon(local_avatar, max_dim=128, fmt="PNG")
 
-        # 1b. Fallback to author avatar URL from Telegram embed
+        # 1b. Fallback to author avatar from Telegram (local file downloaded by telethon, or remote URL from web embed)
         if not icon_bytes and post.author_avatar_url:
-            avatar_tmp = os.path.join(tmp_dir, "avatar_raw")
-            if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=256, fmt="PNG"):
-                icon_bytes, icon_name = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
+            if os.path.isfile(post.author_avatar_url):
+                icon_bytes, icon_name = _make_square_icon(post.author_avatar_url, max_dim=128, fmt="PNG")
+            else:
+                avatar_tmp = os.path.join(tmp_dir, "avatar_raw")
+                if await _download_image_to_file(post.author_avatar_url, avatar_tmp, max_dim=256, fmt="PNG"):
+                    icon_bytes, icon_name = _make_square_icon(avatar_tmp, max_dim=128, fmt="PNG")
 
-        # 1c. Fallback to default Telegram icon
+        # 1c. Fallback to bot's own avatar (to avoid Telegram copyright issues)
         if not icon_bytes:
-            icon_bytes = _generate_fallback_telegram_icon()
+            bot_self_avatar = _get_bot_self_avatar_path()
+            if bot_self_avatar:
+                icon_bytes, icon_name = _make_square_icon(bot_self_avatar, max_dim=128, fmt="PNG")
+
+        # 1d. Fallback to neutral bridge icon
+        if not icon_bytes:
+            icon_bytes = _generate_fallback_bridge_icon()
             icon_name = "icon.png"
 
         # 2. Download Images
@@ -1981,15 +2281,26 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
             if await _download_image_to_file(img_url, img_dest, max_dim=1280, fmt="WEBP", quality=80):
                 local_images.append(f"images/{img_fname}")
 
-        # 3. Build Gallery HTML
+        # 3. Clean content HTML & Build Gallery HTML
+        cleaned_content = _clean_html_for_webxdc(post.text_html)
+
+        has_inline_images = bool(re.search(r'<img\s+[^>]*src=["\']images/img_\d+\.webp["\']', cleaned_content))
+        gallery_images = []
+        if has_inline_images:
+            for img_path in local_images:
+                if img_path not in cleaned_content:
+                    gallery_images.append(img_path)
+        else:
+            gallery_images = local_images
+
         gallery_top_html = ""
         gallery_bottom_html = ""
-        if len(local_images) == 1:
-            gallery_top_html = f'<div class="gallery-single"><img src="{local_images[0]}" alt="Post media" onclick="openLightbox(this.src)" /></div>'
-        elif len(local_images) > 1:
+        if len(gallery_images) == 1:
+            gallery_top_html = f'<div class="gallery-single"><img src="{gallery_images[0]}" alt="Post media" /></div>'
+        elif len(gallery_images) > 1:
             items_html = "\n".join(
-                f'<div class="gallery-item"><img src="{img_path}" alt="Photo {i+1}" onclick="openLightbox(this.src)" loading="lazy" /></div>'
-                for i, img_path in enumerate(local_images)
+                f'<div class="gallery-item"><img src="{img_path}" alt="Photo {i+1}" loading="lazy" /></div>'
+                for i, img_path in enumerate(gallery_images)
             )
             gallery_top_html = f'<div class="gallery-grid">\n{items_html}\n</div>'
 
@@ -2083,9 +2394,8 @@ async def _package_tg_post_webxdc(post: TelegramRichPost, output_xdc_path: str, 
             video_elements.append(card_html)
 
         video_html = "\n".join(video_elements)
-
-        # 6. Clean content HTML
-        cleaned_content = _clean_html_for_webxdc(post.text_html)
+        if bool(re.search(r'videos/vid_\d+\.mp4', cleaned_content)):
+            video_html = ""
 
         # 7. Build Header & Meta
         avatar_html = '<div class="avatar" style="display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;background:var(--accent-color);">TG</div>'
@@ -2425,7 +2735,324 @@ def _rich_text_to_html(rt) -> str:
     return html.escape(str(rt))
 
 
-async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Optional[int] = None) -> Optional[TelegramRichPost]:
+async def _process_page_blocks(
+    blocks,
+    photos_map: dict,
+    docs_map: dict,
+    userbot_client,
+    post_id: int,
+    image_urls: list,
+    videos: list,
+    downloaded_photo_ids: set,
+    downloaded_doc_ids: set,
+) -> tuple[list[str], list[str]]:
+    """Recursively process a list of Telethon PageBlock objects into (md_parts, htm_parts)."""
+    md_parts = []
+    htm_parts = []
+
+    for b in (blocks or []):
+        b_type = type(b).__name__
+
+        if b_type == 'PageBlockParagraph':
+            md = _rich_text_to_markdown(getattr(b, 'text', None))
+            htm = _format_paragraph_html(_rich_text_to_html(getattr(b, 'text', None)))
+            if md:
+                md_parts.append(md)
+            if htm:
+                htm_parts.append(htm)
+
+        elif b_type in ('PageBlockHeader', 'PageBlockHeading1', 'PageBlockHeading2', 'PageBlockHeading3', 'PageBlockTitle'):
+            md = f"### {_rich_text_to_markdown(getattr(b, 'text', None))}"
+            htm = f"<h3>{_rich_text_to_html(getattr(b, 'text', None))}</h3>"
+            if md:
+                md_parts.append(md)
+            if htm:
+                htm_parts.append(htm)
+
+        elif b_type in ('PageBlockSubheader', 'PageBlockSubtitle', 'PageBlockHeading4', 'PageBlockHeading5', 'PageBlockHeading6', 'PageBlockKicker'):
+            md = f"#### {_rich_text_to_markdown(getattr(b, 'text', None))}"
+            htm = f"<h4>{_rich_text_to_html(getattr(b, 'text', None))}</h4>"
+            if md:
+                md_parts.append(md)
+            if htm:
+                htm_parts.append(htm)
+
+        elif b_type in ('PageBlockBlockquote', 'PageBlockPullquote'):
+            q_md = _rich_text_to_markdown(getattr(b, 'text', None))
+            q_htm = _rich_text_to_html(getattr(b, 'text', None))
+            if q_md:
+                md_parts.append("\n".join(f"> {line}" for line in q_md.split("\n")))
+            if q_htm:
+                htm_parts.append(f"<blockquote>{q_htm}</blockquote>")
+
+        elif b_type == 'PageBlockBlockquoteBlocks':
+            child_blocks = getattr(b, 'blocks', []) or []
+            c_md, c_htm = await _process_page_blocks(
+                child_blocks, photos_map, docs_map, userbot_client,
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+            )
+            if c_md:
+                md_parts.append("\n".join(f"> {line}" for line in "\n\n".join(c_md).split("\n")))
+            if c_htm:
+                htm_parts.append(f"<blockquote>{'\n'.join(c_htm)}</blockquote>")
+
+        elif b_type == 'PageBlockPreformatted':
+            lang = getattr(b, 'language', '') or ''
+            c_md = _rich_text_to_markdown(getattr(b, 'text', None))
+            c_htm = _rich_text_to_html(getattr(b, 'text', None))
+            md_parts.append(f"```{lang}\n{c_md}\n```")
+            htm_parts.append(f'<pre><code class="{lang}">{c_htm}</code></pre>')
+
+        elif b_type == 'PageBlockDivider':
+            md_parts.append("---")
+            htm_parts.append("<hr/>")
+
+        elif b_type == 'PageBlockList':
+            items = getattr(b, 'items', []) or []
+            l_md = []
+            l_htm = []
+            for item in items:
+                if hasattr(item, 'blocks'):
+                    c_md, c_htm = await _process_page_blocks(
+                        item.blocks, photos_map, docs_map, userbot_client,
+                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                    )
+                    if c_md:
+                        l_md.append(f"- {' '.join(c_md)}")
+                    if c_htm:
+                        l_htm.append(f"<li>{' '.join(c_htm)}</li>")
+                elif hasattr(item, 'text'):
+                    t_m = _rich_text_to_markdown(item.text)
+                    t_h = _rich_text_to_html(item.text)
+                    if t_m:
+                        l_md.append(f"- {t_m}")
+                    if t_h:
+                        l_htm.append(f"<li>{t_h}</li>")
+            if l_md:
+                md_parts.append("\n".join(l_md))
+            if l_htm:
+                htm_parts.append(f"<ul>{''.join(l_htm)}</ul>")
+
+        elif b_type == 'PageBlockOrderedList':
+            items = getattr(b, 'items', []) or []
+            start = getattr(b, 'start', 1) or 1
+            l_md = []
+            l_htm = []
+            for idx, item in enumerate(items, start=start):
+                if hasattr(item, 'blocks'):
+                    c_md, c_htm = await _process_page_blocks(
+                        item.blocks, photos_map, docs_map, userbot_client,
+                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                    )
+                    if c_md:
+                        l_md.append(f"{idx}. {' '.join(c_md)}")
+                    if c_htm:
+                        l_htm.append(f"<li>{' '.join(c_htm)}</li>")
+                elif hasattr(item, 'text'):
+                    t_m = _rich_text_to_markdown(item.text)
+                    t_h = _rich_text_to_html(item.text)
+                    if t_m:
+                        l_md.append(f"{idx}. {t_m}")
+                    if t_h:
+                        l_htm.append(f"<li>{t_h}</li>")
+            if l_md:
+                md_parts.append("\n".join(l_md))
+            if l_htm:
+                htm_parts.append(f"<ol>{''.join(l_htm)}</ol>")
+
+        elif b_type == 'PageBlockTable':
+            rows = getattr(b, 'rows', []) or []
+            t_md = []
+            t_htm = ['<div class="table-wrap"><table>']
+            for r in rows:
+                cells = getattr(r, 'cells', []) or []
+                r_md = []
+                r_htm = ['<tr>']
+                for c in cells:
+                    c_m = _rich_text_to_markdown(getattr(c, 'text', None))
+                    c_h = _rich_text_to_html(getattr(c, 'text', None))
+                    tag = 'th' if getattr(c, 'header', False) else 'td'
+                    r_md.append(c_m)
+                    r_htm.append(f"<{tag}>{c_h}</{tag}>")
+                r_htm.append('</tr>')
+                t_md.append("| " + " | ".join(r_md) + " |")
+                t_htm.append("".join(r_htm))
+            t_htm.append('</table></div>')
+            if t_md:
+                md_parts.append("\n".join(t_md))
+            htm_parts.append("".join(t_htm))
+
+        elif b_type == 'PageBlockCover':
+            cover = getattr(b, 'cover', None)
+            if cover:
+                c_md, c_htm = await _process_page_blocks(
+                    [cover], photos_map, docs_map, userbot_client,
+                    post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                )
+                md_parts.extend(c_md)
+                htm_parts.extend(c_htm)
+
+        elif b_type == 'PageBlockPhoto':
+            photo_id = getattr(b, 'photo_id', None)
+            photo_obj = photos_map.get(photo_id)
+            p_path = None
+            if photo_obj and userbot_client:
+                try:
+                    p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    p_path = await userbot_client.download_media(photo_obj, file=p_tmp)
+                    if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
+                        downloaded_photo_ids.add(photo_id)
+                    else:
+                        p_path = None
+                except Exception as e:
+                    logger.warning(f"Failed to download inline photo {photo_id} in post {post_id}: {e}")
+
+            cap_obj = getattr(b, 'caption', None)
+            cap_text = getattr(cap_obj, 'text', None) if cap_obj else None
+            c_m = _rich_text_to_markdown(cap_text) if cap_text else ""
+            c_h = _rich_text_to_html(cap_text) if cap_text else ""
+
+            if p_path:
+                img_idx = len(image_urls)
+                image_urls.append(p_path)
+                cap_tag = f"<figcaption><i>{c_h}</i></figcaption>" if c_h else ""
+                htm_parts.append(
+                    f'<figure class="post-figure">'
+                    f'<img src="images/img_{img_idx}.webp" alt="Photo {img_idx+1}" loading="lazy" />'
+                    f'{cap_tag}'
+                    f'</figure>'
+                )
+                md_parts.append(f"![{c_m or f'Photo {img_idx+1}'}]({p_path})")
+            elif c_h:
+                htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
+                if c_m:
+                    md_parts.append(f"*{c_m}*")
+
+        elif b_type in ('PageBlockCollage', 'PageBlockSlideshow'):
+            items = getattr(b, 'items', []) or []
+            c_imgs = []
+            for item in items:
+                if type(item).__name__ == 'PageBlockPhoto':
+                    p_id = getattr(item, 'photo_id', None)
+                    p_obj = photos_map.get(p_id)
+                    if p_obj and userbot_client:
+                        try:
+                            p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                            dl_p = await userbot_client.download_media(p_obj, file=p_tmp)
+                            if dl_p and os.path.exists(dl_p) and os.path.getsize(dl_p) > 0:
+                                i_idx = len(image_urls)
+                                image_urls.append(dl_p)
+                                downloaded_photo_ids.add(p_id)
+                                c_imgs.append(f"images/img_{i_idx}.webp")
+                        except Exception as e:
+                            logger.warning(f"Failed to download collage photo {p_id} in post {post_id}: {e}")
+            cap_obj = getattr(b, 'caption', None)
+            cap_text = getattr(cap_obj, 'text', None) if cap_obj else None
+            c_h = _rich_text_to_html(cap_text) if cap_text else ""
+            if c_imgs:
+                grid_items = "\n".join(
+                    f'<div class="gallery-item"><img src="{src}" alt="Photo" loading="lazy" /></div>'
+                    for src in c_imgs
+                )
+                cap_tag = f'<figcaption><i>{c_h}</i></figcaption>' if c_h else ''
+                htm_parts.append(f'<figure class="post-collage"><div class="gallery-grid">\n{grid_items}\n</div>{cap_tag}</figure>')
+                md_parts.append(f"[Collage of {len(c_imgs)} photos]")
+
+        elif b_type == 'PageBlockVideo':
+            video_id = getattr(b, 'video_id', None)
+            doc_obj = docs_map.get(video_id)
+            v_path = None
+            is_playable = False
+            if doc_obj and userbot_client:
+                doc_size = getattr(doc_obj, 'size', 0) or 0
+                if 0 < doc_size <= TG_WEBXDC_VIDEO_MAX_BYTES:
+                    try:
+                        v_tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                        v_path = await userbot_client.download_media(doc_obj, file=v_tmp)
+                        if v_path and os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                            is_playable = True
+                            downloaded_doc_ids.add(video_id)
+                        else:
+                            v_path = None
+                    except Exception as e:
+                        logger.warning(f"Failed to download inline video {video_id} in post {post_id}: {e}")
+
+            cap_obj = getattr(b, 'caption', None)
+            cap_text = getattr(cap_obj, 'text', None) if cap_obj else None
+            c_m = _rich_text_to_markdown(cap_text) if cap_text else ""
+            c_h = _rich_text_to_html(cap_text) if cap_text else ""
+
+            if is_playable and v_path:
+                v_idx = len(videos)
+                videos.append(TelegramRichVideo(
+                    video_url=v_path,
+                    duration="",
+                    is_playable=True,
+                ))
+                cap_tag = f'<p class="caption"><i>{c_h}</i></p>' if c_h else ''
+                htm_parts.append(
+                    f'<div class="video-container">\n'
+                    f'    <video controls playsinline preload="metadata">\n'
+                    f'        <source src="videos/vid_{v_idx}.mp4" type="video/mp4">\n'
+                    f'    </video>\n'
+                    f'    {cap_tag}\n'
+                    f'</div>'
+                )
+                md_parts.append(f"[📹 Video {v_idx+1}]" + (f"\n*{c_m}*" if c_m else ""))
+            else:
+                videos.append(TelegramRichVideo(
+                    video_url="",
+                    duration="",
+                    is_playable=False,
+                    is_too_big=True,
+                ))
+                if c_h:
+                    htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
+                if c_m:
+                    md_parts.append(f"*{c_m}*")
+
+        elif b_type == 'PageBlockDetails':
+            child_blocks = getattr(b, 'blocks', []) or []
+            title_obj = getattr(b, 'title', None)
+            title_htm = _rich_text_to_html(title_obj) if title_obj else ""
+            title_md = _rich_text_to_markdown(title_obj) if title_obj else ""
+
+            c_md, c_htm = await _process_page_blocks(
+                child_blocks, photos_map, docs_map, userbot_client,
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+            )
+            # Show content directly inline without folding
+            skip_title_words = ("show more", "view more", "развернуть", "показать больше", "читать далее")
+            clean_title_check = re.sub(r'<[^>]+>', '', title_htm).strip().lower()
+            if clean_title_check and clean_title_check not in skip_title_words:
+                htm_parts.append(f"<h4>{title_htm}</h4>")
+            if title_md and title_md.strip().lower() not in skip_title_words:
+                md_parts.append(f"#### {title_md}")
+
+            md_parts.extend(c_md)
+            htm_parts.extend(c_htm)
+
+        elif b_type == 'PageBlockEmbedPost':
+            child_blocks = getattr(b, 'blocks', []) or []
+            c_md, c_htm = await _process_page_blocks(
+                child_blocks, photos_map, docs_map, userbot_client,
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+            )
+            md_parts.extend(c_md)
+            htm_parts.extend(c_htm)
+
+        elif b_type == 'PageBlockFooter':
+            f_md = _rich_text_to_markdown(getattr(b, 'text', None))
+            f_htm = _rich_text_to_html(getattr(b, 'text', None))
+            if f_md:
+                md_parts.append(f"*{f_md}*")
+            if f_htm:
+                htm_parts.append(f'<p style="font-size:0.85rem;color:var(--text-secondary);">{f_htm}</p>')
+
+    return md_parts, htm_parts
+
+
+async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_chat_id: Optional[int] = None) -> Optional[TelegramRichPost]:
     """Extract full rich post metadata from Telethon Message containing a RichMessage object."""
     rich_msg = getattr(msg, 'rich_message', None)
     if not rich_msg:
@@ -2436,6 +3063,39 @@ async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Option
         chat_title = getattr(msg.chat, 'title', '') if getattr(msg, 'chat', None) else ""
         author_name = chat_title or (f"@{chat_username}" if chat_username else "Telegram")
         post_id = getattr(msg, 'id', 0)
+
+        # Check if rich message is partitioned and fetch full rich message if needed
+        if userbot_client and getattr(rich_msg, 'part', False) and post_id:
+            try:
+                from telethon.tl.functions.messages import GetRichMessageRequest
+                peer = entity or getattr(msg, 'chat', None)
+                if peer:
+                    full_res = await userbot_client(GetRichMessageRequest(peer=peer, id=post_id))
+                    if hasattr(full_res, 'messages') and full_res.messages:
+                        full_msg = full_res.messages[0]
+                        if getattr(full_msg, 'rich_message', None):
+                            rich_msg = full_msg.rich_message
+            except Exception as grm_err:
+                logger.warning(f"Failed fetching full rich message via GetRichMessageRequest: {grm_err}")
+
+        # Download Telegram channel avatar
+        author_avatar_url = None
+        if userbot_client:
+            chat_to_photo = getattr(msg, 'chat', None) or entity
+            if chat_to_photo:
+                try:
+                    av_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    av_path = await userbot_client.download_profile_photo(chat_to_photo, file=av_tmp)
+                    if av_path and os.path.exists(av_path) and os.path.getsize(av_path) > 0:
+                        author_avatar_url = av_path
+                    elif os.path.exists(av_tmp):
+                        try:
+                            os.unlink(av_tmp)
+                        except Exception:
+                            pass
+                except Exception as av_err:
+                    logger.debug(f"Failed downloading chat avatar: {av_err}")
+
         published_date = ""
         msg_date = getattr(msg, 'date', None)
         if msg_date and hasattr(msg_date, 'strftime') and type(msg_date).__name__ != 'MagicMock':
@@ -2452,167 +3112,31 @@ async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Option
         photos_map = {getattr(p, 'id', None): p for p in (getattr(rich_msg, 'photos', []) or []) if getattr(p, 'id', None)}
         docs_map = {getattr(d, 'id', None): d for d in (getattr(rich_msg, 'documents', []) or []) if getattr(d, 'id', None)}
 
-        md_parts = []
-        htm_parts = []
         image_urls = []
         videos = []
         downloaded_photo_ids = set()
         downloaded_doc_ids = set()
 
         blocks = getattr(rich_msg, 'blocks', []) or []
-        for b in blocks:
-            b_type = type(b).__name__
-            if b_type == 'PageBlockParagraph':
-                md = _rich_text_to_markdown(getattr(b, 'text', None))
-                htm = f"<p>{_rich_text_to_html(getattr(b, 'text', None))}</p>"
-                if md:
-                    md_parts.append(md)
-                if htm:
-                    htm_parts.append(htm)
-            elif b_type in ('PageBlockHeader', 'PageBlockHeading1', 'PageBlockHeading2', 'PageBlockHeading3', 'PageBlockTitle'):
-                md = f"### {_rich_text_to_markdown(getattr(b, 'text', None))}"
-                htm = f"<h3>{_rich_text_to_html(getattr(b, 'text', None))}</h3>"
-                if md:
-                    md_parts.append(md)
-                if htm:
-                    htm_parts.append(htm)
-            elif b_type in ('PageBlockSubheader', 'PageBlockSubtitle', 'PageBlockHeading4', 'PageBlockHeading5', 'PageBlockHeading6'):
-                md = f"#### {_rich_text_to_markdown(getattr(b, 'text', None))}"
-                htm = f"<h4>{_rich_text_to_html(getattr(b, 'text', None))}</h4>"
-                if md:
-                    md_parts.append(md)
-                if htm:
-                    htm_parts.append(htm)
-            elif b_type in ('PageBlockBlockquote', 'PageBlockPullquote'):
-                q_md = _rich_text_to_markdown(getattr(b, 'text', None))
-                q_htm = _rich_text_to_html(getattr(b, 'text', None))
-                if q_md:
-                    md_parts.append("\n".join(f"> {line}" for line in q_md.split("\n")))
-                if q_htm:
-                    htm_parts.append(f"<blockquote>{q_htm}</blockquote>")
-            elif b_type == 'PageBlockPreformatted':
-                lang = getattr(b, 'language', '') or ''
-                c_md = _rich_text_to_markdown(getattr(b, 'text', None))
-                c_htm = _rich_text_to_html(getattr(b, 'text', None))
-                md_parts.append(f"```{lang}\n{c_md}\n```")
-                htm_parts.append(f'<pre><code class="{lang}">{c_htm}</code></pre>')
-            elif b_type == 'PageBlockDivider':
-                md_parts.append("---")
-                htm_parts.append("<hr/>")
-            elif b_type == 'PageBlockList':
-                items = getattr(b, 'items', []) or []
-                l_md = []
-                l_htm = []
-                for item in items:
-                    if hasattr(item, 'text'):
-                        t_m = _rich_text_to_markdown(item.text)
-                        t_h = _rich_text_to_html(item.text)
-                        if t_m:
-                            l_md.append(f"- {t_m}")
-                        if t_h:
-                            l_htm.append(f"<li>{t_h}</li>")
-                if l_md:
-                    md_parts.append("\n".join(l_md))
-                if l_htm:
-                    htm_parts.append(f"<ul>{''.join(l_htm)}</ul>")
-            elif b_type == 'PageBlockOrderedList':
-                items = getattr(b, 'items', []) or []
-                start = getattr(b, 'start', 1) or 1
-                l_md = []
-                l_htm = []
-                for idx, item in enumerate(items, start=start):
-                    if hasattr(item, 'text'):
-                        t_m = _rich_text_to_markdown(item.text)
-                        t_h = _rich_text_to_html(item.text)
-                        if t_m:
-                            l_md.append(f"{idx}. {t_m}")
-                        if t_h:
-                            l_htm.append(f"<li>{t_h}</li>")
-                if l_md:
-                    md_parts.append("\n".join(l_md))
-                if l_htm:
-                    htm_parts.append(f"<ol>{''.join(l_htm)}</ol>")
-            elif b_type == 'PageBlockTable':
-                rows = getattr(b, 'rows', []) or []
-                t_md = []
-                t_htm = ['<div class="table-wrap"><table>']
-                for r in rows:
-                    cells = getattr(r, 'cells', []) or []
-                    r_md = []
-                    r_htm = ['<tr>']
-                    for c in cells:
-                        c_m = _rich_text_to_markdown(getattr(c, 'text', None))
-                        c_h = _rich_text_to_html(getattr(c, 'text', None))
-                        tag = 'th' if getattr(c, 'header', False) else 'td'
-                        r_md.append(c_m)
-                        r_htm.append(f"<{tag}>{c_h}</{tag}>")
-                    r_htm.append('</tr>')
-                    t_md.append("| " + " | ".join(r_md) + " |")
-                    t_htm.append("".join(r_htm))
-                t_htm.append('</table></div>')
-                if t_md:
-                    md_parts.append("\n".join(t_md))
-                htm_parts.append("".join(t_htm))
-            elif b_type == 'PageBlockPhoto':
-                photo_id = getattr(b, 'photo_id', None)
-                photo_obj = photos_map.get(photo_id)
-                if photo_obj and userbot_client:
-                    try:
-                        downloaded_path = await userbot_client.download_media(photo_obj)
-                        if downloaded_path and os.path.exists(downloaded_path):
-                            image_urls.append(downloaded_path)
-                            downloaded_photo_ids.add(photo_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to download inline photo {photo_id} in post {post_id}: {e}")
-                caption = getattr(b, 'caption', None)
-                if caption and hasattr(caption, 'text') and caption.text:
-                    c_m = _rich_text_to_markdown(caption.text)
-                    c_h = _rich_text_to_html(caption.text)
-                    if c_m:
-                        md_parts.append(f"*{c_m}*")
-                    if c_h:
-                        htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
-            elif b_type == 'PageBlockVideo':
-                video_id = getattr(b, 'video_id', None)
-                doc_obj = docs_map.get(video_id)
-                if doc_obj and userbot_client:
-                    doc_size = getattr(doc_obj, 'size', 0) or 0
-                    if 0 < doc_size <= TG_WEBXDC_VIDEO_MAX_BYTES:
-                        try:
-                            vid_path = await userbot_client.download_media(doc_obj)
-                            if vid_path and os.path.exists(vid_path):
-                                videos.append(TelegramRichVideo(
-                                    video_url=vid_path,
-                                    duration="",
-                                    is_playable=True,
-                                ))
-                                downloaded_doc_ids.add(video_id)
-                        except Exception as e:
-                            logger.warning(f"Failed to download inline video {video_id} in post {post_id}: {e}")
-                    else:
-                        videos.append(TelegramRichVideo(
-                            video_url="",
-                            duration="",
-                            is_playable=False,
-                            is_too_big=True,
-                        ))
-                caption = getattr(b, 'caption', None)
-                if caption and hasattr(caption, 'text') and caption.text:
-                    c_m = _rich_text_to_markdown(caption.text)
-                    c_h = _rich_text_to_html(caption.text)
-                    if c_m:
-                        md_parts.append(f"*{c_m}*")
-                    if c_h:
-                        htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
+        md_parts, htm_parts = await _process_page_blocks(
+            blocks, photos_map, docs_map, userbot_client,
+            post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+        )
 
         # Also download any photos/videos attached to rich_msg that were not explicitly referenced in blocks
         for pid, pobj in photos_map.items():
             if pid not in downloaded_photo_ids and userbot_client:
                 try:
-                    p_path = await userbot_client.download_media(pobj)
-                    if p_path and os.path.exists(p_path):
+                    p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    p_path = await userbot_client.download_media(pobj, file=p_tmp)
+                    if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         image_urls.append(p_path)
                         downloaded_photo_ids.add(pid)
+                    elif os.path.exists(p_tmp):
+                        try:
+                            os.unlink(p_tmp)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.warning(f"Failed to download remaining photo {pid} in post {post_id}: {e}")
 
@@ -2630,7 +3154,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Option
                 'PageBlockHeading4', 'PageBlockHeading5', 'PageBlockHeading6', 'PageBlockTitle',
                 'PageBlockSubheader', 'PageBlockSubtitle', 'PageBlockBlockquote', 'PageBlockPullquote',
                 'PageBlockPreformatted', 'PageBlockList', 'PageBlockOrderedList', 'PageBlockTable',
-                'PageBlockPhoto', 'PageBlockVideo'
+                'PageBlockPhoto', 'PageBlockVideo', 'PageBlockDetails', 'PageBlockCollage', 'PageBlockSlideshow'
             )
             for b in blocks
         )
@@ -2647,6 +3171,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, dc_chat_id: Option
             username=chat_username or "",
             post_id=post_id,
             author_name=author_name,
+            author_avatar_url=author_avatar_url or "",
             text_html=text_html,
             text_markdown=text_markdown,
             teaser=teaser,
