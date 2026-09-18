@@ -2794,7 +2794,8 @@ async def _process_page_blocks(
             if c_md:
                 md_parts.append("\n".join(f"> {line}" for line in "\n\n".join(c_md).split("\n")))
             if c_htm:
-                htm_parts.append(f"<blockquote>{'\n'.join(c_htm)}</blockquote>")
+                c_htm_joined = "\n".join(c_htm)
+                htm_parts.append(f"<blockquote>{c_htm_joined}</blockquote>")
 
         elif b_type == 'PageBlockPreformatted':
             lang = getattr(b, 'language', '') or ''
