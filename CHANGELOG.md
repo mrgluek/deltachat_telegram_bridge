@@ -1,3 +1,9 @@
+## [2.24.1] - 2026-09-21
+- **Fix: Micro-sized Images in Rich Article WebXDC Posts**:
+  - `RichMessage.photos` from Telegram sometimes only carries a low-res `PhotoStrippedSize` preview stub for photos that belong to an album, resulting in near-invisible thumbnails in the WebXDC gallery/lightbox.
+  - Added `_resolve_full_res_photos_for_group()`: for posts with a `grouped_id`, looks up sibling messages in the same media group and swaps in their full-resolution attached photo (matched by Telegram's global `photo.id`) before `_process_page_blocks()` downloads images for `PageBlockPhoto`/`PageBlockCollage`.
+  - Falls back silently to prior behavior when there's no `grouped_id` or no matching sibling is found.
+
 ## [2.24.0] - 2026-09-18
 - **Inline Article Rendering for Rich Telegram Posts**:
   - Completely redesigned WebXDC article layout: inline images are now embedded directly inside the post body as `<figure>` elements with optional captions, matching the original Telegram article reading experience.

@@ -471,7 +471,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.0"
+VERSION = "2.24.1"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -3053,6 +3053,36 @@ async def _process_page_blocks(
     return md_parts, htm_parts
 
 
+async def _resolve_full_res_photos_for_group(msg, userbot_client) -> dict:
+    """RichMessage.photos often only carries low-res preview stubs (PhotoStrippedSize) for
+    photos that also exist as full-resolution attachments on sibling messages in the same
+    media group. Look those siblings up and return {photo_id: full_res_photo}."""
+    grouped_id = getattr(msg, 'grouped_id', None)
+    if grouped_id is None or not userbot_client:
+        return {}
+    try:
+        input_chat = await msg.get_input_chat()
+        if not input_chat:
+            return {}
+        msg_id = getattr(msg, 'id', 0)
+        lo = max(1, msg_id - 12)
+        ids = list(range(lo, msg_id + 13))
+        siblings = await userbot_client.get_messages(input_chat, ids=ids)
+        full_res: dict = {}
+        for sib in siblings or []:
+            if not sib or getattr(sib, 'grouped_id', None) != grouped_id:
+                continue
+            media = getattr(sib, 'media', None)
+            photo = media.photo if type(media).__name__ == 'MessageMediaPhoto' else getattr(sib, 'photo', None)
+            photo_id = getattr(photo, 'id', None) if photo else None
+            if photo_id:
+                full_res[photo_id] = photo
+        return full_res
+    except Exception as e:
+        logger.debug(f"Failed resolving full-res sibling photos for grouped_id {grouped_id}: {e}")
+        return {}
+
+
 async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_chat_id: Optional[int] = None) -> Optional[TelegramRichPost]:
     """Extract full rich post metadata from Telethon Message containing a RichMessage object."""
     rich_msg = getattr(msg, 'rich_message', None)
@@ -3112,6 +3142,13 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
 
         photos_map = {getattr(p, 'id', None): p for p in (getattr(rich_msg, 'photos', []) or []) if getattr(p, 'id', None)}
         docs_map = {getattr(d, 'id', None): d for d in (getattr(rich_msg, 'documents', []) or []) if getattr(d, 'id', None)}
+
+        # RichMessage photos are sometimes low-res preview stubs; swap in full-resolution
+        # copies from sibling album messages when available.
+        full_res_photos = await _resolve_full_res_photos_for_group(msg, userbot_client)
+        for photo_id, full_photo in full_res_photos.items():
+            if photo_id in photos_map:
+                photos_map[photo_id] = full_photo
 
         image_urls = []
         videos = []
