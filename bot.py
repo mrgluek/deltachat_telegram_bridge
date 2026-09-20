@@ -446,6 +446,7 @@ DC_MAX_MSG_LEN = 10000   # Practical DC limit
 RATE_LIMIT_WINDOW = 60   # seconds
 RATE_LIMIT_MAX = 30       # max messages per window per chat
 MAX_ATTACHMENT_SIZE = int(os.environ.get("MAX_ATTACHMENT_SIZE_MB", "50")) * 1024 * 1024
+TG_WEBXDC_VIDEO_MAX_BYTES = 20 * 1024 * 1024   # 20 MB, matches MAX_SINGLE_VIDEO_BYTES in _package_tg_post_webxdc
 
 LIVE_LOCATIONS = {}
 db_lock = threading.Lock()
@@ -471,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.2"
+VERSION = "2.24.3"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""

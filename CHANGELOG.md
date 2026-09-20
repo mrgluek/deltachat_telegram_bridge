@@ -1,3 +1,8 @@
+## [2.24.3] - 2026-09-21
+- **Fix: NameError Crashing Rich Article Extraction**:
+  - `_process_page_blocks()`'s `PageBlockVideo` handling referenced `TG_WEBXDC_VIDEO_MAX_BYTES`, a constant that was never defined (a leftover from the v2.24.0 inline article rendering rewrite), causing every rich post containing an inline video block to fail extraction with `NameError`.
+  - Defined `TG_WEBXDC_VIDEO_MAX_BYTES = 20 * 1024 * 1024` (20 MB), matching the existing `MAX_SINGLE_VIDEO_BYTES` cap used in `_package_tg_post_webxdc`.
+
 ## [2.24.2] - 2026-09-21
 - **Direct Post Link Progress Feedback**:
   - Added `_react()` helper and wired it into `_async_handle_direct_tg_post()`: reacts with ⏳ on the triggering DC message as soon as a direct Telegram post link is detected, ☑️ once the post is delivered (cache hit, WebXDC, photo, or text), and ❌ if extraction fails or errors out — matching the feedback pattern already used by `deltachat_yt` and `deltachat_webpreview`.
