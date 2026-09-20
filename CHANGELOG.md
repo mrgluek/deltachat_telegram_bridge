@@ -1,3 +1,8 @@
+## [2.24.6] - 2026-09-21
+- **Fix: Delayed ⏳ Reaction on Direct Post Links**:
+  - Confirmed on production (`de2`) that direct post link handling actually completes (e.g. `@artjockey/3421` delivered as WebXDC after ~3m19s) rather than hanging, but the v2.24.2 `⏳` reaction was set from inside `_async_handle_direct_tg_post()`, which is dispatched onto the shared userbot asyncio event loop via `run_coroutine_threadsafe()` — if that loop is busy with other periodic work (channel sync, deletion-sync checks), the task can sit queued for over a minute before it gets to run its own reaction, making the bot look unresponsive even though it registered the link instantly.
+  - Moved the `⏳` reaction to fire synchronously in `handle_dc_message()` at the moment the link is detected, before the async task is even scheduled, so feedback is immediate regardless of event-loop load.
+
 ## [2.24.5] - 2026-09-21
 - **Fix: TypeError Crashing Rich Article Extraction on Inline Videos**:
   - `_process_page_blocks()`'s `PageBlockVideo` handling constructed `TelegramRichVideo(..., is_playable=...)`, but the `TelegramRichVideo` dataclass has no `is_playable` field (only `video_url`, `poster_url`, `duration`, `is_too_big`) — another leftover from the v2.24.0 rewrite. Every rich post with an inline video block raised `TypeError` right after downloading it, discarding the whole post.

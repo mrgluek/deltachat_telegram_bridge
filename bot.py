@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.5"
+VERSION = "2.24.6"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -3237,7 +3237,6 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
     """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
     clean_username = str(username).lstrip('@').strip()
     cache_key = f"{clean_username.lower()}/{post_id}"
-    _react(bot, accid, dc_msg_id, "⏳")
     try:
         # 1. Periodic cleanup of expired cache entries
         try:
@@ -5704,6 +5703,10 @@ def handle_dc_message(bot, accid, event):
                 if post_username.lower() != "c" and post_id_str.isdigit():
                     target_post_id = int(post_id_str)
                     logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
+                    # React immediately, synchronously: the async task below may sit queued
+                    # behind other work on the shared userbot event loop for a while before
+                    # it gets to run its own "⏳" reaction.
+                    _react(bot, accid, msg.id, "⏳")
                     if main_loop and main_loop.is_running():
                         asyncio.run_coroutine_threadsafe(
                             _async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id),
