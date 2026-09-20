@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.4"
+VERSION = "2.24.5"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2989,7 +2989,6 @@ async def _process_page_blocks(
                 videos.append(TelegramRichVideo(
                     video_url=v_path,
                     duration="",
-                    is_playable=True,
                 ))
                 cap_tag = f'<p class="caption"><i>{c_h}</i></p>' if c_h else ''
                 htm_parts.append(
@@ -3005,7 +3004,6 @@ async def _process_page_blocks(
                 videos.append(TelegramRichVideo(
                     video_url="",
                     duration="",
-                    is_playable=False,
                     is_too_big=True,
                 ))
                 if c_h:
