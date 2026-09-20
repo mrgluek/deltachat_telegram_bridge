@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.3"
+VERSION = "2.24.4"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2901,7 +2901,7 @@ async def _process_page_blocks(
             if photo_obj and userbot_client:
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                    p_path = await userbot_client.download_media(photo_obj, file=p_tmp)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         downloaded_photo_ids.add(photo_id)
                     else:
@@ -2940,7 +2940,7 @@ async def _process_page_blocks(
                     if p_obj and userbot_client:
                         try:
                             p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                            dl_p = await userbot_client.download_media(p_obj, file=p_tmp)
+                            dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp), timeout=60.0)
                             if dl_p and os.path.exists(dl_p) and os.path.getsize(dl_p) > 0:
                                 i_idx = len(image_urls)
                                 image_urls.append(dl_p)
@@ -2970,7 +2970,7 @@ async def _process_page_blocks(
                 if 0 < doc_size <= TG_WEBXDC_VIDEO_MAX_BYTES:
                     try:
                         v_tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
-                        v_path = await userbot_client.download_media(doc_obj, file=v_tmp)
+                        v_path = await asyncio.wait_for(userbot_client.download_media(doc_obj, file=v_tmp), timeout=90.0)
                         if v_path and os.path.exists(v_path) and os.path.getsize(v_path) > 0:
                             is_playable = True
                             downloaded_doc_ids.add(video_id)
@@ -3062,13 +3062,13 @@ async def _resolve_full_res_photos_for_group(msg, userbot_client) -> dict:
     if grouped_id is None or not userbot_client:
         return {}
     try:
-        input_chat = await msg.get_input_chat()
+        input_chat = await asyncio.wait_for(msg.get_input_chat(), timeout=15.0)
         if not input_chat:
             return {}
         msg_id = getattr(msg, 'id', 0)
         lo = max(1, msg_id - 12)
         ids = list(range(lo, msg_id + 13))
-        siblings = await userbot_client.get_messages(input_chat, ids=ids)
+        siblings = await asyncio.wait_for(userbot_client.get_messages(input_chat, ids=ids), timeout=15.0)
         full_res: dict = {}
         for sib in siblings or []:
             if not sib or getattr(sib, 'grouped_id', None) != grouped_id:
@@ -3117,7 +3117,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             if chat_to_photo:
                 try:
                     av_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                    av_path = await userbot_client.download_profile_photo(chat_to_photo, file=av_tmp)
+                    av_path = await asyncio.wait_for(userbot_client.download_profile_photo(chat_to_photo, file=av_tmp), timeout=30.0)
                     if av_path and os.path.exists(av_path) and os.path.getsize(av_path) > 0:
                         author_avatar_url = av_path
                     elif os.path.exists(av_tmp):
@@ -3167,7 +3167,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             if pid not in downloaded_photo_ids and userbot_client:
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                    p_path = await userbot_client.download_media(pobj, file=p_tmp)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         image_urls.append(p_path)
                         downloaded_photo_ids.add(pid)
