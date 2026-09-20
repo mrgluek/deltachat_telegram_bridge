@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.6"
+VERSION = "2.24.7"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2924,7 +2924,7 @@ async def _process_page_blocks(
                     f'{cap_tag}'
                     f'</figure>'
                 )
-                md_parts.append(f"![{c_m or f'Photo {img_idx+1}'}]({p_path})")
+                md_parts.append(f"[📷 Photo {img_idx+1}]" + (f"\n*{c_m}*" if c_m else ""))
             elif c_h:
                 htm_parts.append(f'<p class="caption"><i>{c_h}</i></p>')
                 if c_m:

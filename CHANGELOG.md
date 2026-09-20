@@ -1,3 +1,8 @@
+## [2.24.7] - 2026-09-21
+- **Fix: Local Temp File Path Leaking Into Visible Post Teaser**:
+  - `_process_page_blocks()`'s `PageBlockPhoto` handling built its markdown representation as `` ![caption](p_path) ``, where `p_path` is the local temp file path the photo was downloaded to (e.g. `/tmp/tmpdo6xj60t.jpg`). Delta Chat doesn't render Markdown images, so this raw tag — local path included — showed up verbatim in the WebXDC delivery's caption/teaser text.
+  - Changed it to `[📷 Photo N]` plus the optional caption, matching the style already used for collages and videos; no path is ever embedded in user-facing text.
+
 ## [2.24.6] - 2026-09-21
 - **Fix: Delayed ⏳ Reaction on Direct Post Links**:
   - Confirmed on production (`de2`) that direct post link handling actually completes (e.g. `@artjockey/3421` delivered as WebXDC after ~3m19s) rather than hanging, but the v2.24.2 `⏳` reaction was set from inside `_async_handle_direct_tg_post()`, which is dispatched onto the shared userbot asyncio event loop via `run_coroutine_threadsafe()` — if that loop is busy with other periodic work (channel sync, deletion-sync checks), the task can sit queued for over a minute before it gets to run its own reaction, making the bot look unresponsive even though it registered the link instantly.
