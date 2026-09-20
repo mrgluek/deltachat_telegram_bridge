@@ -471,7 +471,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.1"
+VERSION = "2.24.2"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -3224,10 +3224,21 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
         return None
 
 
+def _react(bot, accid, msg_id, reaction: str):
+    """Set (or clear) a reaction on a Delta Chat message."""
+    if not msg_id:
+        return
+    try:
+        bot.rpc.send_reaction(accid, msg_id, [reaction] if reaction else [])
+    except Exception as e:
+        logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
+
+
 async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None):
     """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
     clean_username = str(username).lstrip('@').strip()
     cache_key = f"{clean_username.lower()}/{post_id}"
+    _react(bot, accid, dc_msg_id, "⏳")
     try:
         # 1. Periodic cleanup of expired cache entries
         try:
@@ -3244,10 +3255,12 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
             if post_type in ("webxdc", "photo") and file_path and os.path.exists(file_path):
                 await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text, file=file_path))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache ({post_type})")
+                _react(bot, accid, dc_msg_id, "☑️")
                 return
             elif post_type == "text":
                 await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache (text)")
+                _react(bot, accid, dc_msg_id, "☑️")
                 return
 
         # 3. Cache miss: Fetch post
@@ -3298,6 +3311,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                     database.add_cached_tg_post(cache_key, "webxdc", caption, xdc_path)
                     await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=xdc_path))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: packaged and delivered as WebXDC")
+                    _react(bot, accid, dc_msg_id, "☑️")
                     return
                 else:
                     if os.path.exists(xdc_path):
@@ -3318,6 +3332,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                     database.add_cached_tg_post(cache_key, "photo", caption, img_dest)
                     await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=img_dest))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as photo")
+                    _react(bot, accid, dc_msg_id, "☑️")
                     return
 
             if rich_post.text_markdown.strip():
@@ -3328,6 +3343,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 database.add_cached_tg_post(cache_key, "text", caption, None)
                 await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as text")
+                _react(bot, accid, dc_msg_id, "☑️")
                 return
 
         # Fallback: if rich_post failed or had no content, but tg_msg exists from userbot
@@ -3349,6 +3365,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                             caption = _truncate(caption, DC_MAX_MSG_LEN)
                             database.add_cached_tg_post(cache_key, "photo", caption, downloaded)
                             await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=downloaded))
+                            _react(bot, accid, dc_msg_id, "☑️")
                             return
                     except Exception as dl_err:
                         logger.warning(f"Failed downloading userbot media for @{clean_username}/{post_id}: {dl_err}")
@@ -3358,11 +3375,14 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 caption = _truncate(caption, DC_MAX_MSG_LEN)
                 database.add_cached_tg_post(cache_key, "text", caption, None)
                 await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
+                _react(bot, accid, dc_msg_id, "☑️")
                 return
 
         logger.warning(f"Could not extract content for direct post link @{clean_username}/{post_id}")
+        _react(bot, accid, dc_msg_id, "❌")
     except Exception as e:
         logger.error(f"Error handling direct Telegram post @{clean_username}/{post_id}: {e}", exc_info=True)
+        _react(bot, accid, dc_msg_id, "❌")
 
 
 
