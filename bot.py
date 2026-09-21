@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.11"
+VERSION = "2.24.12"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -8911,20 +8911,24 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
                 title = b.get('title', '')
                 is_fallback_name = title.startswith("Bridge -") or title.startswith("TG Group -") or title == "Unknown Group"
                 if is_fallback_name:
-                    # Check if TG chat is accessible
+                    # Check if TG chat is accessible. Bounded timeouts + a short yield between
+                    # checks keep this from hammering Telegram's rate limits or hogging the
+                    # shared userbot connection for many minutes when there are many stale
+                    # ghost bridges to check (this runs on every startup).
                     tg_accessible = False
                     if tg_app_instance and hasattr(tg_app_instance, 'bot') and tg_app_instance.bot:
                         try:
-                            await tg_app_instance.bot.get_chat(tg_cid)
+                            await asyncio.wait_for(tg_app_instance.bot.get_chat(tg_cid), timeout=10.0)
                             tg_accessible = True
                         except Exception:
                             pass
                     if not tg_accessible and ub_client and hasattr(ub_client, 'is_connected') and ub_client.is_connected():
                         try:
-                            await ub_client.get_entity(tg_cid)
+                            await asyncio.wait_for(ub_client.get_entity(tg_cid), timeout=10.0)
                             tg_accessible = True
                         except Exception:
                             pass
+                    await asyncio.sleep(0.3)
 
                     if not tg_accessible:
                         database.remove_bridge_pair(b['dc_cid'], tg_cid)

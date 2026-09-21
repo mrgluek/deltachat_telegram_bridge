@@ -1,3 +1,8 @@
+## [2.24.12] - 2026-09-21
+- **Fix: Startup Cleanup Starving Foreground Requests**:
+  - Observed on production: the startup "stale/orphaned bridges" cleanup (`cleanup_stale_bridges()`, runs once ~10s after every boot) took ~8 minutes end-to-end, and a direct post link request submitted during that window sat queued the whole time before timing out — because its "is this ghost bridge's TG chat still accessible?" check calls `tg_app.bot.get_chat()` / `userbot_client.get_entity()` for every candidate stale bridge with no timeout and no pacing, so a bad run can hammer Telegram's rate limits and hold up the shared userbot connection for a long time.
+  - Added a 10s `asyncio.wait_for()` timeout to both calls and a 0.3s yield between each candidate check, so a single slow/failing lookup can't stall the whole cleanup indefinitely and other coroutines (like direct post links) get more chances to interleave. The cleanup itself already runs as a background `asyncio.create_task()`; this doesn't move it to a separate connection, so heavy contention can still slow other userbot requests during a large cleanup run — just far less severely.
+
 ## [2.24.11] - 2026-09-21
 - **Fix: Root Cause of Micro/Blurry Inline Article Images**:
   - v2.24.10's diagnostics confirmed it: for `@artjockey/3402`'s photos, Telethon's own `_get_thumb(sizes, None)` picked the 40x32 `PhotoStrippedSize` blur placeholder over real `PhotoSize` entries up to 1546x1260 that were right there in the same list. Telethon's default "largest thumb" selection sorts by each size's *reported byte count* (`PhotoSize.size`), and RichMessage-sourced photos apparently report a bogus/zero byte size on their real entries, so the placeholder (whose tiny-but-nonzero stub byte count) sorted as "largest" instead.
