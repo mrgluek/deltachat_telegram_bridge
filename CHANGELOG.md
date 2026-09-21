@@ -1,3 +1,8 @@
+## [2.24.9] - 2026-09-21
+- **Diagnostics: Log RichMessage Photo Dimensions**:
+  - v2.24.8's logging showed all 6 photos in `@artjockey/3402` have `grouped_id=None` (confirming the v2.24.1 sibling fix doesn't apply here) but, surprisingly, each carries 4 real `PhotoSize` entries alongside the `PhotoStrippedSize` stub — so the "stub-only" theory is wrong for this post; Telethon's `download_media()` should already be picking the largest real size.
+  - Extended the log line to include each size's actual `w x h`, to check whether the largest available real size is simply too small for the width these charts are rendered at in the article layout (in which case this is a quality/upscaling issue, not a stub-selection bug).
+
 ## [2.24.8] - 2026-09-21
 - **Diagnostics: Log RichMessage Photo Size Types**:
   - `@artjockey/3402` still showed blurry, stretched-to-full-width chart images inline in the article body after the v2.24.1 sibling-photo fix, which only helps when the post has a `grouped_id` (a classic media-group album). This post's inline chart images are standalone `PageBlockPhoto` entries with no `grouped_id`, so that fix is a no-op here and the root cause is still unconfirmed.
