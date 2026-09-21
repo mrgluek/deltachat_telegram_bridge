@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.7"
+VERSION = "2.24.8"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -3142,9 +3142,16 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
         photos_map = {getattr(p, 'id', None): p for p in (getattr(rich_msg, 'photos', []) or []) if getattr(p, 'id', None)}
         docs_map = {getattr(d, 'id', None): d for d in (getattr(rich_msg, 'documents', []) or []) if getattr(d, 'id', None)}
 
+        # Diagnostics: log what size types Telegram actually gave us for each RichMessage
+        # photo, so we can tell stub-only (e.g. PhotoStrippedSize-only) photos from real ones.
+        for pid, pobj in photos_map.items():
+            size_types = [type(s).__name__ for s in (getattr(pobj, 'sizes', None) or [])]
+            logger.info(f"RichMessage photo {pid} for post {post_id} (grouped_id={getattr(msg, 'grouped_id', None)}): sizes={size_types}")
+
         # RichMessage photos are sometimes low-res preview stubs; swap in full-resolution
         # copies from sibling album messages when available.
         full_res_photos = await _resolve_full_res_photos_for_group(msg, userbot_client)
+        logger.info(f"Post {post_id}: resolved {len(full_res_photos)} full-res sibling photo(s) out of {len(photos_map)} RichMessage photo(s)")
         for photo_id, full_photo in full_res_photos.items():
             if photo_id in photos_map:
                 photos_map[photo_id] = full_photo

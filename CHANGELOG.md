@@ -1,3 +1,8 @@
+## [2.24.8] - 2026-09-21
+- **Diagnostics: Log RichMessage Photo Size Types**:
+  - `@artjockey/3402` still showed blurry, stretched-to-full-width chart images inline in the article body after the v2.24.1 sibling-photo fix, which only helps when the post has a `grouped_id` (a classic media-group album). This post's inline chart images are standalone `PageBlockPhoto` entries with no `grouped_id`, so that fix is a no-op here and the root cause is still unconfirmed.
+  - Added INFO-level logging in `_extract_telethon_rich_message()`: for each `RichMessage` photo, logs its Telethon size-type list (e.g. `PhotoStrippedSize`, `PhotoSize`, `PhotoCachedSize`) plus the post's `grouped_id`, and how many full-res sibling photos (if any) were resolved. No behavior change — this is purely to capture real data on the next reproduction before attempting another fix.
+
 ## [2.24.7] - 2026-09-21
 - **Fix: Local Temp File Path Leaking Into Visible Post Teaser**:
   - `_process_page_blocks()`'s `PageBlockPhoto` handling built its markdown representation as `` ![caption](p_path) ``, where `p_path` is the local temp file path the photo was downloaded to (e.g. `/tmp/tmpdo6xj60t.jpg`). Delta Chat doesn't render Markdown images, so this raw tag — local path included — showed up verbatim in the WebXDC delivery's caption/teaser text.
