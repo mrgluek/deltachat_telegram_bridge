@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.9"
+VERSION = "2.24.10"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -3145,11 +3145,20 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
         # Diagnostics: log what size types/dimensions Telegram actually gave us for each
         # RichMessage photo, so we can tell stub-only vs genuinely-small-but-real photos.
         for pid, pobj in photos_map.items():
+            all_sizes = list(getattr(pobj, 'sizes', None) or []) + list(getattr(pobj, 'video_sizes', None) or [])
             size_info = [
                 f"{type(s).__name__}({getattr(s, 'w', '?')}x{getattr(s, 'h', '?')})"
-                for s in (getattr(pobj, 'sizes', None) or [])
+                for s in all_sizes
             ]
-            logger.info(f"RichMessage photo {pid} for post {post_id} (grouped_id={getattr(msg, 'grouped_id', None)}): sizes={size_info}")
+            try:
+                selected = userbot_client._get_thumb(all_sizes, None) if userbot_client and all_sizes else None
+            except Exception as sel_err:
+                selected = f"<error: {sel_err}>"
+            logger.info(
+                f"RichMessage photo {pid} for post {post_id} (grouped_id={getattr(msg, 'grouped_id', None)}): "
+                f"sizes={size_info} selected={type(selected).__name__ if hasattr(selected, '__class__') else selected}"
+                f"({getattr(selected, 'w', '?')}x{getattr(selected, 'h', '?')})"
+            )
 
         # RichMessage photos are sometimes low-res preview stubs; swap in full-resolution
         # copies from sibling album messages when available.
