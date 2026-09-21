@@ -1,3 +1,9 @@
+## [2.24.11] - 2026-09-21
+- **Fix: Root Cause of Micro/Blurry Inline Article Images**:
+  - v2.24.10's diagnostics confirmed it: for `@artjockey/3402`'s photos, Telethon's own `_get_thumb(sizes, None)` picked the 40x32 `PhotoStrippedSize` blur placeholder over real `PhotoSize` entries up to 1546x1260 that were right there in the same list. Telethon's default "largest thumb" selection sorts by each size's *reported byte count* (`PhotoSize.size`), and RichMessage-sourced photos apparently report a bogus/zero byte size on their real entries, so the placeholder (whose tiny-but-nonzero stub byte count) sorted as "largest" instead.
+  - Added `_largest_real_photo_size()`, which picks the largest size by pixel area (`w * h`) instead of trusting the byte-count field, and passes it explicitly via `download_media(..., thumb=best_size)` at all three inline-photo download sites (`PageBlockPhoto`, `PageBlockCollage`, and the leftover-photos loop). Falls back to Telethon's default (`thumb=None`) only when no real (non-stub) size exists at all.
+  - This is the actual fix for the original "micro images" bug from v2.24.0/v2.24.1 — the earlier sibling-photo lookup only helped grouped albums; this fixes standalone inline article images directly, which is what turned out to be broken here.
+
 ## [2.24.10] - 2026-09-21
 - **Diagnostics: Log Telethon's Actual Selected Photo Size**:
   - v2.24.9 showed `@artjockey/3402`'s photos have real large `PhotoSize` entries (up to ~1546x1260), yet inspecting the actual generated `.xdc` on the server showed every embedded image was only 40x32px — the exact dimensions of Telegram's `PhotoStrippedSize` blur placeholder — meaning `download_media()` is picking the stub despite larger sizes being listed. A synthetic reproduction of Telethon's `_get_thumb()` sort with equivalent fake data picked the large size correctly, so something differs for the real object.

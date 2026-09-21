@@ -472,7 +472,7 @@ main_loop = None
 bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 _is_starting_userbot = False
-VERSION = "2.24.10"
+VERSION = "2.24.11"
 
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
@@ -2736,6 +2736,30 @@ def _rich_text_to_html(rt) -> str:
     return html.escape(str(rt))
 
 
+def _largest_real_photo_size(photo):
+    """Pick the largest real (non-stub) size by pixel area for a Telethon Photo.
+
+    Telethon's own download_media()/thumb=None selection sorts sizes by their reported
+    byte count (PhotoSize.size), but RichMessage-sourced photos can report a 0/bogus
+    byte size on their real PhotoSize entries, which makes the tiny PhotoStrippedSize
+    blur placeholder sort as "largest" and get downloaded instead. Selecting by w*h
+    instead sidesteps that. Returns None if there's no real (non-stub) size at all,
+    in which case the caller should fall back to Telethon's default (thumb=None).
+    """
+    best = None
+    best_area = -1
+    for s in (getattr(photo, 'sizes', None) or []):
+        w = getattr(s, 'w', None)
+        h = getattr(s, 'h', None)
+        if w is None or h is None:
+            continue
+        area = w * h
+        if area > best_area:
+            best_area = area
+            best = s
+    return best
+
+
 async def _process_page_blocks(
     blocks,
     photos_map: dict,
@@ -2901,7 +2925,8 @@ async def _process_page_blocks(
             if photo_obj and userbot_client:
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                    p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp), timeout=60.0)
+                    best_size = _largest_real_photo_size(photo_obj)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp, thumb=best_size), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         downloaded_photo_ids.add(photo_id)
                     else:
@@ -2940,7 +2965,8 @@ async def _process_page_blocks(
                     if p_obj and userbot_client:
                         try:
                             p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                            dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp), timeout=60.0)
+                            best_size = _largest_real_photo_size(p_obj)
+                            dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp, thumb=best_size), timeout=60.0)
                             if dl_p and os.path.exists(dl_p) and os.path.getsize(dl_p) > 0:
                                 i_idx = len(image_urls)
                                 image_urls.append(dl_p)
@@ -3142,23 +3168,14 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
         photos_map = {getattr(p, 'id', None): p for p in (getattr(rich_msg, 'photos', []) or []) if getattr(p, 'id', None)}
         docs_map = {getattr(d, 'id', None): d for d in (getattr(rich_msg, 'documents', []) or []) if getattr(d, 'id', None)}
 
-        # Diagnostics: log what size types/dimensions Telegram actually gave us for each
-        # RichMessage photo, so we can tell stub-only vs genuinely-small-but-real photos.
+        # RichMessage-sourced photos can report a bogus/zero byte size on their real
+        # PhotoSize entries, which breaks Telethon's own byte-size-based "largest thumb"
+        # heuristic (it ends up picking the tiny PhotoStrippedSize blur placeholder over
+        # a genuinely large photo). _largest_real_photo_size() picks by pixel area instead,
+        # and download sites pass its result explicitly via thumb=.
         for pid, pobj in photos_map.items():
-            all_sizes = list(getattr(pobj, 'sizes', None) or []) + list(getattr(pobj, 'video_sizes', None) or [])
-            size_info = [
-                f"{type(s).__name__}({getattr(s, 'w', '?')}x{getattr(s, 'h', '?')})"
-                for s in all_sizes
-            ]
-            try:
-                selected = userbot_client._get_thumb(all_sizes, None) if userbot_client and all_sizes else None
-            except Exception as sel_err:
-                selected = f"<error: {sel_err}>"
-            logger.info(
-                f"RichMessage photo {pid} for post {post_id} (grouped_id={getattr(msg, 'grouped_id', None)}): "
-                f"sizes={size_info} selected={type(selected).__name__ if hasattr(selected, '__class__') else selected}"
-                f"({getattr(selected, 'w', '?')}x{getattr(selected, 'h', '?')})"
-            )
+            best = _largest_real_photo_size(pobj)
+            logger.debug(f"RichMessage photo {pid} for post {post_id}: picked {type(best).__name__ if best else None} ({getattr(best, 'w', '?')}x{getattr(best, 'h', '?')})")
 
         # RichMessage photos are sometimes low-res preview stubs; swap in full-resolution
         # copies from sibling album messages when available.
@@ -3184,7 +3201,8 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             if pid not in downloaded_photo_ids and userbot_client:
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
-                    p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp), timeout=60.0)
+                    best_size = _largest_real_photo_size(pobj)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp, thumb=best_size), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         image_urls.append(p_path)
                         downloaded_photo_ids.add(pid)
