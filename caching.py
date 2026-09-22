@@ -204,6 +204,11 @@ def set_cached_channels_text(user_id: int, text: str) -> None:
     _channels_cache[user_id] = (text, time.time())
 
 
+def get_history_cache(dc_chat_id: int):
+    """Return the cached {'timestamp', 'messages'} entry for dc_chat_id, or None."""
+    return _history_cache.get(dc_chat_id)
+
+
 def set_history_cache(dc_chat_id: int, messages) -> None:
     _history_cache[dc_chat_id] = {'timestamp': time.time(), 'messages': messages}
 
