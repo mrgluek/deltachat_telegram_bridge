@@ -1270,9 +1270,12 @@ async def _process_page_blocks(
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         downloaded_photo_ids.add(photo_id)
                     else:
+                        logger.warning(f"Inline photo {photo_id} in post {post_id} downloaded empty; dropping it")
                         p_path = None
                 except Exception as e:
                     logger.warning(f"Failed to download inline photo {photo_id} in post {post_id}: {e}")
+            elif not photo_obj:
+                logger.warning(f"Inline photo {photo_id} in post {post_id} not present in RichMessage.photos; dropping it")
 
             cap_obj = getattr(b, 'caption', None)
             cap_text = getattr(cap_obj, 'text', None) if cap_obj else None
@@ -1312,8 +1315,12 @@ async def _process_page_blocks(
                                 image_urls.append(dl_p)
                                 downloaded_photo_ids.add(p_id)
                                 c_imgs.append(f"images/img_{i_idx}.webp")
+                            else:
+                                logger.warning(f"Collage photo {p_id} in post {post_id} downloaded empty; dropping it")
                         except Exception as e:
                             logger.warning(f"Failed to download collage photo {p_id} in post {post_id}: {e}")
+                    elif not p_obj:
+                        logger.warning(f"Collage photo {p_id} in post {post_id} not present in RichMessage.photos; dropping it")
             cap_obj = getattr(b, 'caption', None)
             cap_text = getattr(cap_obj, 'text', None) if cap_obj else None
             c_h = _rich_text_to_html(cap_text) if cap_text else ""

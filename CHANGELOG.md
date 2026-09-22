@@ -1,3 +1,11 @@
+## [2.25.1] - 2026-09-22
+- **Fix: Relayed Rich Posts Arriving With No Images**:
+  - A relayed channel post (`@artjockey/3424`) arrived as a WebXDC with its full text but zero images. When a `RichMessage` is partial (`part=True`), `_extract_telethon_rich_message()` fetches the full version via `GetRichMessageRequest`, which needs a peer taken from `entity or msg.chat`. Neither caller passes `entity`, and live relay event messages don't always have `.chat` populated, so the full fetch could be skipped without any log and the partial message packaged instead. It now falls back to `msg.get_input_chat()`, and warns if no peer can be found.
+  - `PageBlockPhoto`/`PageBlockCollage` dropped a photo without logging when its `photo_id` wasn't in `RichMessage.photos` or the download came back empty. Both cases now log a warning, so a missing image can always be traced.
+- **Fix: Undefined Names Left Over From the v2.25.0 Module Split**:
+  - `tg_events.py` used `LIVE_LOCATIONS` and `_edit_timestamps` without importing them, raising `NameError` on live-location posts/edits and on edited channel/group messages. Imported both from `live_locations.py` and `security.py` (shared dicts, mutated in place).
+  - `tg_commands.py` used `io.BytesIO()` for the channel invite QR code without `import io`.
+
 ## [2.25.0] - 2026-09-22
 - **Refactor: Split the 10,452-line bot.py into 16 focused modules**:
   - `bot.py` had grown into a single 10,452-line file mixing two bot frameworks (deltabot-cli for Delta Chat, python-telegram-bot for Telegram, plus Telethon for the userbot relay) with caching, rate limiting, logging, RPC proxying, rich-text formatting, and media handling all in one place — the highest-churn, hardest-to-navigate file across all of my bots. Split it into `runtime_patches.py`, `formatting.py`, `security.py`, `caching.py`, `live_locations.py`, `rpc_proxy.py`, `relay.py`, `dc_helpers.py`, `media.py`, `logging_setup.py`, `resilience.py`, `userbot.py`, `tg_events.py`, `tg_commands.py`, `dc_events.py`, and `dc_commands.py`. `bot.py` itself is now 1,138 lines, holding only re-exports, the handful of pervasive shared singletons, lifecycle hooks, the periodic maintenance loops, and the CLI entrypoint.

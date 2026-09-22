@@ -951,6 +951,11 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             try:
                 from telethon.tl.functions.messages import GetRichMessageRequest
                 peer = entity or getattr(msg, 'chat', None)
+                if not peer and hasattr(msg, 'get_input_chat'):
+                    # Live relay event messages often lack a populated .chat
+                    peer = await asyncio.wait_for(msg.get_input_chat(), timeout=15.0)
+                if not peer:
+                    logger.warning(f"Post {post_id}: rich message is partial but no peer available to fetch the full version; images may be missing")
                 if peer:
                     full_res = await userbot_client(GetRichMessageRequest(peer=peer, id=post_id))
                     if hasattr(full_res, 'messages') and full_res.messages:

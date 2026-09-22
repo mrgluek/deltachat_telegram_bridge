@@ -14,6 +14,7 @@ touching the _channels_cache dict directly.
 """
 import asyncio
 import html
+import io
 import logging
 import os
 import re

@@ -44,7 +44,9 @@ from security import (
     _register_bot_initiated_delete,
     _consume_bot_initiated_delete,
     _wait_for_global_dc_rate_limit,
+    _edit_timestamps,
 )
+from live_locations import LIVE_LOCATIONS
 from caching import (
     HISTORY_RELAY_COOLDOWN,
     get_history_cache,
