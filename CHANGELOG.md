@@ -1,3 +1,7 @@
+## [2.25.4] - 2026-09-22
+- **Hotfix: Crash Loop on Startup Under Python 3.11**:
+  - v2.25.3's `_admin_alert_key()` put `re.sub(r'\d+', ...)` inside an f-string expression. Backslashes there are only allowed from Python 3.12; the container runs 3.11, so `logging_setup.py` failed to import and the bot crash-looped. Moved the call out of the f-string. Verified all modules compile under `python:3.11-slim`.
+
 ## [2.25.3] - 2026-09-22
 - **Admin Alerts for Rich-Post Failures**:
   - Crashes while extracting a Telegram rich/article post (`Failed to extract Telethon RichMessage`, e.g. the `NameError`/`TypeError` bugs fixed in v2.24.x) and a partial rich message with no peer to fetch the full version now log at ERROR, so `AdminLogHandler` forwards them to the admin over Telegram and Delta Chat. Previously they were WARNING and only visible in container logs.

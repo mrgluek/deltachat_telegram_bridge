@@ -165,7 +165,8 @@ _admin_alert_lock = threading.Lock()
 def _admin_alert_key(record) -> str:
     """Group similar errors: numbers (post/chat/msg IDs, sizes) are normalized away."""
     exc_type = type(record.exc_info[1]).__name__ if record.exc_info and record.exc_info[1] else ""
-    return f"{record.name}|{exc_type}|{re.sub(r'\d+', 'N', record.getMessage())}"
+    normalized = re.sub(r'\d+', 'N', record.getMessage())
+    return f"{record.name}|{exc_type}|{normalized}"
 
 
 def _admin_alert_check(key: str, now: Optional[float] = None) -> tuple[bool, int]:
