@@ -241,14 +241,14 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
 
 ## Logging and Admin Control
 
-- **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive all bot error logs via direct message. (You can find your Telegram ID by sending `/start` to the bot in a private message).
+- **Set Global Admin (Telegram)**: Configures a Telegram user ID to receive bot error logs via direct message (similar errors are sent at most once per hour, with a count of suppressed repeats). (You can find your Telegram ID by sending `/start` to the bot in a private message).
   **Important Note:** Setting `admin_tg` locks the Telegram management commands so that *only* this user can manage the bot (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash
   docker compose exec bridge python bot.py init admin_tg YOUR_TELEGRAM_ID
   ```
 
-- **Set Global Admin (Delta Chat)**: Configures a Delta Chat email to receive all bot error logs via direct message.
+- **Set Global Admin (Delta Chat)**: Configures a Delta Chat email to receive bot error logs via direct message (similar errors are sent at most once per hour, with a count of suppressed repeats).
   **Important Note:** Setting `admin_dc` locks the `/bridge` and `/unbridge` commands so that *only* this user can use them (the help text will dynamically change to **Mode: Private (bot owner only)**).
   
   ```bash

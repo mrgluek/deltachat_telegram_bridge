@@ -955,7 +955,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
                     # Live relay event messages often lack a populated .chat
                     peer = await asyncio.wait_for(msg.get_input_chat(), timeout=15.0)
                 if not peer:
-                    logger.warning(f"Post {post_id}: rich message is partial but no peer available to fetch the full version; images may be missing")
+                    logger.error(f"Post {post_id}: rich message is partial but no peer available to fetch the full version; images may be missing")
                 if peer:
                     full_res = await userbot_client(GetRichMessageRequest(peer=peer, id=post_id))
                     if hasattr(full_res, 'messages') and full_res.messages:
@@ -1045,6 +1045,13 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
                 except Exception as e:
                     logger.warning(f"Failed to download remaining photo {pid} in post {post_id}: {e}")
 
+        missing_photos = [pid for pid in photos_map if pid not in downloaded_photo_ids]
+        if missing_photos:
+            logger.error(
+                f"Post @{chat_username}/{post_id}: {len(missing_photos)} of {len(photos_map)} images "
+                f"failed to download (see preceding warnings for per-photo reasons)"
+            )
+
         text_markdown = "\n\n".join(p for p in md_parts if p).strip()
         text_html = "\n".join(p for p in htm_parts if p).strip()
         teaser = _make_teaser(text_markdown)
@@ -1087,6 +1094,6 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             is_rich=is_rich,
         )
     except Exception as e:
-        logger.warning(f"Failed to extract Telethon RichMessage: {e}", exc_info=True)
+        logger.error(f"Failed to extract Telethon RichMessage: {e}", exc_info=True)
         return None
 

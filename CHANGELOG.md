@@ -1,3 +1,10 @@
+## [2.25.3] - 2026-09-22
+- **Admin Alerts for Rich-Post Failures**:
+  - Crashes while extracting a Telegram rich/article post (`Failed to extract Telethon RichMessage`, e.g. the `NameError`/`TypeError` bugs fixed in v2.24.x) and a partial rich message with no peer to fetch the full version now log at ERROR, so `AdminLogHandler` forwards them to the admin over Telegram and Delta Chat. Previously they were WARNING and only visible in container logs.
+  - When images from a rich post fail to download, one ERROR summary per post (`Post @channel/id: N of M images failed to download`) is logged, rather than alerting on each per-photo warning.
+- **Admin Alert Throttling**:
+  - `AdminLogHandler` now sends each kind of error at most once per hour. Errors are grouped by logger, exception type, and message with numbers (post/chat IDs, sizes) normalized away; the next alert after the window includes a count of suppressed repeats.
+
 ## [2.25.2] - 2026-09-22
 - **Fix: Article Images Dropped When Largest Size Is Progressive**:
   - The v2.25.1 warnings showed all 4 photos in `@artjockey/3424` "downloaded empty" instantly. v2.24.11 passed the chosen size *object* as `download_media(..., thumb=...)`, but Telethon's `_get_thumb()` only accepts `PhotoSize`/`PhotoCachedSize`/`PhotoStrippedSize`/`VideoSize` instances and returns `None` for a `PhotoSizeProgressive`, so the download was skipped entirely. `@artjockey/3402` only had plain `PhotoSize` entries, which is why it worked there.

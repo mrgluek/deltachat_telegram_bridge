@@ -16,6 +16,7 @@ import asyncio
 import html
 import logging
 import queue
+import re
 import threading
 import time
 from typing import Optional
@@ -155,6 +156,30 @@ def _send_admin_dc_message_bg(text: str):
                 pass
 
 
+ADMIN_ALERT_THROTTLE_SECONDS = 3600
+_admin_alert_last_sent: dict[str, float] = {}
+_admin_alert_suppressed: dict[str, int] = {}
+_admin_alert_lock = threading.Lock()
+
+
+def _admin_alert_key(record) -> str:
+    """Group similar errors: numbers (post/chat/msg IDs, sizes) are normalized away."""
+    exc_type = type(record.exc_info[1]).__name__ if record.exc_info and record.exc_info[1] else ""
+    return f"{record.name}|{exc_type}|{re.sub(r'\d+', 'N', record.getMessage())}"
+
+
+def _admin_alert_check(key: str, now: Optional[float] = None) -> tuple[bool, int]:
+    """Return (should_send, similar_suppressed_since_last_send) for an alert key."""
+    now = time.time() if now is None else now
+    with _admin_alert_lock:
+        last = _admin_alert_last_sent.get(key)
+        if last is not None and now - last < ADMIN_ALERT_THROTTLE_SECONDS:
+            _admin_alert_suppressed[key] = _admin_alert_suppressed.get(key, 0) + 1
+            return False, 0
+        _admin_alert_last_sent[key] = now
+        return True, _admin_alert_suppressed.pop(key, 0)
+
+
 class AdminLogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
@@ -182,11 +207,17 @@ class AdminLogHandler(logging.Handler):
             
         if getattr(self._is_emitting, 'flag', False):
             return
-            
+
+        should_send, suppressed = _admin_alert_check(_admin_alert_key(record))
+        if not should_send:
+            return
+
         self._is_emitting.flag = True
         try:
             import bot as _bot_module
             log_entry = self.format(record)
+            if suppressed:
+                log_entry += f"\n\n(+{suppressed} similar error(s) suppressed in the last hour)"
             
             # Use local refs for globals to be safe
             local_tg_app = _bot_module.tg_app
