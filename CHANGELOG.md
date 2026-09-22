@@ -1,3 +1,8 @@
+## [2.25.2] - 2026-09-22
+- **Fix: Article Images Dropped When Largest Size Is Progressive**:
+  - The v2.25.1 warnings showed all 4 photos in `@artjockey/3424` "downloaded empty" instantly. v2.24.11 passed the chosen size *object* as `download_media(..., thumb=...)`, but Telethon's `_get_thumb()` only accepts `PhotoSize`/`PhotoCachedSize`/`PhotoStrippedSize`/`VideoSize` instances and returns `None` for a `PhotoSizeProgressive`, so the download was skipped entirely. `@artjockey/3402` only had plain `PhotoSize` entries, which is why it worked there.
+  - All three inline-photo download sites now pass the size's `.type` string instead, which Telethon matches for every size class.
+
 ## [2.25.1] - 2026-09-22
 - **Fix: Relayed Rich Posts Arriving With No Images**:
   - A relayed channel post (`@artjockey/3424`) arrived as a WebXDC with its full text but zero images. When a `RichMessage` is partial (`part=True`), `_extract_telethon_rich_message()` fetches the full version via `GetRichMessageRequest`, which needs a peer taken from `entity or msg.chat`. Neither caller passes `entity`, and live relay event messages don't always have `.chat` populated, so the full fetch could be skipped without any log and the partial message packaged instead. It now falls back to `msg.get_input_chat()`, and warns if no peer can be found.

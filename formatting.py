@@ -1085,6 +1085,8 @@ def _largest_real_photo_size(photo):
     blur placeholder sort as "largest" and get downloaded instead. Selecting by w*h
     instead sidesteps that. Returns None if there's no real (non-stub) size at all,
     in which case the caller should fall back to Telethon's default (thumb=None).
+    Callers must pass the size's .type string as thumb=, not the object: Telethon's
+    _get_thumb() rejects PhotoSizeProgressive instances and downloads nothing.
     """
     best = None
     best_area = -1
@@ -1266,7 +1268,7 @@ async def _process_page_blocks(
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
                     best_size = _largest_real_photo_size(photo_obj)
-                    p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp, thumb=best_size), timeout=60.0)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         downloaded_photo_ids.add(photo_id)
                     else:
@@ -1309,7 +1311,7 @@ async def _process_page_blocks(
                         try:
                             p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
                             best_size = _largest_real_photo_size(p_obj)
-                            dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp, thumb=best_size), timeout=60.0)
+                            dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                             if dl_p and os.path.exists(dl_p) and os.path.getsize(dl_p) > 0:
                                 i_idx = len(image_urls)
                                 image_urls.append(dl_p)

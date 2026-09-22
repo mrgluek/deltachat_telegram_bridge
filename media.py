@@ -1033,7 +1033,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
                 try:
                     p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
                     best_size = _largest_real_photo_size(pobj)
-                    p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp, thumb=best_size), timeout=60.0)
+                    p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
                         image_urls.append(p_path)
                         downloaded_photo_ids.add(pid)
