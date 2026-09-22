@@ -45,6 +45,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database
 import bot
+import security
 
 
 class MockEntity:
@@ -1535,7 +1536,7 @@ class TestTelegramBridge(unittest.TestCase):
         database.add_filter("crypto promo")
         bot._reload_filter_cache()
 
-        self.assertIsNotNone(bot._filter_regex)
+        self.assertIsNotNone(security._filter_regex)
 
         matched, pat = bot.is_text_filtered("Win at the big CaSiNo tonight!")
         self.assertTrue(matched)
