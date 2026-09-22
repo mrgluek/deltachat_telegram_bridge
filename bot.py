@@ -1,41 +1,19 @@
 import asyncio
-import html
 import json
 import logging
 import os
-import tempfile
 import time
 import threading
-import random
-from collections import defaultdict
 from typing import Optional
-from dataclasses import dataclass, field
-import hashlib
-import zipfile
-import shutil
-import queue
 
-from deltachat2 import EventType, MsgData, SystemMessageType, events
-from deltabot_cli import BotCli
-
+from deltachat2 import EventType, events
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler, ChatMemberHandler
-from telegram import ReactionTypeEmoji
-from telegram.error import NetworkError, TimedOut
 
 try:
-    from telethon import TelegramClient, events as tg_events
-    from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
-    from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
-    from telethon.errors import ChannelPrivateError
+    from telethon import TelegramClient
 except ImportError:
     TelegramClient = None
-    tg_events = None
-    JoinChannelRequest = None
-    LeaveChannelRequest = None
-    ImportChatInviteRequest = None
-    CheckChatInviteRequest = None
-    ChannelPrivateError = None
 
 
 import database
@@ -57,11 +35,6 @@ TG_POST_URL_RE = re.compile(
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("tg_dc_bridge")
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-# Global tracker for Userbot background tasks
-
-# In-memory cache for /channels command report (TTL: 10 minutes)
-
 
 import runtime_patches
 runtime_patches.apply()
@@ -252,21 +225,12 @@ from tg_commands import (
 )
 
 
-
-
-
-
-
-
-
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
 DC_MAX_MSG_LEN = 10000   # Practical DC limit
 MAX_ATTACHMENT_SIZE = int(os.environ.get("MAX_ATTACHMENT_SIZE_MB", "50")) * 1024 * 1024
 
 db_lock = threading.Lock()
-
-import collections
 
 from dc_commands import (
     VERSION,
@@ -353,134 +317,10 @@ bot_contact_id = None  # To detect and skip own messages
 userbot_client = None
 
 
-# In-memory channel ID cache to reduce DB queries on incoming posts
-
-
-
-
-
-# Global rate limiting for Delta Chat (e.g. chatmail limits)
-
-
-
-# Double bridging protection
-
-# Cooldown for channel history relay (per DC chat_id)
-
-# Cache for channel history messages (per DC chat_id)
-# Stores: {dc_chat_id: {"timestamp": float, "messages": list[TelethonMessage]}}
-
-# Cache for channel last message IDs
-
-# Deletion sync safety: max deletions per window to avoid accidental bulk-delete
-
-# Set of DC message IDs deleted by the bot itself (e.g. old version replaced by edit).
-# These are exempt from the rate limit so that edit-replacements never block real deletions.
-
-
-
-
-
-
-
-
-
-
-
-
-# Simple per-chat rate limiter
-
-
-# Per-message edit debounce: tracks last edit relay time per (chat_id, msg_id)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ---------------------------------------------------------
 # DELTA CHAT HANDLERS
 # ---------------------------------------------------------
-
-
-
-
-
 
 
 def on_init(bot, args):
@@ -539,68 +379,6 @@ def on_init(bot, args):
                     bot.rpc.set_config(accid, "selfavatar", icon_path)
             except Exception as e:
                 bot.logger.warning(f"Could not set avatar: {e}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Save references for Telegram to use and print QR
@@ -672,92 +450,6 @@ def on_start(bot, _args):
                     bot.logger.debug(f"Background cleanup error: {e}")
 
         threading.Thread(target=_bg_cleanup_worker, daemon=True, name="bg_cleanup_worker").start()
-
-# ---------------------------------------------------------
-# TELEGRAM HANDLERS
-# ---------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------
-# TG BRIDGE / UNBRIDGE COMMANDS
-# ---------------------------------------------------------
-
-
-
-
-
-# ---------------------------------------------------------
-# ADMIN MANAGEMENT COMMANDS (owner only)
-# ---------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------
-# CHANNEL BRIDGING COMMANDS
-# ---------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------
-# CHANNEL POST HANDLER
-# ---------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------
@@ -973,8 +665,6 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
     return stats
 
 
-
-
 async def db_cleanup_loop():
     cleanup_counter = 0
     while True:
@@ -989,14 +679,6 @@ async def db_cleanup_loop():
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
             await asyncio.sleep(60)
-
-
-# ---------------------------------------------------------
-# TELETHON USERBOT HANDLERS & RECONCILIATION
-# ---------------------------------------------------------
-
-
-
 
 
 async def update_tg_channel_stats(channel_id: int, tg_peer):
@@ -1027,25 +709,6 @@ async def update_tg_channel_stats(channel_id: int, tg_peer):
     except Exception as e:
         logger.warning(f"Failed to fetch stats for TG peer: {e}")
     return 0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _asyncio_exception_handler(loop, context):
