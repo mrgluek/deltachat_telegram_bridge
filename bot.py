@@ -193,6 +193,7 @@ from caching import (
     _get_content_hash,
     files_are_identical,
 )
+from live_locations import LIVE_LOCATIONS, get_live_location, set_live_location, clear_live_location
 
 _admin_dc_chat_id_cache = None
 _admin_dc_chat_id_lock = threading.Lock()
@@ -436,7 +437,6 @@ TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
 DC_MAX_MSG_LEN = 10000   # Practical DC limit
 MAX_ATTACHMENT_SIZE = int(os.environ.get("MAX_ATTACHMENT_SIZE_MB", "50")) * 1024 * 1024
 
-LIVE_LOCATIONS = {}
 db_lock = threading.Lock()
 
 # Initialize DeltaBot CLI
