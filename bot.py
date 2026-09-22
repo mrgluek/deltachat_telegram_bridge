@@ -194,6 +194,7 @@ from caching import (
     files_are_identical,
 )
 from live_locations import LIVE_LOCATIONS, get_live_location, set_live_location, clear_live_location
+from rpc_proxy import RpcProxy, _make_rpc_thread_safe, _get_download_semaphore
 
 _admin_dc_chat_id_cache = None
 _admin_dc_chat_id_lock = threading.Lock()
@@ -413,24 +414,7 @@ class TelethonBanLogHandler(logging.Handler):
 
 logging.getLogger("telethon.client.updates").addHandler(TelethonBanLogHandler())
 
-class RpcProxy:
-    """Thread-safe proxy for Rpc to prevent race conditions on JSON-RPC stdin/stdout pipes."""
-    def __init__(self, rpc_instance):
-        self._rpc = rpc_instance
-        self._lock = threading.Lock()
 
-    def __getattr__(self, name):
-        attr = getattr(self._rpc, name)
-        if callable(attr):
-            def wrapped(*args, **kwargs):
-                with self._lock:
-                    return attr(*args, **kwargs)
-            return wrapped
-        return attr
-
-def _make_rpc_thread_safe(bot):
-    if hasattr(bot, 'rpc') and not isinstance(bot.rpc, RpcProxy):
-        bot.rpc = RpcProxy(bot.rpc)
 
 # Limits
 TG_MAX_MSG_LEN = 4000   # Telegram limit is 4096; leave margin
@@ -444,13 +428,7 @@ import collections
 
 dc_cli = BotCli("tgbridge")
 USERBOT_SESSION_PATH = os.environ.get("USERBOT_SESSION_PATH", "userbot_session")
-_download_semaphore = None
 
-def _get_download_semaphore():
-    global _download_semaphore
-    if _download_semaphore is None:
-        _download_semaphore = asyncio.Semaphore(3)
-    return _download_semaphore
 
 # Global references
 tg_app: Optional[Application] = None
