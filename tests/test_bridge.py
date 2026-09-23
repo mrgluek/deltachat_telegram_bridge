@@ -832,7 +832,7 @@ class TestTelegramBridge(unittest.TestCase):
         mock_update = MagicMock()
         mock_update.effective_user.id = 12345
         mock_update.effective_chat.type = "private"
-        mock_update.message.reply_text = AsyncMock()
+        mock_update.effective_message.reply_text = AsyncMock()
         mock_context = MagicMock()
 
         database.set_config("admin_tg_id", "12345")
@@ -840,20 +840,20 @@ class TestTelegramBridge(unittest.TestCase):
         # 1. Add multi-word filter without quotes
         mock_context.args = ["купить", "со", "скидкой"]
         asyncio.run(bot.tg_filteradd_command(mock_update, mock_context))
-        mock_update.message.reply_text.assert_called()
-        self.assertIn("Filter added", mock_update.message.reply_text.call_args[0][0])
-        self.assertIn("купить со скидкой", mock_update.message.reply_text.call_args[0][0])
+        mock_update.effective_message.reply_text.assert_called()
+        self.assertIn("Filter added", mock_update.effective_message.reply_text.call_args[0][0])
+        self.assertIn("купить со скидкой", mock_update.effective_message.reply_text.call_args[0][0])
 
         # 2. List filters
-        mock_update.message.reply_text.reset_mock()
+        mock_update.effective_message.reply_text.reset_mock()
         asyncio.run(bot.tg_filters_command(mock_update, mock_context))
-        self.assertIn("купить со скидкой", mock_update.message.reply_text.call_args[0][0])
+        self.assertIn("купить со скидкой", mock_update.effective_message.reply_text.call_args[0][0])
 
         # 3. Remove filter by phrase
-        mock_update.message.reply_text.reset_mock()
+        mock_update.effective_message.reply_text.reset_mock()
         mock_context.args = ["купить", "со", "скидкой"]
         asyncio.run(bot.tg_filterdel_command(mock_update, mock_context))
-        self.assertIn("removed", mock_update.message.reply_text.call_args[0][0])
+        self.assertIn("removed", mock_update.effective_message.reply_text.call_args[0][0])
 
     def test_relay_userbot_message_filtered(self):
         database.add_filter("#реклама")
@@ -930,7 +930,7 @@ class TestTelegramBridge(unittest.TestCase):
         mock_update = MagicMock()
         mock_update.effective_user.id = 12345
         mock_update.effective_chat.type = "private"
-        mock_update.message.reply_text = AsyncMock()
+        mock_update.effective_message.reply_text = AsyncMock()
         mock_context = MagicMock()
 
         database.set_config("admin_tg_id", "12345")
@@ -947,8 +947,8 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_accid = 1
 
             asyncio.run(bot.tg_channels_command(mock_update, mock_context))
-            mock_update.message.reply_text.assert_called()
-            output_text = mock_update.message.reply_text.call_args[0][0]
+            mock_update.effective_message.reply_text.assert_called()
+            output_text = mock_update.effective_message.reply_text.call_args[0][0]
             self.assertIn(f'/channel{ch_id} — <a href="https://t.me/ftsec">42 секунды</a> — 👤 0 TG / 2 DC — 💬 0', output_text)
         finally:
             bot.dc_bot_instance = orig_dc_bot
@@ -1489,25 +1489,25 @@ class TestTelegramBridge(unittest.TestCase):
         mock_update.effective_chat.type = "supergroup"
         mock_update.effective_chat.get_member = AsyncMock(side_effect=Exception("Telegram API network timeout"))
         mock_update.effective_user.id = 99999
-        mock_update.message.reply_text = AsyncMock()
+        mock_update.effective_message.reply_text = AsyncMock()
         mock_context = MagicMock()
 
         asyncio.run(bot.tg_id_command(mock_update, mock_context))
-        mock_update.message.reply_text.assert_called_once()
-        text = mock_update.message.reply_text.call_args[0][0]
+        mock_update.effective_message.reply_text.assert_called_once()
+        text = mock_update.effective_message.reply_text.call_args[0][0]
         self.assertIn("Could not verify your group admin permissions", text)
 
     def test_check_channel_admin_rejects_when_admin_unset(self):
         mock_update = MagicMock()
         mock_update.effective_user.id = 88888
         mock_update.effective_chat.type = "private"
-        mock_update.message.reply_text = AsyncMock()
+        mock_update.effective_message.reply_text = AsyncMock()
 
         self.assertIsNone(database.get_config("admin_tg_id"))
         is_admin = asyncio.run(bot._check_channel_admin(mock_update))
         self.assertFalse(is_admin)
-        mock_update.message.reply_text.assert_called_once()
-        self.assertIn("Bot administrator is not configured yet", mock_update.message.reply_text.call_args[0][0])
+        mock_update.effective_message.reply_text.assert_called_once()
+        self.assertIn("Bot administrator is not configured yet", mock_update.effective_message.reply_text.call_args[0][0])
 
     def test_clean_html_for_webxdc_hardening(self):
         dirty_html = (
