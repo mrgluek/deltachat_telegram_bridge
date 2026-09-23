@@ -92,6 +92,29 @@ class TestTelegramPostPreview(unittest.TestCase):
         self.assertIsNone(bot.TG_POST_URL_RE.search("https://t.me/durov"))
         self.assertIsNone(bot.TG_POST_URL_RE.search("https://example.com/durov/123"))
 
+    def test_find_direct_post_link(self):
+        """Only full links trigger a post preview; relayed posts forwarded back are ignored."""
+        import dc_events
+        m = dc_events._find_direct_post_link("look https://t.me/durov/123")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "durov")
+        self.assertEqual(m.group(2), "123")
+
+        # Bare link without scheme is not a full post link
+        self.assertIsNone(dc_events._find_direct_post_link("see t.me/durov/123"))
+
+        # A relayed post (with the bridge's footer) forwarded back into a chat
+        forwarded = (
+            "**ЦБ рекомендует банкам усилить проверки**, сообщил ...\n"
+            "@ejdailyru\n\n"
+            "🔗 t.me/ejdailyru/420524"
+        )
+        self.assertIsNone(dc_events._find_direct_post_link(forwarded))
+
+        # Even if the relayed post body itself contains a full link
+        self.assertIsNone(dc_events._find_direct_post_link(
+            "Подробнее: https://t.me/other/5\n\n🔗 t.me/ejdailyru/420524"))
+
     def test_async_handle_direct_tg_post_cache_hit(self):
         """When post is in cache, deliver immediately without network requests."""
         with tempfile.NamedTemporaryFile(suffix=".xdc", delete=False) as tmp:

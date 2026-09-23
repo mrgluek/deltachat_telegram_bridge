@@ -1,3 +1,7 @@
+## [2.25.5] - 2026-09-23
+- **Fix: Forwarded Bridge Posts Re-Posted by the Bot**:
+  - Forwarding a relayed post from a bridged channel into a Delta Chat chat made the bot pick up its own `🔗 t.me/channel/123` footer as a post link and send the post again. Post-link previews now ignore any message carrying that footer, and only react to full links (`https://t.me/channel/123`, as copied from Telegram); bare `t.me/channel/123` text no longer triggers a preview.
+
 ## [2.25.4] - 2026-09-22
 - **Hotfix: Crash Loop on Startup Under Python 3.11**:
   - v2.25.3's `_admin_alert_key()` put `re.sub(r'\d+', ...)` inside an f-string expression. Backslashes there are only allowed from Python 3.12; the container runs 3.11, so `logging_setup.py` failed to import and the bot crash-looped. Moved the call out of the f-string. Verified all modules compile under `python:3.11-slim`.

@@ -424,6 +424,26 @@ def handle_dc_info_message(bot, accid, event):
         logger.info(f"Member event detected in DC chat {dc_chat_id} (type={smt!r}). History is resent automatically by core.")
 
 
+# The "🔗 t.me/channel/123" footer the bridge appends to every relayed post.
+_BOT_POST_FOOTER_RE = re.compile(r'^\s*🔗\s*t\.me/', re.MULTILINE)
+
+
+def _find_direct_post_link(text):
+    """Return the TG_POST_URL_RE match for a post link a user shared, or None.
+
+    Only full links (https://t.me/channel/123, as copied from Telegram) count.
+    Text carrying the bridge's own "🔗 t.me/..." footer is a relayed post being
+    forwarded back into a chat, so it is ignored to avoid re-posting it.
+    """
+    import bot as _bot_module
+    if not text or _BOT_POST_FOOTER_RE.search(text):
+        return None
+    for m in _bot_module.TG_POST_URL_RE.finditer(text):
+        if re.match(r'https?://', m.group(0), re.IGNORECASE):
+            return m
+    return None
+
+
 def handle_dc_message(bot, accid, event):
     """Relay Delta Chat messages to Telegram."""
     import bot as _bot_module
@@ -591,7 +611,7 @@ def handle_dc_message(bot, accid, event):
                 pass
 
         if not is_bot_sender:
-            tg_post_m = _bot_module.TG_POST_URL_RE.search(raw_text)
+            tg_post_m = _find_direct_post_link(raw_text)
             if tg_post_m:
                 post_username = tg_post_m.group(1)
                 post_id_str = tg_post_m.group(2)
