@@ -1,3 +1,7 @@
+## [2.25.7] - 2026-09-23
+- **Fix: Custom Emoji in Rich Posts Shown as `TextCustomEmoji(...)`**:
+  - In Telegram rich/article posts (e.g. `@surffun/7725`), a premium custom emoji arrived in both the Delta Chat text and the WebXDC as `TextCustomEmoji(document_id=..., alt='🤖')`. The RichText converters had no case for it and fell back to the object's repr. Custom emoji are now replaced by their regular emoji (`alt`). Inline `TextImage` nodes are dropped, `TextMath` is shown as code, and any other unknown node without text now renders as nothing instead of its repr.
+
 ## [2.25.6] - 2026-09-23
 - **Fix: Editing a Telegram Command Re-Ran It and Crashed**:
   - `CommandHandler` also matches edited messages by default, so editing e.g. `/channelremove 5` ran the command a second time, and replying then raised `AttributeError: 'NoneType' object has no attribute 'reply_text'` because `update.message` is `None` for an edit. Telegram commands now react to new messages only, and command replies use `update.effective_message`. Ported from PR #2.
