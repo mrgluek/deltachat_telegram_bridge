@@ -34,7 +34,20 @@ import logging
 logger = logging.getLogger("tg_dc_bridge")
 
 
+# One lock per TG chat, used only on the main event loop. DC messages are
+# scheduled onto the loop in arrival order and asyncio.Lock wakes waiters
+# first-in-first-out, so holding it for the whole send keeps a text message
+# from overtaking an image that is still downloading or uploading.
+_tg_send_locks = {}
+
+
 async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
+    lock = _tg_send_locks.setdefault(tg_chat_id, asyncio.Lock())
+    async with lock:
+        await _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype)
+
+
+async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
     import bot as _bot_module
     try:
         tg_msg = None

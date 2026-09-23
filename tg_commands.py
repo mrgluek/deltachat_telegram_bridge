@@ -60,7 +60,7 @@ async def tg_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = html.escape(user.first_name)
     greeting = get_tg_help_text(name, user.id)
-    await retry_async(update.message.reply_text, greeting, parse_mode='HTML', max_retries=3, delay=2.0)
+    await retry_async(update.effective_message.reply_text, greeting, parse_mode='HTML', max_retries=3, delay=2.0)
 
 
 async def tg_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,7 +68,7 @@ async def tg_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = html.escape(user.first_name)
     help_msg = get_tg_help_text(name, user.id)
-    await retry_async(update.message.reply_text, help_msg, parse_mode='HTML', max_retries=3, delay=2.0)
+    await retry_async(update.effective_message.reply_text, help_msg, parse_mode='HTML', max_retries=3, delay=2.0)
 
 
 async def tg_donate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -79,7 +79,7 @@ async def tg_donate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔗 <a href='https://t.me/tribute/app?startapp=dIWb'>Support via Tribute</a>\n\n"
         "Thank you! 🙏"
     )
-    await update.message.reply_html(support_msg, disable_web_page_preview=True)
+    await update.effective_message.reply_html(support_msg, disable_web_page_preview=True)
 
 
 async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,21 +88,21 @@ async def tg_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type == "private":
-        await update.message.reply_text("❌ You must send that command in a Telegram group, not here.")
+        await update.effective_message.reply_text("❌ You must send that command in a Telegram group, not here.")
         return
 
     # Admin check for Telegram
     try:
         member = await chat.get_member(user.id)
         if member.status not in ("administrator", "creator"):
-            await update.message.reply_text("❌ Only group admins can use /id.")
+            await update.effective_message.reply_text("❌ Only group admins can use /id.")
             return
     except Exception as e:
         logger.warning(f"Could not verify group admin permissions for /id: {e}")
-        await update.message.reply_text("❌ Could not verify your group admin permissions.")
+        await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
         return
 
-    await update.message.reply_text(f"Group ID: <code>{chat.id}</code>", parse_mode='HTML')
+    await update.effective_message.reply_text(f"Group ID: <code>{chat.id}</code>", parse_mode='HTML')
 
 
 async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,13 +120,13 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif database.is_admin(user.id):
                 bridges = database.get_bridges_by_creator(user.id)
             else:
-                await update.message.reply_text("❌ Only the bot admin can view stats.")
+                await update.effective_message.reply_text("❌ Only the bot admin can view stats.")
                 return
         else:
             bridges = database.get_all_bridges()
 
         if not bridges:
-            await update.message.reply_text("📊 No bridges configured.")
+            await update.effective_message.reply_text("📊 No bridges configured.")
             return
 
         lines = [f"📊 <b>Bridge Statistics</b> ({len(bridges)} bridge{'s' if len(bridges) != 1 else ''})\n"]
@@ -153,7 +153,7 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"• DC <code>{dc_cid}</code> ↔ TG <code>{tg_cid}</code> ({html.escape(title)}) — {sub_count} 👤 {m_count} 💬 {r_count} 🙂")
         
         
-        await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+        await update.effective_message.reply_text("\n".join(lines), parse_mode='HTML')
     else:
         # In group chat: owner, sub-admin (if they created this bridge), or TG group admin
         admin_tg_id = database.get_config("admin_tg_id")
@@ -166,14 +166,14 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     member = await chat.get_member(user.id)
                     if member.status not in ("administrator", "creator"):
-                        await update.message.reply_text("❌ Only group admins can view stats.")
+                        await update.effective_message.reply_text("❌ Only group admins can view stats.")
                         return
                 except Exception:
                     pass
 
         dc_chats = database.get_dc_chats(chat.id)
         if not dc_chats:
-            await update.message.reply_text("📊 This group is not bridged.")
+            await update.effective_message.reply_text("📊 This group is not bridged.")
             return
 
         lines = ["📊 <b>Bridge Statistics</b>\n"]
@@ -185,7 +185,7 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 title = "this group"
             lines.append(f"• DC <code>{dc_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
-        await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+        await update.effective_message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
 async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,21 +196,21 @@ async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Only allow in private chat, and only for owner or admin
     if chat.type != "private":
-        await update.message.reply_text("❌ For security reasons, the /status command can only be used in a private chat.")
+        await update.effective_message.reply_text("❌ For security reasons, the /status command can only be used in a private chat.")
         return
 
     admin_tg_id = database.get_config("admin_tg_id")
     if admin_tg_id:
         if not database.is_owner_or_admin(user.id):
-            await update.message.reply_text("❌ Only the bot admin can view status.")
+            await update.effective_message.reply_text("❌ Only the bot admin can view status.")
             return
 
     try:
         report = await _bot_module.generate_status_report(is_html=True)
-        await retry_async(update.message.reply_text, report, parse_mode='HTML', disable_web_page_preview=True, max_retries=3, delay=2.0)
+        await retry_async(update.effective_message.reply_text, report, parse_mode='HTML', disable_web_page_preview=True, max_retries=3, delay=2.0)
     except Exception as e:
         logger.error(f"Error generating status report for TG: {e}")
-        await retry_async(update.message.reply_text, f"❌ Error generating status report: {e}", max_retries=3, delay=2.0)
+        await retry_async(update.effective_message.reply_text, f"❌ Error generating status report: {e}", max_retries=3, delay=2.0)
 
 
 async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,40 +220,40 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type == "private":
-        await update.message.reply_text("❌ You must send /bridge in a Telegram group, not here.")
+        await update.effective_message.reply_text("❌ You must send /bridge in a Telegram group, not here.")
         return
 
     # Permission check: owner, sub-admin, or (in public mode) TG group admin
     admin_tg_id = database.get_config("admin_tg_id")
     if admin_tg_id:
         if not database.is_owner_or_admin(user.id):
-            await update.message.reply_text("❌ Only the bot admin can use /bridge.")
+            await update.effective_message.reply_text("❌ Only the bot admin can use /bridge.")
             return
     else:
         try:
             member = await chat.get_member(user.id)
             if member.status not in ("administrator", "creator"):
-                await update.message.reply_text("❌ Only group admins can use /bridge.")
+                await update.effective_message.reply_text("❌ Only group admins can use /bridge.")
                 return
         except Exception as e:
             logger.warning(f"Could not verify group admin permissions for /bridge: {e}")
-            await update.message.reply_text("❌ Could not verify your group admin permissions.")
+            await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
             return
 
     # Check if already bridged
     existing = database.get_dc_chats(chat.id)
     if existing:
-        await update.message.reply_text("❌ This group is already bridged.")
+        await update.effective_message.reply_text("❌ This group is already bridged.")
         return
 
     if not _bot_module.dc_bot_instance or not _bot_module.dc_accid:
-        await update.message.reply_text("❌ Delta Chat bot is not ready yet.")
+        await update.effective_message.reply_text("❌ Delta Chat bot is not ready yet.")
         return
 
     tg_chat_id = chat.id
     tg_title = chat.title or f"TG Group {tg_chat_id}"
 
-    await update.message.reply_text(f"⏳ Setting up bridge for <b>{html.escape(tg_title)}</b>...", parse_mode='HTML')
+    await update.effective_message.reply_text(f"⏳ Setting up bridge for <b>{html.escape(tg_title)}</b>...", parse_mode='HTML')
 
     try:
         # Create DC group with same name
@@ -286,7 +286,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif invite_link.startswith("OPEN:"):
             invite_link = "https://i.delta.chat/#" + invite_link[5:]
 
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ Bridged! DC group <b>{html.escape(tg_title)}</b> created.\n\n"
             f"🔗 Join in Delta Chat:\n{html.escape(invite_link)}",
             parse_mode='HTML',
@@ -295,7 +295,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"TG bridge: user {user.id} bridged TG {tg_chat_id} -> DC {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to create TG bridge: {e}")
-        await update.message.reply_text("❌ Failed to create bridge. Please check logs for details.", parse_mode='HTML')
+        await update.effective_message.reply_text("❌ Failed to create bridge. Please check logs for details.", parse_mode='HTML')
 
 
 async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,7 +304,7 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
 
     if chat.type == "private":
-        await update.message.reply_text("❌ You must send /unbridge in a Telegram group, not here.")
+        await update.effective_message.reply_text("❌ You must send /unbridge in a Telegram group, not here.")
         return
 
     # Permission check
@@ -315,20 +315,20 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif database.is_admin(user.id):
             creator = database.get_bridge_creator_by_tg(chat.id)
             if creator != user.id:
-                await update.message.reply_text("❌ You can only unbridge groups you created.")
+                await update.effective_message.reply_text("❌ You can only unbridge groups you created.")
                 return
         else:
-            await update.message.reply_text("❌ Only the bot admin can use /unbridge.")
+            await update.effective_message.reply_text("❌ Only the bot admin can use /unbridge.")
             return
     else:
         try:
             member = await chat.get_member(user.id)
             if member.status not in ("administrator", "creator"):
-                await update.message.reply_text("❌ Only group admins can use /unbridge.")
+                await update.effective_message.reply_text("❌ Only group admins can use /unbridge.")
                 return
         except Exception as e:
             logger.warning(f"Could not verify group admin permissions for /unbridge: {e}")
-            await update.message.reply_text("❌ Could not verify your group admin permissions.")
+            await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
             return
 
     # Get dc_chat_ids before deletion to clear caches
@@ -341,9 +341,9 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Userbot leave
         asyncio.create_task(_userbot_leave_chat(chat.id))
         
-        await update.message.reply_text("✔️ Bridge removed.")
+        await update.effective_message.reply_text("✔️ Bridge removed.")
     else:
-        await update.message.reply_text("❌ This group is not bridged.")
+        await update.effective_message.reply_text("❌ This group is not bridged.")
 
 
 async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -352,15 +352,15 @@ async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
 
     if chat.type != "private":
-        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        await update.effective_message.reply_text("❌ This command can only be used in a private chat with the bot.")
         return
 
     if not database.is_owner(user.id):
-        await update.message.reply_text("❌ Only the bot owner can manage admins.")
+        await update.effective_message.reply_text("❌ Only the bot owner can manage admins.")
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/adminadd user_id</code>\n\n"
             "The user should send /start to the bot first to get their user ID.",
             parse_mode='HTML'
@@ -370,18 +370,18 @@ async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         new_admin_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        await update.effective_message.reply_text("❌ Please provide a valid numeric user ID.")
         return
 
     # Don't allow adding self
     if str(new_admin_id) == str(database.get_config("admin_tg_id")):
-        await update.message.reply_text("❌ You are already the owner.")
+        await update.effective_message.reply_text("❌ You are already the owner.")
         return
 
     if database.add_admin(new_admin_id):
-        await update.message.reply_text(f"✅ User <code>{new_admin_id}</code> added as sub-admin.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"✅ User <code>{new_admin_id}</code> added as sub-admin.", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"❌ User <code>{new_admin_id}</code> is already a sub-admin.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"❌ User <code>{new_admin_id}</code> is already a sub-admin.", parse_mode='HTML')
 
 
 async def tg_adminremove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -390,27 +390,27 @@ async def tg_adminremove_command(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
 
     if chat.type != "private":
-        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        await update.effective_message.reply_text("❌ This command can only be used in a private chat with the bot.")
         return
 
     if not database.is_owner(user.id):
-        await update.message.reply_text("❌ Only the bot owner can manage admins.")
+        await update.effective_message.reply_text("❌ Only the bot owner can manage admins.")
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text("Usage: <code>/adminremove user_id</code>", parse_mode='HTML')
+        await update.effective_message.reply_text("Usage: <code>/adminremove user_id</code>", parse_mode='HTML')
         return
 
     try:
         admin_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        await update.effective_message.reply_text("❌ Please provide a valid numeric user ID.")
         return
 
     if database.remove_admin(admin_id):
-        await update.message.reply_text(f"✅ User <code>{admin_id}</code> removed from sub-admins.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"✅ User <code>{admin_id}</code> removed from sub-admins.", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"❌ User <code>{admin_id}</code> is not a sub-admin.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"❌ User <code>{admin_id}</code> is not a sub-admin.", parse_mode='HTML')
 
 
 async def tg_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -419,22 +419,22 @@ async def tg_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type != "private":
-        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        await update.effective_message.reply_text("❌ This command can only be used in a private chat with the bot.")
         return
 
     if not database.is_owner(user.id):
-        await update.message.reply_text("❌ Only the bot owner can view admins.")
+        await update.effective_message.reply_text("❌ Only the bot owner can view admins.")
         return
 
     admins = database.get_all_admins()
     if not admins:
-        await update.message.reply_text("👥 No sub-admins configured.\n\nUse <code>/adminadd user_id</code> to add one.", parse_mode='HTML')
+        await update.effective_message.reply_text("👥 No sub-admins configured.\n\nUse <code>/adminadd user_id</code> to add one.", parse_mode='HTML')
         return
 
     lines = [f"👥 <b>Sub-admins</b> ({len(admins)})\n"]
     for admin_id in admins:
         lines.append(f"• <code>{admin_id}</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    await update.effective_message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
 async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -452,15 +452,15 @@ async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 qrdata = "https://i.delta.chat/#" + qrdata[10:]
             elif qrdata.startswith("OPEN:"):
                 qrdata = "https://i.delta.chat/#" + qrdata[5:]
-            await update.message.reply_text(f"🔗 <b>Bot Setup Link</b>\n{html.escape(qrdata)}", parse_mode='HTML', disable_web_page_preview=True)
+            await update.effective_message.reply_text(f"🔗 <b>Bot Setup Link</b>\n{html.escape(qrdata)}", parse_mode='HTML', disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"Failed to generate bot setup link: {e}")
-            await update.message.reply_text("❌ Error generating bot setup link.")
+            await update.effective_message.reply_text("❌ Error generating bot setup link.")
         return
 
     dc_chats = database.get_dc_chats(chat.id)
     if not dc_chats:
-        await update.message.reply_text("❌ This group is not bridged to any Delta Chat group.")
+        await update.effective_message.reply_text("❌ This group is not bridged to any Delta Chat group.")
         return
 
     lines = []
@@ -481,7 +481,7 @@ async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to generate invite link for DC chat {dc_cid}: {e}")
             lines.append(f"❌ Error generating link for DC Group {dc_cid}.\n")
 
-    await update.message.reply_text("\n".join(lines).strip(), parse_mode='HTML', disable_web_page_preview=True)
+    await update.effective_message.reply_text("\n".join(lines).strip(), parse_mode='HTML', disable_web_page_preview=True)
 
 
 async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -493,7 +493,7 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat = update.effective_chat
 
     if not qrcode:
-        await update.message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
+        await update.effective_message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
         return
 
     if chat.type == "private":
@@ -510,16 +510,16 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 bio.name = 'bot_invite_qr.png'
                 img.save(bio, 'PNG')
                 bio.seek(0)
-                await update.message.reply_photo(
+                await update.effective_message.reply_photo(
                     photo=bio, 
                     caption="Scan to add bot in Delta Chat"
                 )
             except Exception as e:
                 logger.error(f"Image generation failed (Pillow might be missing): {e}")
-                await update.message.reply_text("❌ Cannot generate image. Ensure 'Pillow' is installed (`pip install Pillow`).")
+                await update.effective_message.reply_text("❌ Cannot generate image. Ensure 'Pillow' is installed (`pip install Pillow`).")
         except Exception as e:
             logger.error(f"Failed to generate bot setup QR: {e}")
-            await update.message.reply_text("❌ Error generating QR code.")
+            await update.effective_message.reply_text("❌ Error generating QR code.")
         return
 
     dc_chats = database.get_dc_chats(chat.id)
@@ -543,28 +543,28 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 bio.name = 'invite_qr.png'
                 img.save(bio, 'PNG')
                 bio.seek(0)
-                await update.message.reply_photo(
+                await update.effective_message.reply_photo(
                     photo=bio,
                     caption=f"Scan to join bridged DC Group {chat_name}"
                 )
             except Exception as e:
                 logger.error(f"Image generation failed (Pillow might be missing): {e}")
-                await update.message.reply_text("❌ Cannot generate image. Ensure 'Pillow' is installed (`pip install Pillow`).")
+                await update.effective_message.reply_text("❌ Cannot generate image. Ensure 'Pillow' is installed (`pip install Pillow`).")
                 
         except Exception as e:
             logger.error(f"Failed to generate invite QR for DC chat {dc_cid}: {e}")
-            await update.message.reply_text(f"❌ Error generating QR code for DC Group {dc_cid}.", parse_mode='HTML')
+            await update.effective_message.reply_text(f"❌ Error generating QR code for DC Group {dc_cid}.", parse_mode='HTML')
 
 
 async def tg_botsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a command or message to a Telegram bot via Userbot (Telegram)."""
     user_id = update.effective_user.id
     if not database.is_owner(user_id):
-        await update.message.reply_text("❌ Only the bot owner can use /botsend.")
+        await update.effective_message.reply_text("❌ Only the bot owner can use /botsend.")
         return
 
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/botsend @bot_name &lt;message&gt;</code>\n"
             "or: <code>/botsend &lt;channel_id&gt; &lt;message&gt;</code>\n\n"
             "Example: <code>/botsend @weather_bot /today</code>",
@@ -574,7 +574,7 @@ async def tg_botsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     target = context.args[0]
     cmd_text = " ".join(context.args[1:])
-    status_msg = await update.message.reply_text(f"⏳ Sending command to {html.escape(target)}...")
+    status_msg = await update.effective_message.reply_text(f"⏳ Sending command to {html.escape(target)}...")
     res = await _send_bot_message(target, cmd_text)
     await status_msg.edit_text(res, parse_mode='HTML')
 
@@ -585,7 +585,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/channeladd @name</code>\n"
             "or: <code>/channeladd https://t.me/name</code>\n"
             "or: <code>/channeladd -1001234567890</code>\n\n"
@@ -596,7 +596,7 @@ async def tg_channeladd_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     raw_arg = context.args[0].strip()
-    status_msg = await update.message.reply_text("⏳ Processing bridge request...")
+    status_msg = await update.effective_message.reply_text("⏳ Processing bridge request...")
     
     result = await _add_channel_bridge(raw_arg, creator_tg_id=update.effective_user.id)
     invalidate_channels_cache()
@@ -610,7 +610,7 @@ async def tg_catchup_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     target = context.args[0].strip() if context.args else None
     target_desc = f" for <code>{html.escape(target)}</code>" if target else ""
-    status_msg = await update.message.reply_text(f"⏳ Checking channels and catching up missed posts{target_desc}...", parse_mode='HTML')
+    status_msg = await update.effective_message.reply_text(f"⏳ Checking channels and catching up missed posts{target_desc}...", parse_mode='HTML')
     try:
         res_text = await run_channel_catchup(target, is_html=True)
         await status_msg.edit_text(res_text, parse_mode='HTML', disable_web_page_preview=True)
@@ -623,21 +623,21 @@ async def tg_userbotsync_command(update: Update, context: ContextTypes.DEFAULT_T
     """Manually trigger a Userbot subscription sync."""
     import bot as _bot_module
     if not database.is_owner(update.effective_user.id):
-        await update.message.reply_text("❌ Only the bot owner can use /userbotsync.")
+        await update.effective_message.reply_text("❌ Only the bot owner can use /userbotsync.")
         return
     
     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
-        await update.message.reply_text("❌ Userbot is not connected.")
+        await update.effective_message.reply_text("❌ Userbot is not connected.")
         return
     
-    await update.message.reply_text("⏳ Starting Userbot synchronization...")
+    await update.effective_message.reply_text("⏳ Starting Userbot synchronization...")
     async def _sync_and_notify():
         try:
             await sync_userbot_channels(force=True)
-            await update.message.reply_text("✅ Userbot channel synchronization completed.")
+            await update.effective_message.reply_text("✅ Userbot channel synchronization completed.")
         except Exception as e:
             logger.error(f"Userbot synchronization failed: {e}")
-            await update.message.reply_text("❌ Userbot synchronization failed. Please check logs.")
+            await update.effective_message.reply_text("❌ Userbot synchronization failed. Please check logs.")
     asyncio.create_task(_sync_and_notify())
 
 
@@ -645,15 +645,15 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
     """Join a channel/group via Userbot using an invite link. Owner only."""
     import bot as _bot_module
     if not database.is_owner(update.effective_user.id):
-        await update.message.reply_text("❌ Only the bot owner can use /userbotjoin.")
+        await update.effective_message.reply_text("❌ Only the bot owner can use /userbotjoin.")
         return
 
     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
-        await update.message.reply_text("❌ Userbot is not connected.")
+        await update.effective_message.reply_text("❌ Userbot is not connected.")
         return
 
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/userbotjoin &lt;invite_link_or_username&gt;</code>\n\n"
             "Examples:\n"
             "• <code>/userbotjoin https://t.me/+AbCdEfGhIjK</code>\n"
@@ -664,7 +664,7 @@ async def tg_userbotjoin_command(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     link = context.args[0].strip()
-    status_msg = await update.message.reply_text(f"⏳ Attempting to join via Userbot: <code>{html.escape(link)}</code>...", parse_mode='HTML')
+    status_msg = await update.effective_message.reply_text(f"⏳ Attempting to join via Userbot: <code>{html.escape(link)}</code>...", parse_mode='HTML')
 
     try:
         joined_entity = None
@@ -810,10 +810,10 @@ async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
-        await update.message.reply_text("❌ Userbot is not connected.")
+        await update.effective_message.reply_text("❌ Userbot is not connected.")
         return
     
-    status_msg = await update.message.reply_text("⏳ Fetching your groups from Telegram...")
+    status_msg = await update.effective_message.reply_text("⏳ Fetching your groups from Telegram...")
     
     try:
         # Get already bridged IDs from BOTH channels and regular bridges
@@ -850,10 +850,10 @@ async def tg_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_chunk = ""
             for line in lines:
                 if len(current_chunk) + len(line) > 4000:
-                    await update.message.reply_text(current_chunk, parse_mode='HTML')
+                    await update.effective_message.reply_text(current_chunk, parse_mode='HTML')
                     current_chunk = ""
                 current_chunk += line
-            await update.message.reply_text(current_chunk, parse_mode='HTML')
+            await update.effective_message.reply_text(current_chunk, parse_mode='HTML')
             await status_msg.delete()
         else:
             await status_msg.edit_text(full_text, parse_mode='HTML')
@@ -874,7 +874,7 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Serve from 10-minute cache if available and fresh
     cached_text = get_cached_channels_text(user.id)
     if cached_text is not None:
-        await retry_async(update.message.reply_text, cached_text, parse_mode='HTML', max_retries=3, delay=2.0)
+        await retry_async(update.effective_message.reply_text, cached_text, parse_mode='HTML', max_retries=3, delay=2.0)
         return
 
     if database.is_owner(user.id):
@@ -883,7 +883,7 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         channels = database.get_channels_by_creator(user.id)
 
     if not channels:
-        await retry_async(update.message.reply_text, "📺 No channels are bridged.", max_retries=3, delay=2.0)
+        await retry_async(update.effective_message.reply_text, "📺 No channels are bridged.", max_retries=3, delay=2.0)
         return
 
     loop = asyncio.get_running_loop()
@@ -927,7 +927,7 @@ async def tg_channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text_to_send = await loop.run_in_executor(None, _build_channels_text)
     set_cached_channels_text(user.id, text_to_send)
-    await retry_async(update.message.reply_text, text_to_send, parse_mode='HTML', max_retries=3, delay=2.0)
+    await retry_async(update.effective_message.reply_text, text_to_send, parse_mode='HTML', max_retries=3, delay=2.0)
 
 
 async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -937,7 +937,7 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     channel_id = None
     # Support both "/channel 1" and "/channel1"
-    cmd = update.message.text.split()[0].lower()
+    cmd = update.effective_message.text.split()[0].lower()
     if len(cmd) > 8 and cmd.startswith("/channel"):
         try:
             channel_id = int(cmd[8:])
@@ -946,17 +946,17 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
     if channel_id is None:
         if not context.args or len(context.args) < 1:
-            await update.message.reply_text("Usage: <code>/channel N</code> (use /channels to see numbers)", parse_mode='HTML')
+            await update.effective_message.reply_text("Usage: <code>/channel N</code> (use /channels to see numbers)", parse_mode='HTML')
             return
         try:
             channel_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("❌ Please provide a valid channel number.")
+            await update.effective_message.reply_text("❌ Please provide a valid channel number.")
             return
 
     ch = database.get_channel_by_id(channel_id)
     if not ch:
-        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
 
     # Sub-admin can only view own channels
@@ -964,7 +964,7 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not database.is_owner(user.id):
         creator = database.get_channel_creator(channel_id)
         if creator != user.id:
-            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
             return
 
     invite_link = ch['invite_link'] or "No invite link available"
@@ -973,7 +973,7 @@ async def tg_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         name_str = f"ID <code>{ch['tg_channel_id']}</code>"
         
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"📺 Channel #{ch['id']} — <b>{name_str}</b>\n\n"
         f"🔗 Subscribe in Delta Chat:\n{html.escape(invite_link)}",
         parse_mode='HTML',
@@ -988,13 +988,13 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not qrcode:
-        await update.message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
+        await update.effective_message.reply_text("❌ QR code generation is not supported. Please install 'qrcode[pil]' python package.")
         return
 
 
     channel_id = None
     # Support both "/channelqr 1" and "/channel1qr" and "/channelqr1"
-    cmd = update.message.text.split()[0].lower()
+    cmd = update.effective_message.text.split()[0].lower()
     if "qr" in cmd:
         # Extract digits
         import re
@@ -1007,17 +1007,17 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
             
     if channel_id is None:
         if not context.args or len(context.args) < 1:
-            await update.message.reply_text("Usage: <code>/channelqr N</code>", parse_mode='HTML')
+            await update.effective_message.reply_text("Usage: <code>/channelqr N</code>", parse_mode='HTML')
             return
         try:
             channel_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("❌ Please provide a valid channel number.")
+            await update.effective_message.reply_text("❌ Please provide a valid channel number.")
             return
 
     ch = database.get_channel_by_id(channel_id)
     if not ch:
-        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
 
     # Sub-admin can only view own channels
@@ -1025,11 +1025,11 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not database.is_owner(user.id):
         creator = database.get_channel_creator(channel_id)
         if creator != user.id:
-            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
             return
 
     if not ch['invite_link']:
-        await update.message.reply_text("❌ No invite link available for this channel.")
+        await update.effective_message.reply_text("❌ No invite link available for this channel.")
         return
 
     try:
@@ -1054,13 +1054,13 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             caption = f"Scan to subscribe to channel ID {ch['tg_channel_id']} in Delta Chat"
             
-        await update.message.reply_photo(
+        await update.effective_message.reply_photo(
             photo=bio,
             caption=caption
         )
     except Exception as e:
         logger.error(f"Failed to generate channel QR: {e}")
-        await update.message.reply_text("❌ Error generating QR code.")
+        await update.effective_message.reply_text("❌ Error generating QR code.")
 
 
 async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1070,18 +1070,18 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text("Usage: <code>/channelremove N</code> (use /channels to see numbers)", parse_mode='HTML')
+        await update.effective_message.reply_text("Usage: <code>/channelremove N</code> (use /channels to see numbers)", parse_mode='HTML')
         return
 
     try:
         channel_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("❌ Please provide a valid channel number.")
+        await update.effective_message.reply_text("❌ Please provide a valid channel number.")
         return
 
     ch = database.get_channel_by_id(channel_id)
     if not ch:
-        await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+        await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
         return
 
     # Sub-admin can only remove own channels
@@ -1089,7 +1089,7 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
     if not database.is_owner(user.id):
         creator = database.get_channel_creator(channel_id)
         if creator != user.id:
-            await update.message.reply_text(f"❌ Channel #{channel_id} not found.")
+            await update.effective_message.reply_text(f"❌ Channel #{channel_id} not found.")
             return
 
     channel_name = ch['tg_channel_username']
@@ -1099,9 +1099,9 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
         display_name = f"ID <code>{ch['tg_channel_id']}</code>"
 
     if _bot_module._notify_and_remove_channel_bridge(ch):
-        await update.message.reply_text(f"✅ Channel #{channel_id} (<b>{display_name}</b>) removed.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"✅ Channel #{channel_id} (<b>{display_name}</b>) removed.", parse_mode='HTML')
     else:
-        await update.message.reply_text("❌ Failed to remove channel.")
+        await update.effective_message.reply_text("❌ Failed to remove channel.")
 
 
 async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1111,7 +1111,7 @@ async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     filters = database.get_all_filters()
     if not filters:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "📋 <b>Message Filters</b>\nNo message filters configured.\n\nTo add a filter:\n<code>/filteradd &lt;word or phrase&gt;</code>",
             parse_mode='HTML'
         )
@@ -1122,7 +1122,7 @@ async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lines.append(f"{f['id']}. <code>{html.escape(f['pattern'])}</code>")
     lines.append("\nTo add: <code>/filteradd &lt;word or phrase&gt;</code>")
     lines.append("To remove: <code>/filterdel &lt;number or phrase&gt;</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    await update.effective_message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
 async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1131,7 +1131,7 @@ async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/filteradd &lt;word or phrase&gt;</code>\nExample: <code>/filteradd #реклама</code>",
             parse_mode='HTML'
         )
@@ -1142,9 +1142,9 @@ async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYP
     clean = phrase.strip().strip('"\'')
     if row_id is not None:
         _reload_filter_cache()
-        await update.message.reply_text(f"✅ Filter added (#{row_id}): <code>{html.escape(clean)}</code>", parse_mode='HTML')
+        await update.effective_message.reply_text(f"✅ Filter added (#{row_id}): <code>{html.escape(clean)}</code>", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"⚠️ Filter <code>{html.escape(clean)}</code> already exists or is invalid.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"⚠️ Filter <code>{html.escape(clean)}</code> already exists or is invalid.", parse_mode='HTML')
 
 
 async def tg_filterdel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1153,7 +1153,7 @@ async def tg_filterdel_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: <code>/filterdel &lt;number or phrase&gt;</code>\nExample: <code>/filterdel 1</code> or <code>/filterdel #реклама</code>",
             parse_mode='HTML'
         )
@@ -1163,9 +1163,9 @@ async def tg_filterdel_command(update: Update, context: ContextTypes.DEFAULT_TYP
     success, deleted_pattern = database.remove_filter(target)
     if success:
         _reload_filter_cache()
-        await update.message.reply_text(f"✅ Filter <code>{html.escape(deleted_pattern)}</code> removed.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"✅ Filter <code>{html.escape(deleted_pattern)}</code> removed.", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"❌ Filter <code>{html.escape(target)}</code> not found.", parse_mode='HTML')
+        await update.effective_message.reply_text(f"❌ Filter <code>{html.escape(target)}</code> not found.", parse_mode='HTML')
 
 
 async def tg_cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1175,14 +1175,14 @@ async def tg_cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
 
     if chat.type != "private":
-        await update.message.reply_text("❌ This command can only be used in a private chat with the bot.")
+        await update.effective_message.reply_text("❌ This command can only be used in a private chat with the bot.")
         return
 
     if not database.is_owner(user.id):
-        await update.message.reply_text("❌ Only the bot owner can use /cleanup.")
+        await update.effective_message.reply_text("❌ Only the bot owner can use /cleanup.")
         return
 
-    status_msg = await update.message.reply_text("⏳ Running cleanup of stale and duplicate bridges...")
+    status_msg = await update.effective_message.reply_text("⏳ Running cleanup of stale and duplicate bridges...")
     try:
         stats = await _bot_module.cleanup_stale_bridges()
         total_removed = (

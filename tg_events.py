@@ -79,25 +79,25 @@ async def _check_invite_permissions(update: Update) -> bool:
     admin_tg_id = database.get_config("admin_tg_id")
     if chat.type == "private":
         if not admin_tg_id:
-            await update.message.reply_text("❌ Bot administrator is not configured yet. Invite generation in private chat is restricted.")
+            await update.effective_message.reply_text("❌ Bot administrator is not configured yet. Invite generation in private chat is restricted.")
             return False
         if not database.is_owner_or_admin(user.id):
-            await update.message.reply_text("❌ Only the bot admin can generate invite links.")
+            await update.effective_message.reply_text("❌ Only the bot admin can generate invite links.")
             return False
     else:
         if admin_tg_id:
             if not database.is_owner_or_admin(user.id):
-                await update.message.reply_text("❌ Only the bot admin can generate invite links.")
+                await update.effective_message.reply_text("❌ Only the bot admin can generate invite links.")
                 return False
         else:
             try:
                 member = await chat.get_member(user.id)
                 if member.status not in ("administrator", "creator"):
-                    await update.message.reply_text("❌ Only group admins can generate invite links.")
+                    await update.effective_message.reply_text("❌ Only group admins can generate invite links.")
                     return False
             except Exception as e:
                 logger.warning(f"Could not verify group admin permissions for invite: {e}")
-                await update.message.reply_text("❌ Could not verify your group admin permissions.")
+                await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
                 return False
 
     return True
@@ -108,14 +108,14 @@ async def _check_channel_admin(update: Update) -> bool:
     chat = update.effective_chat
     user = update.effective_user
     if chat.type != "private":
-        await update.message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
+        await update.effective_message.reply_text("❌ Channel commands can only be used in a private chat with the bot.")
         return False
     admin_tg_id = database.get_config("admin_tg_id")
     if not admin_tg_id:
-        await update.message.reply_text("❌ Bot administrator is not configured yet. Channel management is restricted until configured.")
+        await update.effective_message.reply_text("❌ Bot administrator is not configured yet. Channel management is restricted until configured.")
         return False
     if not database.is_owner_or_admin(user.id):
-        await update.message.reply_text("❌ Only the bot admin can manage channels.")
+        await update.effective_message.reply_text("❌ Only the bot admin can manage channels.")
         return False
     return True
 

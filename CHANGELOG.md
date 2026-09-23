@@ -1,3 +1,9 @@
+## [2.25.6] - 2026-09-23
+- **Fix: Editing a Telegram Command Re-Ran It and Crashed**:
+  - `CommandHandler` also matches edited messages by default, so editing e.g. `/channelremove 5` ran the command a second time, and replying then raised `AttributeError: 'NoneType' object has no attribute 'reply_text'` because `update.message` is `None` for an edit. Telegram commands now react to new messages only, and command replies use `update.effective_message`. Ported from PR #2.
+- **Fix: DC→TG Messages Arriving Out of Order**:
+  - Each Delta Chat message was sent to Telegram as its own independent task, so a text sent right after a photo could reach Telegram first while the photo was still downloading or uploading. Sends to the same Telegram chat now go one at a time, in the order they arrived from Delta Chat; different chats still send in parallel. Idea from PR #2 (TG→DC was already ordered).
+
 ## [2.25.5] - 2026-09-23
 - **Fix: Forwarded Bridge Posts Re-Posted by the Bot**:
   - Forwarding a relayed post from a bridged channel into a Delta Chat chat made the bot pick up its own `🔗 t.me/channel/123` footer as a post link and send the post again. Post-link previews now ignore any message carrying that footer, and only react to full links (`https://t.me/channel/123`, as copied from Telegram); bare `t.me/channel/123` text no longer triggers a preview.
