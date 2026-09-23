@@ -722,6 +722,28 @@ class TestRichPosts(unittest.TestCase):
         self.assertIn('<a href="https://example.com"', htm)
         self.assertIn('<span class="spoiler">Secret</span>', htm)
 
+    def test_rich_text_custom_emoji_uses_alt(self):
+        try:
+            from telethon.tl import types as tl_types
+        except ImportError:
+            self.skipTest("Telethon not available")
+
+        t_concat = tl_types.TextConcat([
+            tl_types.TextCustomEmoji(document_id=5379943727949169201, alt="🤖"),
+            tl_types.TextPlain(" Happy <birthday>"),
+            tl_types.TextImage(document_id=1, w=10, h=10),
+            tl_types.TextMath(source="x^2"),
+        ])
+
+        md = bot._rich_text_to_markdown(t_concat)
+        self.assertEqual(md, "🤖 Happy <birthday>`x^2`")
+        self.assertNotIn("TextCustomEmoji", md)
+        self.assertNotIn("document_id", md)
+
+        htm = bot._rich_text_to_html(t_concat)
+        self.assertEqual(htm, "🤖 Happy &lt;birthday&gt;<code>x^2</code>")
+        self.assertNotIn("TextCustomEmoji", htm)
+
     def test_extract_telethon_rich_message_blocks(self):
         try:
             from telethon.tl import types as tl_types

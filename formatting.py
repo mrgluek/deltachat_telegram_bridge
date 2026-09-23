@@ -1008,6 +1008,14 @@ def _rich_text_to_markdown(rt) -> str:
         return ""
     if name == 'TextPlain':
         return getattr(rt, 'text', '') or ""
+    if name == 'TextCustomEmoji':
+        # Custom emoji are stickers (often animated); fall back to the plain emoji alt
+        return getattr(rt, 'alt', '') or ""
+    if name == 'TextImage':
+        return ""
+    if name == 'TextMath':
+        source = getattr(rt, 'source', '') or ""
+        return f"`{source}`" if source else ""
     if name == 'TextBold':
         return f"**{_rich_text_to_markdown(getattr(rt, 'text', None))}**"
     if name == 'TextItalic':
@@ -1033,7 +1041,11 @@ def _rich_text_to_markdown(rt) -> str:
         return "".join(_rich_text_to_markdown(t) for t in texts)
     if hasattr(rt, 'text'):
         return _rich_text_to_markdown(getattr(rt, 'text', None))
-    return str(rt)
+    if isinstance(rt, str):
+        return rt
+    # Unknown text-less RichText node: never leak its TL repr into the post
+    logger.debug(f"Skipping unsupported RichText node {name}")
+    return ""
 
 
 def _rich_text_to_html(rt) -> str:
@@ -1045,6 +1057,13 @@ def _rich_text_to_html(rt) -> str:
         return ""
     if name == 'TextPlain':
         return html.escape(getattr(rt, 'text', '') or "")
+    if name == 'TextCustomEmoji':
+        return html.escape(getattr(rt, 'alt', '') or "")
+    if name == 'TextImage':
+        return ""
+    if name == 'TextMath':
+        source = getattr(rt, 'source', '') or ""
+        return f"<code>{html.escape(source)}</code>" if source else ""
     if name == 'TextBold':
         return f"<b>{_rich_text_to_html(getattr(rt, 'text', None))}</b>"
     if name == 'TextItalic':
@@ -1073,7 +1092,10 @@ def _rich_text_to_html(rt) -> str:
         return "".join(_rich_text_to_html(t) for t in texts)
     if hasattr(rt, 'text'):
         return _rich_text_to_html(getattr(rt, 'text', None))
-    return html.escape(str(rt))
+    if isinstance(rt, str):
+        return html.escape(rt)
+    logger.debug(f"Skipping unsupported RichText node {name}")
+    return ""
 
 
 def _largest_real_photo_size(photo):
