@@ -1,3 +1,6 @@
+## [2.25.9] - 2026-09-24
+- **`update.sh` Deployed the Wrong Branch**: Branch detection took the first remote branch in alphabetical order, so a leftover PR branch such as `origin/claude/...` sorted before `origin/master` and was deployed instead (and new `master` commits were reported as "Already up to date"). It now follows the checked-out branch, falling back to `main`/`master`.
+
 ## [2.25.8] - 2026-09-24
 - **Private `/help` in Groups**: A plain `/help` sent in a group chat is now answered in a private 1:1 chat with the sender instead of the group, so several bots don't flood it with help texts (the reply ends with a note on how to show it in the group). Addressed `/help@tg` is still answered in the group. Previously a plain `/help` was answered in the group, or silently ignored when other bots were present.
 

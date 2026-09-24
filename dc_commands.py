@@ -54,7 +54,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.25.8"
+VERSION = "2.25.9"
 dc_cli = BotCli("tgbridge")
 
 

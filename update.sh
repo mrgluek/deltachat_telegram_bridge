@@ -43,7 +43,16 @@ else
 fi
 
 # --- BRANCH DETECTION ---
-REMOTE_REF=$(git branch -r | grep "^  $ACTIVE_REMOTE/" | grep -v "HEAD" | head -n 1 | sed 's/^[[:space:]]*//')
+# Follow the checked-out branch (falling back to main/master), never just the first
+# remote branch alphabetically: leftover PR branches such as origin/claude/* sort
+# before origin/master and would otherwise be deployed instead of it.
+REMOTE_REF=""
+for b in "$(git symbolic-ref --short -q HEAD || true)" main master; do
+    if [ -n "$b" ] && git rev-parse --verify --quiet "refs/remotes/$ACTIVE_REMOTE/$b" >/dev/null; then
+        REMOTE_REF="$ACTIVE_REMOTE/$b"
+        break
+    fi
+done
 
 if [ -z "$REMOTE_REF" ]; then
     echo "❌ ERROR: Could not detect a valid remote branch for $ACTIVE_REMOTE."
