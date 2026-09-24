@@ -411,6 +411,8 @@ In group chats where multiple bots are present, you can address this bot specifi
 - `/help@tg` or `/help@tgbridge`
 - `/stats@tg` or `/stats@tgbridge`
 
+A plain `/help` sent in a group chat is answered in a private 1:1 chat with the sender, so several bots don't flood the group with help texts. Use `/help@tg` to show the help in the group itself.
+
 ## Userbot Mode (Bridging without Admin permissions)
 
 If you want to bridge channels where you cannot add the bot as an administrator, you can configure **Userbot Mode**. This allows the bot daemon to act as a regular Telegram client using your personal account.

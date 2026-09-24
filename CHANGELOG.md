@@ -1,3 +1,6 @@
+## [2.25.8] - 2026-09-24
+- **Private `/help` in Groups**: A plain `/help` sent in a group chat is now answered in a private 1:1 chat with the sender instead of the group, so several bots don't flood it with help texts (the reply ends with a note on how to show it in the group). Addressed `/help@tg` is still answered in the group. Previously a plain `/help` was answered in the group, or silently ignored when other bots were present.
+
 ## [2.25.7] - 2026-09-23
 - **Fix: Custom Emoji in Rich Posts Shown as `TextCustomEmoji(...)`**:
   - In Telegram rich/article posts (e.g. `@surffun/7725`), a premium custom emoji arrived in both the Delta Chat text and the WebXDC as `TextCustomEmoji(document_id=..., alt='🤖')`. The RichText converters had no case for it and fell back to the object's repr. Custom emoji are now replaced by their regular emoji (`alt`). Inline `TextImage` nodes are dropped, `TextMath` is shown as code, and any other unknown node without text now renders as nothing instead of its repr.

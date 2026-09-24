@@ -1066,7 +1066,8 @@ def setup_custom_command_parser(bot, allowed_prefixes):
         else:
             original_parse_command(accid, event)
             
-            if event.command in ("/help", "/stats"):
+            # /help is not suppressed: plain /help in a group is answered privately (see help_command)
+            if event.command == "/stats":
                 try:
                     chat = bot.rpc.get_chat(accid, event.msg.chat_id)
                     is_group = getattr(chat, "chat_type", "Single") != "Single"

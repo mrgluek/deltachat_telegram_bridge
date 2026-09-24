@@ -54,7 +54,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.25.7"
+VERSION = "2.25.8"
 dc_cli = BotCli("tgbridge")
 
 
@@ -145,18 +145,34 @@ def richmode_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to update richmode."))
 
 
+HELP_PRIVATE_NOTE = "\n\n💬 Sent privately because you asked in a group. Use /help@tg there to show it to everyone."
+
+
+def _get_help_chat_id(bot, accid, msg):
+    """Plain /help in a group is answered privately to the sender so several bots
+    don't flood the group; /help@<bot> is still answered in the group itself."""
+    import bot as _bot_module
+    cmd = msg.text.split(maxsplit=1)[0] if msg.text else ""
+    if "@" in cmd or _bot_module._is_private_chat(bot, accid, msg.chat_id):
+        return msg.chat_id
+    return bot.rpc.create_chat_by_contact_id(accid, msg.from_id)
+
+
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     """Reply with help text."""
     import bot as _bot_module
     msg = event.msg
-    
+
     # Get sender info
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
-    
+
     help_msg = get_dc_help_text(bot, accid, sender_email, msg.from_id)
-    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_msg))
+    chat_id = _get_help_chat_id(bot, accid, msg)
+    if chat_id != msg.chat_id:
+        help_msg += HELP_PRIVATE_NOTE
+    _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=help_msg))
 
 
 @dc_cli.on(events.NewMessage(command="/initadmin"))

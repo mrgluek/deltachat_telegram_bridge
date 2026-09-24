@@ -37,6 +37,7 @@ except ImportError:
 
 import database
 import bot
+import dc_commands
 
 TEST_DB_PATH = "test_bridge_transport_cmds.db"
 
@@ -261,6 +262,53 @@ class TestTransportCommands(unittest.TestCase):
         bot.transports_command(self.mock_bot, self.accid, self.mock_event)
         msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
         self.assertEqual(msg_text, "❌ Failed to list transports.")
+
+
+class TestHelpPrivateReply(unittest.TestCase):
+    """Plain /help in a group goes to the sender privately; /help@<bot> stays in the group."""
+
+    def _msg(self, text):
+        msg = MagicMock()
+        msg.text = text
+        msg.chat_id = 42
+        msg.from_id = 7
+        return msg
+
+    def _bot(self):
+        mock_bot = MagicMock()
+        mock_bot.rpc.create_chat_by_contact_id.return_value = 555
+        return mock_bot
+
+    @patch("bot._is_private_chat", return_value=False)
+    def test_plain_help_in_group_goes_private(self, _mock_chat):
+        mock_bot = self._bot()
+        self.assertEqual(dc_commands._get_help_chat_id(mock_bot, 1, self._msg("/help")), 555)
+        mock_bot.rpc.create_chat_by_contact_id.assert_called_once_with(1, 7)
+
+    @patch("bot._is_private_chat", return_value=False)
+    def test_addressed_help_in_group_stays_in_group(self, _mock_chat):
+        mock_bot = self._bot()
+        self.assertEqual(dc_commands._get_help_chat_id(mock_bot, 1, self._msg("/help@tg extra")), 42)
+        mock_bot.rpc.create_chat_by_contact_id.assert_not_called()
+
+    @patch("bot._is_private_chat", return_value=True)
+    def test_plain_help_in_private_chat_stays(self, _mock_chat):
+        mock_bot = self._bot()
+        self.assertEqual(dc_commands._get_help_chat_id(mock_bot, 1, self._msg("/help")), 42)
+        mock_bot.rpc.create_chat_by_contact_id.assert_not_called()
+
+    @patch("bot._is_private_chat", return_value=False)
+    @patch("bot._dc_send_msg_with_stats")
+    @patch("dc_commands.MsgData", side_effect=lambda text: text)
+    @patch("dc_commands.get_dc_help_text", return_value="HELP")
+    def test_help_command_in_group_sends_private_with_note(self, _mock_text, _mock_msgdata, mock_send, _mock_chat):
+        mock_bot = self._bot()
+        event = MagicMock()
+        event.msg = self._msg("/help")
+        dc_commands.help_command(mock_bot, 1, event)
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args[0][2], 555)
+        self.assertIn("/help@tg", mock_send.call_args[0][3])
 
 
 if __name__ == "__main__":
