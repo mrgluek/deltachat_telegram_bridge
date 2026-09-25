@@ -1550,6 +1550,73 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertFalse(matched)
         self.assertIsNone(pat)
 
+    def test_forum_topic_id_detection(self):
+        import relay
+        # Plain message in a non-forum group
+        msg = MagicMock()
+        msg.reply_to = None
+        msg.chat.forum = False
+        self.assertIsNone(relay._get_forum_topic_id(msg))
+
+        # Message posted in a topic (not a reply)
+        msg.reply_to = MagicMock(forum_topic=True, reply_to_top_id=None, reply_to_msg_id=77)
+        self.assertEqual(relay._get_forum_topic_id(msg), 77)
+
+        # Reply inside a topic: topic id comes from reply_to_top_id
+        msg.reply_to = MagicMock(forum_topic=True, reply_to_top_id=77, reply_to_msg_id=90)
+        self.assertEqual(relay._get_forum_topic_id(msg), 77)
+
+        # "General" topic has no topic header, only the chat's forum flag
+        msg.reply_to = MagicMock(forum_topic=False, reply_to_top_id=None, reply_to_msg_id=90)
+        msg.chat.forum = True
+        self.assertEqual(relay._get_forum_topic_id(msg), 1)
+
+    def test_relay_userbot_message_forum_topic_in_sender_name(self):
+        import relay
+        relay._forum_topic_titles.clear()
+
+        topic = MagicMock(id=77)
+        topic.title = "Soft"
+        # The Telethon client is awaited when called with a request
+        mock_ub = AsyncMock(return_value=MagicMock(topics=[topic]))
+        mock_ub.is_connected = MagicMock(return_value=True)
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.send_msg.return_value = 555
+
+        orig_ub = bot.userbot_client
+        orig_dc = bot.dc_bot_instance
+        orig_accid = bot.dc_accid
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100777
+            mock_msg.id = 43
+            mock_msg.message = "hello"
+            mock_msg.media = None
+            mock_msg.entities = []
+            mock_msg.grouped_id = None
+            mock_msg.rich_message = None
+            mock_msg.post_author = None
+            mock_msg.is_channel = True
+            mock_msg.is_group = True
+            mock_msg.sender = MagicMock(spec=["first_name", "last_name"], first_name="Gluek", last_name=None)
+            mock_msg.reply_to = MagicMock(forum_topic=True, reply_to_top_id=None, reply_to_msg_id=77)
+            mock_msg.get_input_chat = AsyncMock(return_value="peer")
+
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg))
+
+            sent = mock_dc_bot.rpc.send_msg.call_args[0][2]
+            self.assertEqual(sent.override_sender_name, "Gluek in Soft")
+            self.assertEqual(relay._forum_topic_titles[(-100777, 77)][0], "Soft")
+        finally:
+            bot.userbot_client = orig_ub
+            bot.dc_bot_instance = orig_dc
+            bot.dc_accid = orig_accid
+            relay._forum_topic_titles.clear()
+
 
 if __name__ == "__main__":
     unittest.main()
