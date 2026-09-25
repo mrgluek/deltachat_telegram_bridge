@@ -16,6 +16,7 @@ comment on run_cli() in bot.py).
 import asyncio
 import os
 import tempfile
+import time
 
 import database
 from deltachat2 import MsgData
@@ -182,6 +183,58 @@ async def _delete_tg_message(tg_chat_id: int, tg_msg_id: int, info_text: str = "
                 logger.debug(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot (no permission/not found): {e}")
             else:
                 logger.warning(f"DC→TG: Could not delete TG msg {tg_msg_id} in {tg_chat_id}{info_text} via Userbot either: {e}")
+
+
+# Forum topic titles, keyed by (tg_chat_id, topic_id) -> (title, fetched_at).
+# Kept for an hour so a renamed topic is picked up without asking Telegram
+# for every relayed message.
+_forum_topic_titles = {}
+_FORUM_TOPIC_TTL = 3600
+_FORUM_GENERAL_TOPIC_ID = 1
+
+
+def _get_forum_topic_id(msg):
+    """Return the forum topic id a Telethon message belongs to, or None when
+    the chat is not a forum. Messages in the "General" topic carry no topic
+    reply header, so they are recognised by the chat's forum flag instead."""
+    reply_to = getattr(msg, 'reply_to', None)
+    if reply_to is not None and getattr(reply_to, 'forum_topic', None) is True:
+        topic_id = getattr(reply_to, 'reply_to_top_id', None) or getattr(reply_to, 'reply_to_msg_id', None)
+        if isinstance(topic_id, int):
+            return topic_id
+    chat = getattr(msg, 'chat', None)
+    if chat is not None and getattr(chat, 'forum', None) is True:
+        return _FORUM_GENERAL_TOPIC_ID
+    return None
+
+
+async def _get_forum_topic_title(client, msg, topic_id):
+    """Resolve a forum topic's title through the userbot, caching the result.
+    Returns None if the title cannot be fetched."""
+    key = (msg.chat_id, topic_id)
+    cached = _forum_topic_titles.get(key)
+    if cached and time.monotonic() - cached[1] < _FORUM_TOPIC_TTL:
+        return cached[0]
+
+    title = None
+    try:
+        from telethon.tl.functions.messages import GetForumTopicsByIDRequest
+        peer = await msg.get_input_chat()
+        res = await asyncio.wait_for(client(GetForumTopicsByIDRequest(peer=peer, topics=[topic_id])), timeout=5.0)
+        for topic in getattr(res, 'topics', None) or []:
+            if getattr(topic, 'id', None) == topic_id:
+                title = getattr(topic, 'title', None)
+                break
+    except Exception as e:
+        logger.warning(f"Failed to fetch forum topic {topic_id} title for chat {msg.chat_id}: {e}")
+
+    if not title and topic_id == _FORUM_GENERAL_TOPIC_ID:
+        title = "General"
+    if title:
+        _forum_topic_titles[key] = (title, time.monotonic())
+    elif cached:
+        return cached[0]
+    return title
 
 
 async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=None):
@@ -458,6 +511,13 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                     elif hasattr(sender, 'title'):
                         display_author = sender.title
 
+        # Forum groups mix all topics into one DC chat, so name the topic
+        # after the sender: "Gluek in Soft".
+        topic_id = _get_forum_topic_id(msg)
+        if topic_id is not None:
+            topic_title = await _get_forum_topic_title(_bot_module.userbot_client, msg, topic_id)
+            if topic_title:
+                display_author = f"{display_author} in {topic_title}" if display_author else topic_title
 
         if display_author:
             msg_data.override_sender_name = display_author

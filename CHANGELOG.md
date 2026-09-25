@@ -1,3 +1,6 @@
+## [2.25.10] - 2026-09-25
+- **Forum Topic Names on Relayed Group Messages**: A Telegram group with topics added as a channel sent every topic into one Delta Chat chat with no hint which topic a message came from. The topic name is now appended to the sender's name, e.g. `Gluek in Soft` (`… in General` for the General topic). Topic titles are looked up through the userbot and cached for an hour.
+
 ## [2.25.9] - 2026-09-24
 - **`update.sh` Deployed the Wrong Branch**: Branch detection took the first remote branch in alphabetical order, so a leftover PR branch such as `origin/claude/...` sorted before `origin/master` and was deployed instead (and new `master` commits were reported as "Already up to date"). It now follows the checked-out branch, falling back to `main`/`master`.
 
