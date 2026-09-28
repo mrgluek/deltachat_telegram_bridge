@@ -255,7 +255,7 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
   docker compose exec bridge python bot.py init admin_dc admin@example.com
   ```
 
-- **Add Backup Relay (Transport)**: Link multiple mail servers for automatic failover.
+- **Add Backup Relay (Transport)**: Link multiple mail servers. Relay selection and failover are handled by the Delta Chat core (2.61+): it sends via the newest relay first and falls back to the next one if a relay is unreachable. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
   
   ```bash
   docker compose stop bridge
@@ -360,8 +360,6 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/transports` | Show configured mail relays & usage stats |
 | `/addtransport <addr>` | Add a backup mail relay (private 1:1 chat only, chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
-| `/setprimary <addr>` | Set primary transport address |
-| `/resilient` | Toggle resilient sending mode across all relays (admin only) |
 | `/richmode [mode]` | Configure rich post relay mode (`webxdc`, `split`, `both`, `off`) |
 | `/status` | Show detailed bot, userbot, queue, and channel status (admin only) |
 | `/donate` | Support bot development ❤️ |
@@ -400,8 +398,6 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/transports` — Show configured mail relays & usage stats.
 - `/addtransport <addr>` — Add backup mail relay (private 1:1 chat only).
 - `/rmtransport <addr>` — Remove mail relay.
-- `/setprimary <addr>` — Set primary mail relay address.
-- `/resilient [on|off]` — Toggle or check resilient sending mode across all mail relays.
 - `/richmode [mode]` — Configure rich post / album relay mode (`webxdc` for interactive WebXDC apps, `split` for separate follow-up images, `both` for WebXDC + extra images, or `off` for legacy fallback).
 - `/help` — Show Delta Chat bot help.
 

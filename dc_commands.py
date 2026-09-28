@@ -1,4 +1,4 @@
-"""All Delta Chat /command handlers (setprimary, resilient, richmode,
+"""All Delta Chat /command handlers (deprecated setprimary/resilient, richmode,
 help, initadmin, transports, addtransport, rmtransport, donate,
 channeladd/remove, botsend, filters/filteradd/filterdel, bridge/
 unbridge, cleanup, locupdate, userbotsync/userbotjoin, status,
@@ -54,60 +54,37 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.25.10"
+VERSION = "2.26.0"
 dc_cli = BotCli("tgbridge")
+
+
+RELAY_SELECTION_NOTE = (
+    "Since core 2.61 the core picks the sending relay itself: it tries the newest relay first "
+    "and falls back to the next one if a relay is unreachable. "
+    "Use /addtransport and /rmtransport to control relays."
+)
 
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
 def setprimary_command(bot, accid, event):
-    """Set a specific transport as primary. Admin only."""
+    """Deprecated: the core no longer uses configured_addr to pick the SMTP relay."""
     import bot as _bot_module
     msg = event.msg
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /setprimary."))
         return
-
-    addr = event.payload.strip()
-    if not addr:
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /setprimary user@example.com"))
-        return
-
-    try:
-        bot.rpc.set_config(accid, "configured_addr", addr)
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
-    except Exception as e:
-        logger.error(f"Failed to set primary address: {e}")
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to set primary address."))
+    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"⚠️ /setprimary is deprecated and disabled. {RELAY_SELECTION_NOTE}"))
 
 
 @dc_cli.on(events.NewMessage(command="/resilient"))
 def resilient_command(bot, accid, event):
+    """Deprecated: relay failover is handled by the core."""
     import bot as _bot_module
     msg = event.msg
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /resilient."))
         return
-
-    arg = event.payload.strip().lower() if event.payload else ""
-
-    try:
-        current = database.get_config("resilient") == "1"
-        if not arg:
-            status = "enabled" if current else "disabled"
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ Resilient sending mode is currently {status}."))
-            return
-
-        if arg in ("on", "1", "true"):
-            database.set_config("resilient", "1")
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports."))
-        elif arg in ("off", "0", "false"):
-            database.set_config("resilient", "0")
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="ℹ️ Resilient sending mode disabled."))
-        else:
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status."))
-    except Exception as e:
-        logger.error(f"Failed to update resilient mode: {e}")
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to update resilient mode."))
+    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"⚠️ /resilient is deprecated and disabled. {RELAY_SELECTION_NOTE}"))
 
 
 @dc_cli.on(events.NewMessage(command="/richmode"))
@@ -248,28 +225,21 @@ def transports_command(bot, accid, event):
     except Exception:
         pass
 
-    # Get resilient sending mode status
-    resilient_on = False
-    try:
-        resilient_on = database.get_config("resilient") == "1"
-    except Exception:
-        pass
-
     # Get per-transport statistics
     stats_map = {}
     for s in database.get_all_transport_stats():
         stats_map[s['addr']] = s
 
-    active_addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+    # The core tries the newest relay first when sending, so list newest first.
     transport_addrs = []
-    for t in transports:
+    for t in reversed(transports):
         addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
         transport_addrs.append(addr)
 
-    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
+    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\nSending order: top to bottom (core falls back to the next relay if one is unreachable)\n\n"
 
     import re
-    for addr in transport_addrs:
+    for idx, addr in enumerate(transport_addrs, 1):
         # Determine status label from HTML
         status_label = "❓ Unknown"
         if connectivity_html:
@@ -286,9 +256,7 @@ def transports_command(bot, accid, event):
                 elif "red" in color or "lost" in status_text or "error" in status_text:
                     status_label = "🔴 Not connected"
 
-        is_used = resilient_on or (addr == active_addr)
-        used_str = " ✔︎ Used for sending:" if is_used else ":"
-        reply += f"**{status_label}**{used_str} `{addr}`\n"
+        reply += f"{idx}. **{status_label}:** `{addr}`\n"
 
         stats = stats_map.get(addr)
         if stats:

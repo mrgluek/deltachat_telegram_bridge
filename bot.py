@@ -159,7 +159,6 @@ from logging_setup import (
     _handle_channel_access_revoked,
     TelethonBanLogHandler,
 )
-from resilience import resilient_lock, _setup_resilient_mode, _message_failover_attempts
 from userbot import (
     _userbot_tasks,
     _channel_queues,
@@ -270,7 +269,6 @@ USERBOT_SESSION_PATH = os.environ.get("USERBOT_SESSION_PATH", "userbot_session")
 from dc_events import (
     _react,
     _async_handle_direct_tg_post,
-    on_msg_failed,
     handle_dc_info_message,
     handle_dc_message,
     handle_dc_message_changed,
@@ -300,7 +298,6 @@ def _register_dc_cli_hooks():
     _dc_cli_hooks_registered = True
     dc_cli.on_init(on_init)
     dc_cli.on_start(on_start)
-    dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))(on_msg_failed)
     dc_cli.on(events.NewMessage(is_info=True))(handle_dc_info_message)
     dc_cli.on(events.NewMessage(is_info=False))(handle_dc_message)
     dc_cli.on(events.RawEvent(EventType.MSGS_CHANGED))(handle_dc_message_changed)
@@ -327,7 +324,6 @@ def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
     _make_rpc_thread_safe(bot)
     bot.logger.info("Initializing Delta Chat tgbridge...")
-    _setup_resilient_mode(bot)
     
     # Ensure our error handler is attached to the bot's own logger
     bot.logger.addHandler(admin_handler)

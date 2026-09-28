@@ -1,3 +1,9 @@
+## [2.26.0] - 2026-09-28
+- **Bot-Side Relay Failover Removed**: Removed the `MSG_FAILED` failover handler and the resilient-send `send_msg` patch (`resilience.py`). Both switched `configured_addr` and called `resend_messages`, but since Delta Chat core 2.61 the SMTP relay is no longer chosen by `configured_addr`: the core tries the newest relay first and falls back to the next one if a relay is unreachable. The old logic could no longer switch relays and only caused delayed duplicate resends.
+- **`/setprimary` and `/resilient` Deprecated**: Both commands are disabled and only reply with an explanation of how the core picks relays now. They are removed from `/help` and the README.
+- **`/transports` Sending Order**: Relays are listed newest first, in the order the core tries them for sending, instead of marking `configured_addr` as "Used for sending".
+- **Core Requirement**: `requirements.txt` now requires `deltachat-rpc-server>=2.62.0`.
+
 ## [2.25.10] - 2026-09-25
 - **Forum Topic Names on Relayed Group Messages**: A Telegram group with topics added as a channel sent every topic into one Delta Chat chat with no hint which topic a message came from. The topic name is now appended to the sender's name, e.g. `Gluek in Soft` (`… in General` for the General topic). Topic titles are looked up through the userbot and cached for an hour.
 

@@ -194,51 +194,19 @@ class TestTransportCommands(unittest.TestCase):
         msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
         self.assertEqual(msg_text, "❌ Failed to check transports.")
 
-    # ── /setprimary ────────────────────────────────────────────────────────
+    # ── deprecated /setprimary and /resilient ──────────────────────────────
 
     @patch("bot._is_dc_admin")
-    def test_setprimary_success(self, mock_admin):
+    def test_deprecated_relay_commands(self, mock_admin):
         mock_admin.return_value = True
-        self.mock_event.payload = "primary@example.com"
-        bot.setprimary_command(self.mock_bot, self.accid, self.mock_event)
-        self.mock_bot.rpc.set_config.assert_called_once_with(self.accid, "configured_addr", "primary@example.com")
-        msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
-        self.assertIn("Primary address", msg_text)
-
-    @patch("bot._is_dc_admin")
-    def test_setprimary_sanitized_error(self, mock_admin):
-        mock_admin.return_value = True
-        self.mock_event.payload = "primary@example.com"
-        self.mock_bot.rpc.set_config.side_effect = RuntimeError("Config write failed")
-        bot.setprimary_command(self.mock_bot, self.accid, self.mock_event)
-        msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
-        self.assertEqual(msg_text, "❌ Failed to set primary address.")
-
-    # ── /resilient ─────────────────────────────────────────────────────────
-
-    @patch("bot._is_dc_admin")
-    def test_resilient_toggle(self, mock_admin):
-        mock_admin.return_value = True
-
-        # Query status when off
-        self.mock_event.payload = ""
-        bot.resilient_command(self.mock_bot, self.accid, self.mock_event)
-        msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
-        self.assertIn("disabled", msg_text)
-
-        # Enable
-        self.mock_event.payload = "on"
-        bot.resilient_command(self.mock_bot, self.accid, self.mock_event)
-        self.assertEqual(database.get_config("resilient"), "1")
-        msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
-        self.assertIn("enabled", msg_text)
-
-        # Disable
-        self.mock_event.payload = "off"
-        bot.resilient_command(self.mock_bot, self.accid, self.mock_event)
-        self.assertEqual(database.get_config("resilient"), "0")
-        msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
-        self.assertIn("disabled", msg_text)
+        for handler, cmd in ((bot.resilient_command, "/resilient"), (bot.setprimary_command, "/setprimary")):
+            self.mock_event.payload = "on" if cmd == "/resilient" else "primary@example.com"
+            handler(self.mock_bot, self.accid, self.mock_event)
+            msg_text = self.mock_bot.rpc.send_msg.call_args[0][2].text
+            self.assertIn(f"{cmd} is deprecated and disabled", msg_text)
+            self.assertIn("/rmtransport", msg_text)
+        self.assertIsNone(database.get_config("resilient"))
+        self.mock_bot.rpc.set_config.assert_not_called()
 
     # ── /transports ────────────────────────────────────────────────────────
 

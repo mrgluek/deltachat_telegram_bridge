@@ -1504,8 +1504,6 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/transports — Show configured mail relays & stats\n"
             f"/addtransport — Add a backup mail relay\n"
             f"/rmtransport <addr> — Remove a mail relay\n"
-            f"/setprimary <addr> — Switch the primary mail relay\n"
-            f"/resilient — Toggle resilient sending mode (all relays)\n"
             f"/richmode [webxdc|split|both|off] — Configure Telegram rich posts & album relay mode\n"
         )
     
