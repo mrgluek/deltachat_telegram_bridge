@@ -1,3 +1,8 @@
+## [2.28.0] - 2026-10-14
+- **`/transports` Shows the Relay Actually Used for Sending**: Since core 2.61 the core sends through the relay that last worked and switches only when it cannot connect, so the main address (`configured_addr`) says nothing about where mail goes out. `/transports` now reads the sending order from the core (`smtp_success`) and lists the current sending relay first, shows the core's send queue (waiting messages and retries) and the outgoing status, and per relay the incoming status, when the last message arrived, mailbox storage usage (⚠️ from 80%) and when it was added. The core database is opened read-only.
+- **Removed Misleading Per-Relay Sent/Received Counters**: They attributed every message to `configured_addr`, so the numbers and "last sent" dates were wrong once the core sent through another relay. Counting them also cost two extra RPC calls per message. The `transport_stats` table is left in place but no longer updated.
+- **Clearer Log Line**: "Successfully sent msg_id …" is now "Queued msg_id … for sending", since the message is only handed to the core's send queue at that point.
+
 ## [2.27.1] - 2026-10-14
 - **`/status` Busiest Chats**: Channel names are now shown even when chat details can't be read from the core, and shares are computed against all messages relayed in the last 24 hours instead of only the top 5.
 

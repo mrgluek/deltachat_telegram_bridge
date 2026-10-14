@@ -268,15 +268,6 @@ def handle_dc_message(bot, accid, event):
     dc_chat_id = msg.chat_id
     from_id = msg.from_id
 
-    # Track receiving stats
-    try:
-        # Use configured_addr (SMTP override) if set, otherwise fallback to main account addr
-        addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
-        if addr:
-            database.increment_transport_received(addr)
-    except Exception:
-        pass
-
     # Detect new users in private chats and send help
     try:
         chat_info = bot.rpc.get_basic_chat_info(accid, dc_chat_id)

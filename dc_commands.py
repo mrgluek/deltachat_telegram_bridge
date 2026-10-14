@@ -56,7 +56,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.27.1"
+VERSION = "2.28.0"
 dc_cli = BotCli("tgbridge")
 
 
@@ -185,9 +185,95 @@ def initadmin_command(bot, accid, event):
             f"✅ You are now the admin!\n\nEmail: `{email}`\n⚠️ Fingerprint not available yet (will be used after key exchange)."))
 
 
+def _read_core_transport_state(bot, accid) -> Optional[dict]:
+    """Relay details that the JSON-RPC API does not expose, read from the core database.
+
+    Since core 2.61 the relay used for sending is not configured_addr: the core
+    keeps sending through the relay that last worked (smtp_success) and switches
+    only when it cannot connect. The account database is opened read-only; the
+    core keeps it in WAL mode, so this does not block it.
+    """
+    import sqlite3
+    try:
+        db_path = bot.rpc.get_info(accid).get("database_dir")
+        if not db_path:
+            return None
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            rows = conn.execute(
+                """SELECT t.id, t.addr, t.add_timestamp, t.is_published, t.last_rcvd_timestamp, s.id
+                   FROM transports t LEFT JOIN smtp_success s ON s.transport_id = t.id
+                   ORDER BY IFNULL(s.id, 0) DESC, t.id ASC"""
+            ).fetchall()
+            outbox = conn.execute("SELECT COUNT(*), IFNULL(MAX(retries), 0) FROM smtp2").fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Could not read transport state from the core database: {e}")
+        return None
+    transports = [
+        {"id": r[0], "addr": r[1], "added": r[2] or 0, "published": bool(r[3]),
+         "last_rcvd": r[4] or 0, "sending": r[5] is not None}
+        for r in rows
+    ]
+    # Only the first one in this order can be the current sending relay.
+    for t in transports[1:]:
+        t["sending"] = False
+    return {"transports": transports, "outbox": outbox[0], "outbox_max_retries": outbox[1]}
+
+
+def _parse_connectivity_html(html_text: str) -> dict:
+    """Pull per-relay incoming status/quota and the outgoing status out of get_connectivity_html().
+
+    Relays are returned in the core's order (transports by id).
+    """
+    def plain(fragment: str) -> str:
+        return html.unescape(re.sub(r"<[^>]+>", " ", fragment)).split()
+
+    result = {"relays": [], "outgoing": None}
+    if not html_text:
+        return result
+    parts = html_text.split('<li class="transport">')
+    tail = parts[-1]
+    out_idx = tail.rfind("<h3>")
+    outgoing_html = tail[out_idx:] if out_idx != -1 else ""
+    if out_idx != -1:
+        parts[-1] = tail[:out_idx]
+    for seg in parts[1:]:
+        m = re.search(r'class="(\w+) dot"></span>\s*<b>([^<]+):</b>\s*([^<]*)', seg)
+        relay = {"domain": None, "color": None, "status": None, "quota": None, "quota_pct": None}
+        if m:
+            relay["color"], relay["domain"], relay["status"] = m.group(1), html.unescape(m.group(2)).strip(), html.unescape(m.group(3)).strip()
+        q = re.search(r'<ul class="quota-list"><li>(.*?)<div class="bar"><div class="progress \w+"[^>]*>(\d+)%', seg, re.S)
+        if q:
+            relay["quota"] = " ".join(plain(q.group(1)))
+            relay["quota_pct"] = int(q.group(2))
+        result["relays"].append(relay)
+    m = re.search(r'class="(\w+) dot"></span>\s*([^<]*)', outgoing_html)
+    if m:
+        result["outgoing"] = {"color": m.group(1), "status": html.unescape(m.group(2)).strip()}
+    return result
+
+
+_DOT = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+
+
+def _ago(ts: int) -> str:
+    if not ts:
+        return "never"
+    delta = max(0, int(time.time()) - int(ts))
+    if delta < 120:
+        return "just now"
+    if delta < 7200:
+        return f"{delta // 60} min ago"
+    if delta < 172800:
+        return f"{delta // 3600} h ago"
+    return f"{delta // 86400} days ago"
+
+
 @dc_cli.on(events.NewMessage(command="/transports"))
 def transports_command(bot, accid, event):
-    """Show configured transports (mail relays) and their status."""
+    """Show configured transports (mail relays): which one sends, their incoming status and storage."""
     import bot as _bot_module
     msg = event.msg
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
@@ -205,78 +291,71 @@ def transports_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
-    # Get connectivity status
-    connectivity_label = "❓ Unknown"
+    rpc_addrs = [t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '') for t in transports]
+    state = _read_core_transport_state(bot, accid)
     try:
-        connectivity = bot.rpc.get_connectivity(accid)
-        if connectivity >= 4000:
-            connectivity_label = "🟢 Connected"
-        elif connectivity >= 3000:
-            connectivity_label = "🔄 Working"
-        elif connectivity >= 2000:
-            connectivity_label = "🟡 Connecting"
-        else:
-            connectivity_label = "🔴 Not connected"
+        conn_info = _parse_connectivity_html(bot.rpc.get_connectivity_html(accid))
     except Exception:
-        pass
+        conn_info = {"relays": [], "outgoing": None}
 
-    # Get connectivity HTML to parse per-transport status
-    connectivity_html = ""
-    try:
-        connectivity_html = bot.rpc.get_connectivity_html(accid)
-    except Exception:
-        pass
+    if state:
+        ordered = state["transports"]
+        # The connectivity page lists relays by transport id.
+        by_id_order = sorted(ordered, key=lambda t: t["id"])
+        relay_info = {t["addr"]: (conn_info["relays"][i] if i < len(conn_info["relays"]) else None)
+                      for i, t in enumerate(by_id_order)}
+    else:
+        ordered = [{"addr": a, "sending": False, "published": None, "last_rcvd": 0, "added": 0} for a in rpc_addrs]
+        relay_info = {}
+        for t in ordered:
+            domain = t["addr"].split("@")[-1]
+            relay_info[t["addr"]] = next((r for r in conn_info["relays"] if r.get("domain") == domain), None)
 
-    # Get per-transport statistics
-    stats_map = {}
-    for s in database.get_all_transport_stats():
-        stats_map[s['addr']] = s
-
-    # The core tries the newest relay first when sending, so list newest first.
-    transport_addrs = []
-    for t in reversed(transports):
-        addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
-        transport_addrs.append(addr)
-
-    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\nSending order: top to bottom (core falls back to the next relay if one is unreachable)\n\n"
-
-    import re
-    for idx, addr in enumerate(transport_addrs, 1):
-        # Determine status label from HTML
-        status_label = "❓ Unknown"
-        if connectivity_html:
-            domain = addr.split('@')[-1] if '@' in addr else addr
-            pattern = rf'class="([^"]+)\s+dot".*?<b>{re.escape(domain)}:</b>\s*([^<]+)'
-            match = re.search(pattern, connectivity_html, re.IGNORECASE)
-            if match:
-                color = match.group(1).lower()
-                status_text = match.group(2).strip().lower()
-                if "yellow" in color or "connecting" in status_text:
-                    status_label = "🟡 Connecting"
-                elif "green" in color:
-                    status_label = "🔄 Working"
-                elif "red" in color or "lost" in status_text or "error" in status_text:
-                    status_label = "🔴 Not connected"
-
-        reply += f"{idx}. **{status_label}:** `{addr}`\n"
-
-        stats = stats_map.get(addr)
-        if stats:
-            reply += f"  📤 Sent: {stats['msgs_sent']}  📥 Received: {stats['msgs_received']}\n"
-            if stats.get('last_sent_at'):
-                import datetime
-                last_sent = datetime.datetime.fromtimestamp(stats['last_sent_at']).strftime('%Y-%m-%d %H:%M')
-                reply += f"  Last sent: {last_sent}\n"
-            if stats.get('last_received_at'):
-                import datetime
-                last_recv = datetime.datetime.fromtimestamp(stats['last_received_at']).strftime('%Y-%m-%d %H:%M')
-                reply += f"  Last received: {last_recv}\n"
+    lines = ["🔌 **Mail Relays (Transports)**", ""]
+    sending = next((t for t in ordered if t["sending"]), None)
+    if sending:
+        lines.append(f"📤 **Sending via:** `{sending['addr']}`")
+    elif state:
+        lines.append(f"📤 **Sending via:** `{ordered[0]['addr']}` (nothing sent successfully yet)")
+    out = conn_info.get("outgoing")
+    if out:
+        lines.append(f"   {_DOT.get(out['color'], '❓')} {out['status']}")
+    if state:
+        waiting = state["outbox"]
+        if waiting:
+            retry_note = f", retried up to {state['outbox_max_retries']}× (fails after 6)" if state["outbox_max_retries"] else ""
+            lines.append(f"   📬 {waiting} message(s) waiting in the core's send queue{retry_note}")
         else:
-            reply += f"  📤 Sent: 0  📥 Received: 0\n"
-        reply += "\n"
+            lines.append("   📬 Send queue is empty")
+    lines.append("")
 
-    reply += f"Total transports: {len(transport_addrs)}"
-    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
+    for idx, t in enumerate(ordered, 1):
+        addr = t["addr"]
+        tags = []
+        if t["sending"]:
+            tags.append("sending")
+        if t.get("published") is False:
+            tags.append("not published")
+        lines.append(f"{idx}. `{addr}`" + (f" — {', '.join(tags)}" if tags else ""))
+        info = relay_info.get(addr)
+        if info and info.get("status"):
+            lines.append(f"   📥 {_DOT.get(info['color'], '❓')} {info['status']}"
+                         + (f", last message {_ago(t['last_rcvd'])}" if state else ""))
+        elif state:
+            lines.append(f"   📥 Last message {_ago(t['last_rcvd'])}")
+        if info and info.get("quota"):
+            warn = " ⚠️" if (info.get("quota_pct") or 0) >= 80 else ""
+            lines.append(f"   💾 {info['quota']} ({info['quota_pct']}%){warn}")
+        if t.get("added"):
+            lines.append(f"   ➕ Added {time.strftime('%Y-%m-%d', time.gmtime(t['added']))}")
+        lines.append("")
+
+    lines.append("ℹ️ The core keeps sending through the relay that last worked and switches to the next one "
+                 "only if it cannot connect. Relays are tried in the order above. "
+                 "\"Not published\" relays are not announced to contacts.")
+    if not state:
+        lines.append("(Sending relay unknown: could not read the core database.)")
+    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(command="/addtransport"))

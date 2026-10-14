@@ -324,16 +324,8 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     """Wrapper for bot.rpc.send_msg that tracks stats."""
     try:
         msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
-        
-        # Track success
-        try:
-            addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr") or "unknown"
-            if addr != "unknown":
-                database.increment_transport_sent(addr)
-        except Exception:
-            pass
-        
-        logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid}")
+
+        logger.info(f"Queued msg_id {msg_id} for sending to chat {chat_id} on account {accid}")
         return msg_id
     except Exception as e:
         logger.error(f"Failed to send DC message to chat {chat_id} on account {accid}: {e}")

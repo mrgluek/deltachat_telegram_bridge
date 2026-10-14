@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import time
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -281,3 +282,57 @@ class TestHelpPrivateReply(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTransportsFromCoreState(unittest.TestCase):
+    """/transports reads the sending relay from the core DB and status from the connectivity HTML."""
+
+    HTML = (
+        '<html><body><h3>Incoming messages</h3><ul>'
+        '<li class="transport"><span class="green dot"></span> <b>chat.example.org:</b> Connected<br />'
+        '<ul class="quota-list"><li>120 MiB of 2 GiB used<div class="bar"><div class="progress grey" style="width: 6%">6%</div></div></li></ul></li>'
+        '<li class="transport"><span class="red dot"></span> <b>uk.example.org:</b> Error: connection timed out<br /></li>'
+        '</ul><h3>Outgoing messages</h3><ul><li><span class="green dot"></span> Your last message was sent successfully.</li></ul>'
+        '</body></html>'
+    )
+
+    def setUp(self):
+        import sqlite3
+        import tempfile
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        c = sqlite3.connect(self.tmp.name)
+        c.executescript("""
+            CREATE TABLE transports (id INTEGER PRIMARY KEY, addr TEXT, entered_param TEXT, configured_param TEXT,
+                                     add_timestamp INTEGER, is_published INTEGER, last_rcvd_timestamp INTEGER);
+            CREATE TABLE smtp_success (id INTEGER PRIMARY KEY, transport_id INTEGER UNIQUE);
+            CREATE TABLE smtp2 (id INTEGER PRIMARY KEY, rfc724_mid TEXT, recipients TEXT, mime TEXT, msg_id INTEGER, retries INTEGER);
+        """)
+        now = int(time.time())
+        c.execute("INSERT INTO transports VALUES (1, 'bot@chat.example.org', '', '', ?, 1, ?)", (now - 86400 * 20, now - 300))
+        c.execute("INSERT INTO transports VALUES (4, 'bot@uk.example.org', '', '', ?, 1, ?)", (now - 86400 * 20, now - 7200))
+        c.execute("INSERT INTO smtp_success (id, transport_id) VALUES (496, 1)")
+        c.execute("INSERT INTO smtp2 (retries) VALUES (2)")
+        c.commit()
+        c.close()
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+
+    @patch('bot._is_dc_admin', return_value=True)
+    def test_shows_sending_relay_status_and_quota(self, _admin):
+        mock_bot = MagicMock()
+        mock_bot.rpc.list_transports.return_value = [{"addr": "bot@chat.example.org"}, {"addr": "bot@uk.example.org"}]
+        mock_bot.rpc.get_info.return_value = {"database_dir": self.tmp.name}
+        mock_bot.rpc.get_connectivity_html.return_value = self.HTML
+        event = MagicMock()
+        bot.transports_command(mock_bot, 1, event)
+        text = mock_bot.rpc.send_msg.call_args[0][2].text
+        self.assertIn("Sending via:** `bot@chat.example.org`", text)
+        self.assertIn("1 message(s) waiting", text)
+        self.assertIn("120 MiB of 2 GiB used (6%)", text)
+        self.assertIn("🔴 Error: connection timed out", text)
+        self.assertIn("Your last message was sent successfully", text)
+        # Sending relay first, then the fallback.
+        self.assertLess(text.index("1. `bot@chat.example.org`"), text.index("2. `bot@uk.example.org`"))
+        self.assertNotIn("Sent:", text)
