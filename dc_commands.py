@@ -46,6 +46,8 @@ except ImportError:
 
 from formatting import get_dc_help_text, to_dc_markdown
 from security import _reload_filter_cache
+import security
+import userbot
 from caching import _clear_dc_caches, _invalidate_dc_channel_cache, invalidate_channels_cache, _get_cached_last_msg_id
 from live_locations import LIVE_LOCATIONS
 from dc_helpers import async_update_channels_dc, _userbot_leave_chat
@@ -54,7 +56,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.26.3"
+VERSION = "2.27.0"
 dc_cli = BotCli("tgbridge")
 
 
@@ -1138,6 +1140,137 @@ def _format_relative_time(timestamp: int) -> str:
         return f"{diff // 86400}d ago"
 
 
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
+
+
+def _dc_chat_label(dc, accid, dc_chat_id: int) -> str:
+    ch = database.get_channel_by_dc_chat_id(dc_chat_id)
+    if ch and ch.get('tg_channel_username'):
+        return f"@{ch['tg_channel_username']}"
+    try:
+        name = dc.rpc.get_basic_chat_info(accid, dc_chat_id).name
+        if name:
+            return name
+    except Exception:
+        pass
+    return f"DC chat {dc_chat_id}"
+
+
+async def _build_send_load_section(is_html: bool, dc, accid) -> str:
+    """Send queue state and load history, to see when the bot runs out of capacity.
+
+    One Delta Chat account can send at most GLOBAL_DC_RATE_LIMIT messages per
+    window (the relay limits each sender address); the core uses one relay at a
+    time, so the only way to grow beyond it is to spread chats over more bots.
+    """
+    b = (lambda t: f"<b>{t}</b>") if is_html else (lambda t: f"**{t}**")
+    esc = html.escape if is_html else (lambda t: t)
+    per_hour = security.GLOBAL_DC_RATE_LIMIT * 3600 // security.GLOBAL_DC_RATE_WINDOW
+    now = time.time()
+    lines = [f"📮 {b('Send load')} (limit {security.GLOBAL_DC_RATE_LIMIT}/min = {per_hour}/h)"]
+
+    # Right now
+    waiting = security.get_dc_send_waiting()
+    pending_events = userbot.get_pending_event_count()
+    backlog = security.get_dc_backlog()
+    try:
+        outbox = await asyncio.to_thread(security.get_core_outbox_pending) if dc and accid else 0
+    except Exception:
+        outbox = 0
+    if backlog:
+        eta = _fmt_duration(backlog * security.GLOBAL_DC_RATE_WINDOW / security.GLOBAL_DC_RATE_LIMIT)
+        lines.append(f"• Now: {backlog} waiting ({waiting[security.PRIORITY_GROUP]} group msgs, "
+                     f"{max(pending_events, waiting[security.PRIORITY_CHANNEL])} channel events), ~{eta} to send")
+    else:
+        lines.append("• Now: nothing waiting")
+    held = " — channel posts held back" if security.is_core_outbox_full() else ""
+    lines.append(f"• Core outbox: {outbox} not yet sent{held}")
+    busy_queues = sorted(((q.qsize(), cid) for cid, q in userbot._channel_queues.items() if q.qsize()), reverse=True)[:3]
+    if busy_queues:
+        parts = []
+        for size, cid in busy_queues:
+            ch = database.get_channel_by_tg_id(cid)
+            name = f"@{ch['tg_channel_username']}" if ch and ch.get('tg_channel_username') else str(cid)
+            parts.append(f"{esc(name)} {size}")
+        lines.append("• Largest channel queues: " + ", ".join(parts))
+
+    # History from the hourly table (survives restarts, kept 30 days)
+    rows = database.get_send_stats(now - 7 * 86400)
+    # Counters not flushed yet belong to the current hour.
+    unflushed = security._send_stats
+    cur_hour = int(now // 3600 * 3600)
+    by_hour = {r['hour_ts']: dict(r) for r in rows}
+    cur = by_hour.setdefault(cur_hour, {'hour_ts': cur_hour, 'group_sent': 0, 'channel_sent': 0, 'rate_wait_sec': 0.0, 'outbox_wait_sec': 0.0, 'max_backlog': 0})
+    cur['group_sent'] += unflushed['group']
+    cur['channel_sent'] += unflushed['channel']
+    cur['rate_wait_sec'] += unflushed['rate_wait']
+    cur['outbox_wait_sec'] += unflushed['outbox_wait']
+    cur['max_backlog'] = max(cur['max_backlog'], backlog)
+    hours = sorted(by_hour.values(), key=lambda r: r['hour_ts'])
+
+    def sent(r):
+        return r['group_sent'] + r['channel_sent']
+
+    def pct(n):
+        return round(100 * n / per_hour)
+
+    day = [r for r in hours if r['hour_ts'] >= now - 86400]
+    day_sent = sum(sent(r) for r in day)
+    day_groups = sum(r['group_sent'] for r in day)
+    day_wait = sum(r['rate_wait_sec'] for r in day)
+    day_held = sum(r['outbox_wait_sec'] for r in day)
+    peak_day = max(day, key=sent)
+    peak_week = max(hours, key=sent)
+    week_backlog = max(r['max_backlog'] for r in hours)
+    week_wait = sum(r['rate_wait_sec'] for r in hours)
+    oldest = hours[0]['hour_ts']
+
+    lines.append(f"• This hour: {sent(cur)} sent ({pct(sent(cur) * 3600 / max(60, now - cur_hour))}% of limit at this pace)")
+    lines.append(f"• Last 24h: {day_sent} sent ({day_groups} group, {day_sent - day_groups} channel), "
+                 f"average {pct(day_sent / 24)}%, busiest hour {sent(peak_day)} ({pct(sent(peak_day))}%) "
+                 f"at {time.strftime('%H:00', time.gmtime(peak_day['hour_ts']))} UTC")
+    lines.append(f"• Last 24h at the limit: {_fmt_duration(day_wait)}; channel posts held for the core: {_fmt_duration(day_held)}")
+    # A catchup or restart makes one very busy hour; the 90th percentile shows
+    # how loaded the bot is in normal busy hours, which is what matters for sizing.
+    week_sends = sorted(sent(r) for r in hours)
+    p90 = week_sends[int(0.9 * (len(week_sends) - 1))]
+    days_covered = max(1.0, (now - oldest) / 86400)
+    lines.append(f"• Last 7 days: busy hours (top 10%) {p90}+ ({pct(p90)}%), busiest {sent(peak_week)} ({pct(sent(peak_week))}%), "
+                 f"at the limit {_fmt_duration(week_wait / days_covered)}/day, largest backlog {week_backlog}")
+    if now - oldest < 6 * 86400:
+        lines.append(f"  (statistics collected since {time.strftime('%Y-%m-%d %H:00', time.gmtime(oldest))} UTC)")
+
+    # Who produces the traffic
+    try:
+        top = database.get_top_dc_chats_by_volume(now - 86400, limit=5)
+    except Exception:
+        top = []
+    if top and day_sent:
+        labels = await asyncio.to_thread(lambda: [(_dc_chat_label(dc, accid, cid), n) for cid, n in top]) if dc else [(f"DC chat {cid}", n) for cid, n in top]
+        total = max(day_sent, sum(n for _, n in top))
+        lines.append("• Busiest chats 24h: " + ", ".join(f"{esc(name)} {n} ({round(100 * n / total)}%)" for name, n in labels))
+
+    # Verdict: load in normal busy hours and daily time spent at the limit
+    wait_per_day = week_wait / days_covered
+    if pct(p90) >= 85 or wait_per_day > 2 * 3600:
+        verdict = ("🔴 At capacity: posts are regularly delayed by the send limit. Move some channels to a second "
+                   "bot account (each address has its own relay limit; a second transport on the same account "
+                   "does not add capacity, the core sends through one relay at a time).")
+    elif pct(p90) >= 60 or wait_per_day > 15 * 60:
+        verdict = (f"🟡 Getting busy: busy hours use {pct(p90)}% of the send limit, posts wait at the limit "
+                   f"{_fmt_duration(wait_per_day)}/day. Watch this before adding big channels.")
+    else:
+        verdict = f"🟢 Headroom: busy hours use {pct(p90)}% of the send limit."
+    lines.append(verdict)
+    return "\n".join(lines)
+
+
 async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
     import bot as _bot_module
     # 1. Telegram Bot API
@@ -1179,50 +1312,18 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
         except Exception:
             pass
 
-    # 4. Global Rate Limit & Message Queue Workers
-    active_workers = len([w for w, task in _channel_workers.items() if not task.done()])
-    queue_lines = []
-    for cid, q in _channel_queues.items():
-        qsize = q.qsize()
-        if qsize > 0:
-            ch_data = database.get_channel_by_tg_id(cid)
-            ch_name = ch_data.get('tg_channel_username') if ch_data else None
-            ch_name = f"@{ch_name}" if ch_name else f"ID {cid}"
-            queue_lines.append(f"  • {ch_name}: {qsize} pending")
-    
-    queue_status = "All workers idle"
-    if active_workers > 0 or queue_lines:
-        queue_status = f"{active_workers} active workers"
-        if queue_lines:
-            queue_status += "\n" + "\n".join(queue_lines)
+    # 4. Delta Chat send load (capacity planning)
+    dc = bot_ref or _bot_module.dc_bot_instance
+    dc_accid = accid or _bot_module.dc_accid
+    send_load = await _build_send_load_section(is_html, dc, dc_accid)
 
-    # 5. Channel status
+    # 5. What is bridged (counts only; the per-channel list was not useful)
     channels = database.get_all_channels()
-    chan_lines = []
-    for ch in channels:
-        ch_id = ch['tg_channel_id']
-        username = ch.get('tg_channel_username')
-        # Look up cached or database last_msg_id
-        last_id = _get_cached_last_msg_id(ch_id)
-        
-        # Link construction
-        if username:
-            link = f"https://t.me/{username}/{last_id}" if last_id > 0 else f"https://t.me/{username}"
-            display_name = f"@{username}"
-        else:
-            clean_id = str(ch_id)
-            if clean_id.startswith("-100"):
-                clean_id = clean_id[4:]
-            elif clean_id.startswith("-"):
-                clean_id = clean_id[1:]
-            link = f"https://t.me/c/{clean_id}/{last_id}" if last_id > 0 else f"https://t.me/c/{clean_id}"
-            display_name = f"ID {ch_id}"
-        
-        if is_html:
-            chan_lines.append(f"• <a href='{link}'>{display_name}</a> (Last post: #{last_id if last_id > 0 else 'None'})")
-        else:
-            chan_lines.append(f"• {display_name} [Post #{last_id if last_id > 0 else 'None'}]({link})")
-            
+    try:
+        groups_count = len(database.get_all_bridges())
+    except Exception:
+        groups_count = 0
+
     # 6. Recent activity
     recent_maps = database.get_recent_message_maps(5)
     activity_lines = []
@@ -1244,8 +1345,8 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
             f"🔌 <b>Bot API:</b> {tg_bot_status}\n"
             f"👤 <b>Userbot:</b> {ub_status}\n"
             f"📧 <b>Delta Chat:</b> {dc_status}\n\n"
-            f"📊 <b>Queue Workers:</b>\n{queue_status}\n\n"
-            f"📡 <b>Channels ({len(channels)}):</b>\n" + ("\n".join(chan_lines) if chan_lines else "None") + "\n\n"
+            f"📡 <b>Bridged:</b> {len(channels)} channels, {groups_count} groups\n\n"
+            f"{send_load}\n\n"
             f"📝 <b>Recent Activity:</b>\n" + ("\n".join(activity_lines) if activity_lines else "None")
         )
     else:
@@ -1255,8 +1356,8 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
             f"🔌 **Bot API:** {tg_bot_status}\n"
             f"👤 **Userbot:** {ub_status}\n"
             f"📧 **Delta Chat:** {dc_status}\n\n"
-            f"📊 **Queue Workers:**\n{queue_status}\n\n"
-            f"📡 **Channels ({len(channels)}):**\n" + ("\n".join(chan_lines) if chan_lines else "None") + "\n\n"
+            f"📡 **Bridged:** {len(channels)} channels, {groups_count} groups\n\n"
+            f"{send_load}\n\n"
             f"📝 **Recent Activity:**\n" + ("\n".join(activity_lines) if activity_lines else "None")
         )
     return report

@@ -73,6 +73,7 @@ from security import (
     GLOBAL_DC_RATE_WINDOW,
     _global_dc_send_times,
     _wait_for_global_dc_rate_limit,
+    flush_send_stats,
     _processed_tg_msgs,
     DELETE_SYNC_MAX,
     DELETE_SYNC_WINDOW,
@@ -943,6 +944,9 @@ async def main():
 
                 # Restarts the reconciliation loop if it died or hung.
                 ensure_reconcile_loop()
+
+                # Hourly send statistics for /status capacity planning.
+                flush_send_stats()
 
             # Watchdog for Telegram Bot API (check connectivity every 60 seconds)
             if (now - last_tg_bot_check) > 60:

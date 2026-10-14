@@ -162,14 +162,55 @@ def _core_outbox_pending_count() -> int:
 
 
 async def _core_outbox_has_room() -> bool:
+    global _core_outbox_full
     if len(_core_outbox) < CORE_OUTBOX_MAX_PENDING:
+        _core_outbox_full = False
         return True
     try:
         pending = await asyncio.to_thread(_core_outbox_pending_count)
     except Exception as e:
         logger.warning(f"Could not check the core outbox: {e}")
         return True
-    return pending < CORE_OUTBOX_MAX_PENDING
+    _core_outbox_full = pending >= CORE_OUTBOX_MAX_PENDING
+    return not _core_outbox_full
+
+
+# Send counters since the last flush_send_stats(); stored hourly for /status.
+_send_stats = {"group": 0, "channel": 0, "rate_wait": 0.0, "outbox_wait": 0.0}
+
+
+_core_outbox_full = False   # result of the last outbox check, shown in /status
+
+
+def get_dc_backlog() -> int:
+    """Messages the bridge still has to hand to the core (both priorities)."""
+    waiting = get_dc_send_waiting()
+    try:
+        import userbot as _userbot_module
+        pending = _userbot_module.get_pending_event_count()
+    except Exception:
+        pending = 0
+    return max(pending, waiting[PRIORITY_CHANNEL]) + waiting[PRIORITY_GROUP]
+
+
+def flush_send_stats() -> None:
+    """Write the counters collected since the last call into the hourly table."""
+    snap = dict(_send_stats)
+    for k in _send_stats:
+        _send_stats[k] = 0 if isinstance(_send_stats[k], int) else 0.0
+    try:
+        database.record_send_stats(snap["group"], snap["channel"], snap["rate_wait"], snap["outbox_wait"], get_dc_backlog())
+    except Exception as e:
+        logger.warning(f"Could not store send stats: {e}")
+
+
+def get_core_outbox_pending() -> int:
+    """Bridge messages the core has not sent yet. Blocking RPC; call from a thread."""
+    return _core_outbox_pending_count()
+
+
+def is_core_outbox_full() -> bool:
+    return _core_outbox_full
 
 
 # Recent send timestamps, kept for diagnostics.
@@ -207,12 +248,7 @@ def _notify_owner_about_backlog() -> None:
         return
     waiting = get_dc_send_waiting()
     # Most of a channel backlog sits in the per-channel userbot queues, not here.
-    try:
-        import userbot as _userbot_module
-        pending = _userbot_module.get_pending_event_count()
-    except Exception:
-        pending = 0
-    backlog = max(pending, waiting[PRIORITY_CHANNEL]) + waiting[PRIORITY_GROUP]
+    backlog = get_dc_backlog()
     if backlog < RATE_LIMIT_NOTIFY_MIN_BACKLOG:
         return
     admin_tg_id = database.get_config("admin_tg_id")
@@ -249,7 +285,9 @@ async def _dc_send_dispatch_loop():
             _refill_dc_send_tokens()
             if _dc_send_tokens < 1:
                 _notify_owner_about_backlog()
-                await asyncio.sleep((1 - _dc_send_tokens) / rate)
+                pause = (1 - _dc_send_tokens) / rate
+                _send_stats["rate_wait"] += pause
+                await asyncio.sleep(pause)
                 continue
             if group is not None:
                 fut = _dc_send_waiters[PRIORITY_GROUP].popleft()
@@ -258,15 +296,18 @@ async def _dc_send_dispatch_loop():
                 if not await _core_outbox_has_room():
                     _notify_owner_about_backlog()
                     _dc_send_wakeup.clear()
+                    held_since = time.monotonic()
                     try:
                         await asyncio.wait_for(_dc_send_wakeup.wait(), timeout=2.0)
                     except asyncio.TimeoutError:
                         pass
+                    _send_stats["outbox_wait"] += time.monotonic() - held_since
                     continue
                 if channel.done():
                     continue
                 fut = _dc_send_waiters[PRIORITY_CHANNEL].popleft()
             _dc_send_tokens -= 1
+            _send_stats["group" if group is not None else "channel"] += 1
             _global_dc_send_times.append(time.time())
             fut.set_result(None)
     finally:

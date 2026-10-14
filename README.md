@@ -362,7 +362,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 | `/addtransport <addr>` | Add a backup mail relay (private 1:1 chat only, chatmail URI or addr password) |
 | `/rmtransport <addr>` | Remove a mail relay |
 | `/richmode [mode]` | Configure rich post relay mode (`webxdc`, `split`, `both`, `off`) |
-| `/status` | Show detailed bot, userbot, queue, and channel status (admin only) |
+| `/status` | Show connection status and the Delta Chat send load: queue, core outbox, hourly/daily/weekly load against the send limit, busiest chats and a capacity verdict (admin only) |
 | `/donate` | Support bot development ❤️ |
 
 ## Message & Post Content Filters
@@ -395,7 +395,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/cleanup` — Clean up stale, duplicate & orphaned bridges.
 - `/stats` — Show bridge statistics for the current chat.
-- `/status` — Show detailed bot, userbot, queue, and channel status (admin only).
+- `/status` — Show connection status and the Delta Chat send load (admin only). The **Send load** section shows what is waiting right now, how many bridge messages the core has not sent yet, sends this hour / last 24h / last 7 days as a share of the send limit (50/min = 3000/h), how long posts waited at the limit, the largest backlog, and the busiest chats. Hourly statistics are kept for 30 days. The verdict at the end (🟢 / 🟡 / 🔴) is based on normal busy hours (the top 10% of hours, so a single catchup does not count) and on daily time spent at the limit: 🔴 means it is time to move channels to a second bot account. A second transport on the same account does not add capacity, because the core sends through one relay at a time.
 - `/transports` — Show configured mail relays & usage stats.
 - `/addtransport <addr>` — Add backup mail relay (private 1:1 chat only).
 - `/rmtransport <addr>` — Remove mail relay.

@@ -176,6 +176,18 @@ def init_db():
                         break
             except Exception:
                 pass
+            # Hourly Delta Chat send statistics for capacity planning (/status).
+            # Kept separately from message_map, which is trimmed to 10000 rows.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS send_stats_hourly (
+                    hour_ts INTEGER PRIMARY KEY,
+                    group_sent INTEGER DEFAULT 0,
+                    channel_sent INTEGER DEFAULT 0,
+                    rate_wait_sec REAL DEFAULT 0,
+                    outbox_wait_sec REAL DEFAULT 0,
+                    max_backlog INTEGER DEFAULT 0
+                )
+            ''')
             # Admins table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admins (
@@ -715,6 +727,73 @@ def get_bridge_message_count(dc_chat_id: int, tg_chat_id: int) -> int:
 def cleanup_old_messages(limit=10000):
     """Run this periodically to prevent DB bloat."""
     cleanup_old_records(limit=limit)
+    prune_send_stats()
+
+
+SEND_STATS_RETENTION_DAYS = 30
+
+
+def record_send_stats(group_sent: int, channel_sent: int, rate_wait_sec: float, outbox_wait_sec: float, backlog: int, now: float | None = None):
+    """Add send counters to the current hour's row (backlog keeps the hour's maximum)."""
+    hour_ts = int((now if now is not None else time.time()) // 3600 * 3600)
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                """INSERT INTO send_stats_hourly (hour_ts, group_sent, channel_sent, rate_wait_sec, outbox_wait_sec, max_backlog)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(hour_ts) DO UPDATE SET
+                       group_sent = group_sent + excluded.group_sent,
+                       channel_sent = channel_sent + excluded.channel_sent,
+                       rate_wait_sec = rate_wait_sec + excluded.rate_wait_sec,
+                       outbox_wait_sec = outbox_wait_sec + excluded.outbox_wait_sec,
+                       max_backlog = MAX(max_backlog, excluded.max_backlog)""",
+                (hour_ts, group_sent, channel_sent, rate_wait_sec, outbox_wait_sec, backlog)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_send_stats(since_ts: float) -> list[dict]:
+    """Hourly send statistics since since_ts, oldest first."""
+    with _lock:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "SELECT hour_ts, group_sent, channel_sent, rate_wait_sec, outbox_wait_sec, max_backlog "
+                "FROM send_stats_hourly WHERE hour_ts >= ? ORDER BY hour_ts",
+                (int(since_ts // 3600 * 3600),)
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+
+def get_top_dc_chats_by_volume(since_ts: float, limit: int = 5) -> list[tuple[int, int]]:
+    """(dc_chat_id, messages) with the most relayed messages since since_ts."""
+    with _lock:
+        conn = _connect()
+        try:
+            return [tuple(r) for r in conn.execute(
+                """SELECT dc_chat_id, COUNT(DISTINCT dc_msg_id) AS n FROM message_map
+                   WHERE created_at >= ? GROUP BY dc_chat_id ORDER BY n DESC LIMIT ?""",
+                (int(since_ts), limit)
+            ).fetchall()]
+        finally:
+            conn.close()
+
+
+def prune_send_stats():
+    cutoff = int(time.time()) - SEND_STATS_RETENTION_DAYS * 86400
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("DELETE FROM send_stats_hourly WHERE hour_ts < ?", (cutoff,))
+            conn.commit()
+        finally:
+            conn.close()
 
 def increment_bridge_reaction_count(dc_chat_id: int, tg_chat_id: int):
     """Increment the reaction counter for a specific bridge."""
