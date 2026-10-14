@@ -237,10 +237,68 @@ async def _get_forum_topic_title(client, msg, topic_id):
     return title
 
 
+async def _handle_userbot_service_action(dc_chat_id, msg, action):
+    """Apply a Telegram service message (MessageService) to the DC chat.
+
+    Service messages have no text or media, so relaying them as posts sent
+    an empty message carrying only the t.me link. A new title or photo is
+    applied to the DC chat instead; the core then shows subscribers its own
+    "name/image changed" notice. Other actions (pins, video chats, ...) are
+    dropped.
+    """
+    import bot as _bot_module
+    from caching import files_are_identical
+    rpc = _bot_module.dc_bot_instance.rpc
+    accid = _bot_module.dc_accid
+    tg_channel_id = msg.chat_id
+    a_type = type(action).__name__
+    try:
+        if a_type == 'MessageActionChatEditTitle':
+            new_title = (getattr(action, 'title', '') or '').strip()
+            if new_title:
+                await asyncio.to_thread(rpc.set_chat_name, accid, dc_chat_id, new_title)
+                logger.info(f"Userbot: TG chat {tg_channel_id} renamed, DC chat {dc_chat_id} name set to '{new_title}'")
+        elif a_type == 'MessageActionChatEditPhoto':
+            photo = getattr(action, 'photo', None)
+            if photo:
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+                os.close(tmp_fd)
+                try:
+                    path = await asyncio.wait_for(_bot_module.userbot_client.download_media(photo, file=tmp_path), timeout=60.0)
+                    if path and os.path.exists(path):
+                        # Reconciliation can replay the same action; skip if the avatar is already this image.
+                        current = await asyncio.to_thread(rpc.get_full_chat_by_id, accid, dc_chat_id)
+                        old_avatar = current.get("profile_image") if isinstance(current, dict) else None
+                        if not files_are_identical(path, old_avatar):
+                            await asyncio.to_thread(rpc.set_chat_profile_image, accid, dc_chat_id, path)
+                            logger.info(f"Userbot: TG chat {tg_channel_id} photo changed, DC chat {dc_chat_id} avatar updated")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+        elif a_type == 'MessageActionChatDeletePhoto':
+            await asyncio.to_thread(rpc.set_chat_profile_image, accid, dc_chat_id, None)
+            logger.info(f"Userbot: TG chat {tg_channel_id} photo removed, DC chat {dc_chat_id} avatar cleared")
+        else:
+            logger.debug(f"Userbot: Ignoring service action {a_type} in TG chat {tg_channel_id} (msg {msg.id})")
+    except Exception as e:
+        logger.warning(f"Userbot: Failed to apply {a_type} from TG chat {tg_channel_id} to DC chat {dc_chat_id}: {e}")
+    # Mark as handled even on failure, otherwise reconciliation refetches it every pass.
+    _update_cached_last_msg_id(tg_channel_id, msg.id)
+
+
 async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=None):
     """Core logic to relay a Telethon message (from event or history) to Delta Chat."""
     import bot as _bot_module
     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
+        return
+
+    # Service messages (photo/title change, pin, ...) carry their event in
+    # msg.action. Checked by type name so a MagicMock msg in tests is not
+    # mistaken for one.
+    action = getattr(msg, 'action', None)
+    if action is not None and type(action).__name__.startswith('MessageAction'):
+        if not is_edit:
+            await _handle_userbot_service_action(dc_chat_id, msg, action)
         return
 
     tg_channel_id = msg.chat_id

@@ -889,6 +889,64 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
+    def _run_service_action(self, action, mock_ub=None):
+        """Relay a Telethon service message carrying `action`; return the mock DC bot."""
+        mock_ub = mock_ub or MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_dc_bot = MagicMock()
+        mock_dc_bot.rpc.get_full_chat_by_id.return_value = {"profile_image": None}
+        orig = (bot.userbot_client, bot.dc_bot_instance, bot.dc_accid)
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+            mock_msg = MagicMock()
+            mock_msg.chat_id = -100777
+            mock_msg.id = 2238
+            mock_msg.action = action
+            mock_msg.message = ""
+            mock_msg.media = None
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=mock_msg))
+        finally:
+            bot.userbot_client, bot.dc_bot_instance, bot.dc_accid = orig
+        # Never relayed as a post, always marked as handled for reconciliation
+        mock_dc_bot.rpc.send_msg.assert_not_called()
+        self.assertEqual(bot._get_cached_last_msg_id(-100777), 2238)
+        return mock_dc_bot
+
+    def test_userbot_service_title_change_renames_dc_chat(self):
+        class MessageActionChatEditTitle:
+            title = "New Channel Name"
+        dc = self._run_service_action(MessageActionChatEditTitle())
+        dc.rpc.set_chat_name.assert_called_once_with(1, 123, "New Channel Name")
+
+    def test_userbot_service_photo_change_sets_dc_avatar(self):
+        class MessageActionChatEditPhoto:
+            photo = object()
+        mock_ub = MagicMock()
+
+        async def fake_download(media, file):
+            with open(file, "wb") as f:
+                f.write(b"jpegdata")
+            return file
+        mock_ub.download_media = fake_download
+        dc = self._run_service_action(MessageActionChatEditPhoto(), mock_ub)
+        dc.rpc.set_chat_profile_image.assert_called_once()
+        self.assertEqual(dc.rpc.set_chat_profile_image.call_args[0][:2], (1, 123))
+
+    def test_userbot_service_photo_delete_clears_dc_avatar(self):
+        class MessageActionChatDeletePhoto:
+            pass
+        dc = self._run_service_action(MessageActionChatDeletePhoto())
+        dc.rpc.set_chat_profile_image.assert_called_once_with(1, 123, None)
+
+    def test_userbot_service_pin_is_skipped(self):
+        class MessageActionPinMessage:
+            pass
+        dc = self._run_service_action(MessageActionPinMessage())
+        dc.rpc.set_chat_name.assert_not_called()
+        dc.rpc.set_chat_profile_image.assert_not_called()
+
     def test_dc_channels_command_formatting(self):
         ch_id = database.add_channel_by_id(tg_channel_id=-100222, dc_chat_id=50, username="ftsec")
         # Also add a private channel without username
