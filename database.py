@@ -785,6 +785,19 @@ def get_top_dc_chats_by_volume(since_ts: float, limit: int = 5) -> list[tuple[in
             conn.close()
 
 
+def get_relayed_message_count(since_ts: float) -> int:
+    """Distinct relayed DC messages since since_ts (from message_map)."""
+    with _lock:
+        conn = _connect()
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT dc_msg_id, dc_chat_id FROM message_map WHERE created_at >= ?)",
+                (int(since_ts),)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+
 def prune_send_stats():
     cutoff = int(time.time()) - SEND_STATS_RETENTION_DAYS * 86400
     with _lock:

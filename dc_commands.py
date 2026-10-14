@@ -56,7 +56,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.27.0"
+VERSION = "2.27.1"
 dc_cli = BotCli("tgbridge")
 
 
@@ -1251,9 +1251,11 @@ async def _build_send_load_section(is_html: bool, dc, accid) -> str:
         top = database.get_top_dc_chats_by_volume(now - 86400, limit=5)
     except Exception:
         top = []
-    if top and day_sent:
-        labels = await asyncio.to_thread(lambda: [(_dc_chat_label(dc, accid, cid), n) for cid, n in top]) if dc else [(f"DC chat {cid}", n) for cid, n in top]
-        total = max(day_sent, sum(n for _, n in top))
+    if top:
+        labels = await asyncio.to_thread(lambda: [(_dc_chat_label(dc, accid, cid), n) for cid, n in top])
+        # Shares of all relayed messages (message_map also has group messages
+        # relayed from Delta Chat to Telegram, so it differs from the send counters).
+        total = max(1, database.get_relayed_message_count(now - 86400))
         lines.append("• Busiest chats 24h: " + ", ".join(f"{esc(name)} {n} ({round(100 * n / total)}%)" for name, n in labels))
 
     # Verdict: load in normal busy hours and daily time spent at the limit
