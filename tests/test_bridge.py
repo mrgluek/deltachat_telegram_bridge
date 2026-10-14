@@ -655,8 +655,8 @@ class TestTelegramBridge(unittest.TestCase):
         try:
             bot.userbot_client = mock_ub
             report = asyncio.run(bot.run_channel_catchup("test_catchup_ch"))
-            self.assertIn("Caught up 1 channel(s)", report)
-            self.assertIn("queued 2 missed posts", report)
+            self.assertIn("2 missed posts queued in 1 channel(s)", report)
+            self.assertIn("2 queued", report)
         finally:
             bot.userbot_client = original_ub
 

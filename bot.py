@@ -169,6 +169,7 @@ from userbot import (
     reconcile_channel,
     run_channel_catchup,
     reconcile_channels_loop,
+    ensure_reconcile_loop,
     sync_userbot_channels,
     _process_userbot_deletion_internal,
     _queue_userbot_event,
@@ -887,7 +888,7 @@ async def main():
 
     asyncio.create_task(startup_cleanup_task())
     asyncio.create_task(db_cleanup_loop())
-    asyncio.create_task(reconcile_channels_loop())
+    ensure_reconcile_loop()
 
     # Start Userbot if configured
     await start_userbot()
@@ -918,6 +919,12 @@ async def main():
                     try:
                         # Improved health check: also ensure we can call an API method
                         async def check_health():
+                            # The connection can be fine while Telethon's update loop
+                            # task has died: then no live posts arrive at all.
+                            updates_handle = getattr(userbot_client, '_updates_handle', None) if userbot_client else None
+                            if updates_handle is not None and updates_handle.done():
+                                logger.warning("Userbot update loop task has stopped; live posts are not arriving.")
+                                return False
                             if userbot_client and userbot_client.is_connected() and await userbot_client.is_user_authorized():
                                 # Trigger a real updates state request to ensure connection is actually responding and not cached
                                 from telethon.tl.functions.updates import GetStateRequest
@@ -934,6 +941,9 @@ async def main():
                         # Run restart in background to not block the main heartbeat
                         asyncio.create_task(start_userbot())
                 last_userbot_check = now
+
+                # Restarts the reconciliation loop if it died or hung.
+                ensure_reconcile_loop()
 
             # Watchdog for Telegram Bot API (check connectivity every 60 seconds)
             if (now - last_tg_bot_check) > 60:

@@ -88,6 +88,12 @@ _global_wait_counter = 0
 _last_owner_notification_time = 0
 
 
+RATE_LIMIT_NOTIFY_MIN_BACKLOG = 30   # posts waiting before the owner is told
+
+
+RATE_LIMIT_NOTIFY_INTERVAL = 900     # seconds between owner notifications
+
+
 async def _wait_for_global_dc_rate_limit():
     """Ensures we don't exceed the global Delta Chat message rate limit."""
     import bot as _bot_module
@@ -105,20 +111,32 @@ async def _wait_for_global_dc_rate_limit():
                 # We hit the limit, wait until the oldest one expires
                 wait_time = GLOBAL_DC_RATE_WINDOW - (now - _global_dc_send_times[0])
                 if wait_time > 0:
-                    # Notify owner on Telegram (debounced to once per minute)
+                    # _global_wait_counter only counts sends already blocked on this
+                    # lock; most of the backlog sits in the per-channel userbot queues.
+                    try:
+                        import userbot as _userbot_module
+                        backlog = _userbot_module.get_pending_event_count()
+                    except Exception:
+                        backlog = 0
+                    backlog = max(backlog, _global_wait_counter - 1)
+
+                    # Notify the owner only about a real backlog, not every short
+                    # pause at the limit, and at most every RATE_LIMIT_NOTIFY_INTERVAL.
                     admin_tg_id = database.get_config("admin_tg_id")
-                    if admin_tg_id and _bot_module.tg_app and (now - _last_owner_notification_time > 60):
+                    if (admin_tg_id and _bot_module.tg_app
+                            and backlog >= RATE_LIMIT_NOTIFY_MIN_BACKLOG
+                            and now - _last_owner_notification_time > RATE_LIMIT_NOTIFY_INTERVAL):
                         _last_owner_notification_time = now
-                        queue_size = _global_wait_counter - 1 # Current task is waiting on the lock
+                        eta_min = max(1, round(backlog * GLOBAL_DC_RATE_WINDOW / GLOBAL_DC_RATE_LIMIT / 60))
                         notification = (
-                            f"⏳ **Global DC Rate Limit Enforced**\n"
-                            f"The bot is waiting {wait_time:.1f}s before sending next message.\n"
-                            f"Current queue: {queue_size} messages waiting."
+                            f"⏳ *Delta Chat send limit reached* ({GLOBAL_DC_RATE_LIMIT} msgs / {GLOBAL_DC_RATE_WINDOW}s)\n"
+                            f"{backlog} posts are waiting, sending them takes ~{eta_min} min.\n"
+                            f"Nothing is lost, posts arrive with a delay."
                         )
                         # Send notification in background to not block the relay
                         asyncio.create_task(_bot_module.tg_app.bot.send_message(chat_id=admin_tg_id, text=notification, parse_mode='Markdown'))
-                    
-                    logger.info(f"Global DC rate limit reached. Waiting {wait_time:.2f}s (Queue: {_global_wait_counter-1})...")
+
+                    logger.info(f"Global DC rate limit reached. Waiting {wait_time:.2f}s (backlog: {backlog})...")
                     await asyncio.sleep(wait_time + 0.1)
                     # Re-clean after sleep
                     now = time.time()

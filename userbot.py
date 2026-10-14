@@ -63,6 +63,74 @@ _channel_queues: dict[int, asyncio.Queue] = {}
 _channel_workers: dict[int, asyncio.Task] = {}
 
 
+# Per-channel bookkeeping of events sitting in _channel_queues, keyed by the
+# normalized "-100…" id (live events and the DB can spell the same channel
+# differently). Reconciliation uses it to skip posts that are already queued
+# but not yet relayed: during a rate-limit backlog the watermark lags behind,
+# and without this every /catchup or reconcile pass queued the same posts again.
+_channel_pending: dict[int, int] = {}
+
+
+_channel_queued_max: dict[int, int] = {}
+
+
+# A single stuck relay (e.g. a DC RPC call that never returns) must not block
+# its channel's queue forever.
+EVENT_PROCESS_TIMEOUT = 900  # seconds
+
+
+# Live-update stall detection: Telethon's update loop can die or hang while the
+# connection itself stays healthy (GetState still answers), so the userbot
+# watchdog never notices and posts only arrive via reconciliation/catchup.
+STALE_MISS_AGE = 300            # a post this old that never arrived live is "stale"
+STALL_MIN_CHANNELS = 3          # stale posts in this many channels in one pass...
+STALL_NO_LIVE_SECONDS = 900     # ...and no live event for this long => stalled
+STALL_RESTART_COOLDOWN = 1800   # don't restart the userbot more often than this
+
+
+_last_live_event_ts: float = time.time()
+
+
+_last_stall_restart_ts: float = 0.0
+
+
+# The periodic reconciliation loop is supervised: it updates this heartbeat on
+# every channel, and ensure_reconcile_loop() restarts it when the task died or
+# the heartbeat went stale (a bare create_task() could vanish silently).
+RECONCILE_CHANNEL_TIMEOUT = 120   # seconds per channel
+RECONCILE_STALE_AFTER = 1200      # restart the loop if no heartbeat for this long
+
+
+_reconcile_task: Optional[asyncio.Task] = None
+
+
+_reconcile_heartbeat: float = time.time()
+
+
+def _chan_key(tg_channel_id) -> int:
+    try:
+        return database._normalize_tg_id_variants(tg_channel_id)[0]
+    except Exception:
+        return tg_channel_id
+
+
+def get_pending_event_count() -> int:
+    """Total number of userbot events queued or being relayed right now."""
+    return sum(_channel_pending.values())
+
+
+def _queued_floor(tg_channel_id) -> int:
+    """Highest post id already queued for this channel, while anything is still pending.
+
+    Once the queue has drained the floor no longer applies, so a post whose relay
+    failed is fetched again by the next reconciliation instead of being lost.
+    """
+    key = _chan_key(tg_channel_id)
+    if _channel_pending.get(key, 0) > 0:
+        return _channel_queued_max.get(key, 0)
+    return 0
+
+
 _is_starting_userbot = False
 
 
@@ -103,14 +171,42 @@ async def _resolve_userbot_entity(tg_id: int | None = None, username: str | None
     return entity
 
 
+class ReconcileResult:
+    """Outcome of reconciling one channel."""
+    __slots__ = ("queued", "missed", "capped", "error", "stale")
+
+    def __init__(self, queued=0, missed=0, capped=False, error=None, stale=0):
+        self.queued = queued    # posts put into the channel queue
+        self.missed = missed    # id gap between watermark and the newest post (deleted ids count too)
+        self.capped = capped    # gap was larger than one fetch; the rest comes next pass
+        self.error = error      # short reason when the history fetch failed
+        self.stale = stale      # queued posts older than STALE_MISS_AGE (never seen live)
+
+
+RECONCILE_FETCH_LIMIT = 100
+
+_ACCESS_REVOKED_MARKERS = ("UserBannedInChannelError", "ChannelPrivateError", "ChatAdminRequiredError", "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE", "Account is now banned")
+
+
+def _short_error(e: Exception) -> str:
+    text = str(e).strip()
+    return f"{type(e).__name__}: {text[:80]}" if text else type(e).__name__
+
+
 async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
     """
     Check a single bridged channel for missed posts, auto-join if needed, and queue catchup.
     Returns (messages_queued, total_missed).
     """
+    res = await reconcile_channel_detailed(chan, force=force)
+    return res.queued, res.missed
+
+
+async def reconcile_channel_detailed(chan: dict, force: bool = False) -> ReconcileResult:
+    """reconcile_channel() with the full outcome (cap, fetch error, stale count)."""
     import bot as _bot_module
     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
-        return 0, 0
+        return ReconcileResult()
 
     tg_id = chan.get('tg_channel_id')
     username = chan.get('tg_channel_username')
@@ -119,13 +215,13 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
     chan_db_id = chan.get('id')
 
     if not dc_chat_id:
-        return 0, 0
+        return ReconcileResult()
 
     entity = await _resolve_userbot_entity(tg_id, username, invite_link)
     if not entity:
         desc = f"@{username}" if username else str(tg_id)
         logger.warning(f"Reconciliation: Could not resolve entity for channel {desc} (ID: {tg_id})")
-        return 0, 0
+        return ReconcileResult(error="could not resolve channel")
 
     # Auto-join if userbot is not a member (so that MTProto live updates start arriving)
     is_user_or_bot = getattr(entity, 'bot', False) or (type(entity).__name__ in ('User', 'InputPeerUser', 'PeerUser'))
@@ -134,20 +230,17 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
             if JoinChannelRequest:
                 logger.info(f"Reconciliation: Userbot auto-joining channel {username or tg_id}...")
                 await asyncio.wait_for(_bot_module.userbot_client(JoinChannelRequest(entity)), timeout=15.0)
+                # Stats are refreshed here only after a join; the hourly
+                # sync_userbot_channels() keeps them current otherwise. Doing a
+                # GetFullChannel for every channel on every 3-minute pass caused
+                # flood waits.
                 if chan_db_id:
                     await _bot_module.update_tg_channel_stats(chan_db_id, entity)
         except Exception as join_e:
             err_str = str(join_e)
-            if any(k in err_str for k in ("UserBannedInChannelError", "ChannelPrivateError", "ChatAdminRequiredError", "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE", "Account is now banned")):
+            if any(k in err_str for k in _ACCESS_REVOKED_MARKERS):
                 asyncio.create_task(_handle_channel_access_revoked(tg_id or username, reason=err_str))
             logger.warning(f"Reconciliation: Userbot failed to join channel {username or tg_id}: {join_e}")
-
-    # Update channel metadata if we now have more info
-    if chan_db_id:
-        try:
-            await _bot_module.update_tg_channel_stats(chan_db_id, entity)
-        except Exception:
-            pass
 
     # Update numeric ID in DB if it was missing or resolved differently
     if not tg_id:
@@ -161,7 +254,7 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
             pass
 
     if not tg_id:
-        return 0, 0
+        return ReconcileResult()
 
     last_id = _get_cached_last_msg_id(tg_id)
 
@@ -170,13 +263,13 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
         history = await asyncio.wait_for(_bot_module.userbot_client.get_messages(entity, limit=1), timeout=15.0)
     except Exception as e:
         err_str = str(e)
-        if any(k in err_str for k in ("UserBannedInChannelError", "ChannelPrivateError", "ChatAdminRequiredError", "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE", "Account is now banned")):
+        if any(k in err_str for k in _ACCESS_REVOKED_MARKERS):
             asyncio.create_task(_handle_channel_access_revoked(tg_id or username, reason=err_str))
-        logger.warning(f"Reconciliation: Failed to get latest message for channel {username or tg_id}: {e}")
-        return 0, 0
+        logger.warning(f"Reconciliation: Failed to get latest message for channel {username or tg_id}: {_short_error(e)}")
+        return ReconcileResult(error=_short_error(e))
 
     if not history:
-        return 0, 0
+        return ReconcileResult()
 
     latest_msg = history[0]
     latest_id = latest_msg.id
@@ -185,32 +278,42 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
         # Initialize last_id to the latest post if not initialized yet
         logger.info(f"Reconciliation: Initializing channel {tg_id} (@{username}) last_msg_id to {latest_id}")
         _update_cached_last_msg_id(tg_id, latest_id)
-        return 0, 0
+        return ReconcileResult()
 
-    if latest_id <= last_id:
-        return 0, 0
+    # Posts already waiting in the channel queue are not "missed".
+    floor_id = max(last_id, _queued_floor(tg_id))
+    if latest_id <= floor_id:
+        return ReconcileResult()
 
-    missed_count = latest_id - last_id
-    fetch_limit = min(missed_count, 100)
-    logger.info(f"Reconciliation: Channel {tg_id} (@{username}) missed {missed_count} messages (last={last_id}, latest={latest_id}). Fetching {fetch_limit} oldest-first.")
+    missed_count = latest_id - floor_id
+    fetch_limit = min(missed_count, RECONCILE_FETCH_LIMIT)
+    logger.info(f"Reconciliation: Channel {tg_id} (@{username}) missed {missed_count} messages (last={last_id}, queued_up_to={floor_id}, latest={latest_id}). Fetching {fetch_limit} oldest-first.")
 
     # Fetch in ascending chronological order with reverse=True
     try:
         missed_msgs = await asyncio.wait_for(
-            _bot_module.userbot_client.get_messages(entity, min_id=last_id, limit=fetch_limit, reverse=True),
-            timeout=20.0
+            _bot_module.userbot_client.get_messages(entity, min_id=floor_id, limit=fetch_limit, reverse=True),
+            timeout=45.0
         )
     except Exception as e:
-        logger.warning(f"Reconciliation: Failed to fetch missed messages for {username or tg_id}: {e}")
-        return 0, missed_count
+        logger.warning(f"Reconciliation: Failed to fetch missed messages for {username or tg_id}: {_short_error(e)}")
+        return ReconcileResult(missed=missed_count, error=_short_error(e))
 
     queued = 0
+    stale = 0
+    now = time.time()
     if missed_msgs:
         for msg in sorted(missed_msgs, key=lambda m: m.id):
             if dc_chat_id and database.get_dc_msg_id(msg.id, tg_id, dc_chat_id):
                 logger.info(f"Reconciliation: Message {msg.id} in channel {tg_id} already exists in message_map, advancing watermark.")
                 _update_cached_last_msg_id(tg_id, msg.id)
                 continue
+            msg_date = getattr(msg, 'date', None)
+            try:
+                if msg_date is not None and now - msg_date.timestamp() > STALE_MISS_AGE:
+                    stale += 1
+            except Exception:
+                pass
             class MockEvent:
                 def __init__(self, message, cid):
                     self.message = message
@@ -218,7 +321,7 @@ async def reconcile_channel(chan: dict, force: bool = False) -> tuple[int, int]:
             await _bot_module._queue_userbot_event(tg_id, 'new', MockEvent(msg, tg_id))
             queued += 1
 
-    return queued, missed_count
+    return ReconcileResult(queued=queued, missed=missed_count, capped=missed_count > fetch_limit, stale=stale)
 
 
 async def run_channel_catchup(target: str | None = None, is_html: bool = False) -> str:
@@ -248,33 +351,52 @@ async def run_channel_catchup(target: str | None = None, is_html: bool = False) 
 
     results = []
     total_queued = 0
-    total_missed = 0
     caught_up_channels = 0
+    failed_channels = 0
 
     for chan in target_channels:
         tg_id = chan.get('tg_channel_id')
         username = chan.get('tg_channel_username')
         display_name = f"@{username}" if username else f"ID {tg_id}"
+        if is_html:
+            display_name = html.escape(display_name)
 
         try:
-            queued, missed = await reconcile_channel(chan, force=True)
-            if queued > 0:
-                caught_up_channels += 1
-                total_queued += queued
-                total_missed += missed
-                results.append(f"• {display_name}: queued {queued} missed posts (out of {missed})")
-            elif missed > 0:
-                results.append(f"• {display_name}: {missed} posts missed, but 0 queued")
+            res = await asyncio.wait_for(reconcile_channel_detailed(chan, force=True), timeout=RECONCILE_CHANNEL_TIMEOUT)
         except Exception as e:
-            results.append(f"• {display_name}: error {e}")
-        
+            res = ReconcileResult(error=_short_error(e))
+
+        if res.queued > 0:
+            caught_up_channels += 1
+            total_queued += res.queued
+            line = f"• {display_name}: {res.queued} queued"
+            if res.capped:
+                # The id gap also counts deleted posts, so it is only an upper bound.
+                line += f" (up to {res.missed - res.queued} more next pass)"
+            results.append(line)
+        elif res.error:
+            failed_channels += 1
+            err = html.escape(res.error) if is_html else res.error
+            results.append(f"• {display_name}: ⚠️ {err} (retried automatically)")
+        # A gap with nothing queued means the posts were deleted, filtered or
+        # already relayed; nothing to report.
+
         await asyncio.sleep(0.5)
 
+    pending = get_pending_event_count()
     summary_header = f"📡 **Catchup Finished** ({len(target_channels)} channels checked)\n" if not is_html else f"📡 <b>Catchup Finished</b> ({len(target_channels)} channels checked)\n"
-    if caught_up_channels == 0:
+    if caught_up_channels == 0 and failed_channels == 0:
         summary_body = "✅ All checked channels are already up to date." if not is_html else "✅ <i>All checked channels are already up to date.</i>"
     else:
-        summary_body = f"📥 Caught up {caught_up_channels} channel(s), queued {total_queued} missed posts.\n\n" + "\n".join(results)
+        summary_body = f"📥 {total_queued} missed posts queued in {caught_up_channels} channel(s)."
+        if failed_channels:
+            summary_body += f" {failed_channels} channel(s) failed."
+        if pending:
+            # Sending is capped by the global DC rate limit, so give an ETA.
+            from security import GLOBAL_DC_RATE_LIMIT, GLOBAL_DC_RATE_WINDOW
+            eta_min = max(1, round(pending * GLOBAL_DC_RATE_WINDOW / GLOBAL_DC_RATE_LIMIT / 60))
+            summary_body += f"\n⏳ {pending} posts waiting to be sent, ~{eta_min} min."
+        summary_body += "\n\n" + "\n".join(results)
 
     return summary_header + summary_body
 
@@ -282,12 +404,16 @@ async def run_channel_catchup(target: str | None = None, is_html: bool = False) 
 async def reconcile_channels_loop():
     """Periodically check all bridged channels for any missed messages."""
     import bot as _bot_module
+    global _reconcile_heartbeat
+    _reconcile_heartbeat = time.time()
     await asyncio.sleep(60)  # Wait 60 seconds on startup
     while True:
         try:
             if _bot_module.userbot_client and _bot_module.userbot_client.is_connected():
                 channels = database.get_all_channels()
+                stale_channels = []
                 for chan in channels:
+                    _reconcile_heartbeat = time.time()
                     if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
                         logger.info("Userbot disconnected during channel reconciliation. Aborting pass.")
                         break
@@ -295,22 +421,86 @@ async def reconcile_channels_loop():
                     tg_id = chan.get('tg_channel_id')
                     username = chan.get('tg_channel_username')
                     try:
-                        await reconcile_channel(chan)
+                        # Bounded, so one hanging Telegram request can't freeze the whole loop.
+                        res = await asyncio.wait_for(reconcile_channel_detailed(chan), timeout=RECONCILE_CHANNEL_TIMEOUT)
+                        if res.stale:
+                            stale_channels.append(f"@{username}" if username else str(tg_id))
                     except Exception as e:
                         err_str = str(e)
                         if "NoneType" in err_str or "disconnected" in err_str.lower() or "not connected" in err_str.lower():
                             logger.info(f"Userbot disconnected during channel reconciliation pass for channel {tg_id}: {e}. Aborting pass.")
                             break
-                        logger.warning(f"Reconciliation failed for channel {tg_id} (@{username}): {e}")
-                    
+                        logger.warning(f"Reconciliation failed for channel {tg_id} (@{username}): {_short_error(e)}")
+
                     # Small delay between channels to avoid rate limits
                     await asyncio.sleep(2.0)
-            
+
+                await _check_live_updates_stall(stale_channels)
+
             # Sleep 3 minutes before checking again
+            _reconcile_heartbeat = time.time()
             await asyncio.sleep(180)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Reconciliation loop error: {e}")
             await asyncio.sleep(60)
+
+
+async def _check_live_updates_stall(stale_channels: list[str]):
+    """Restart the userbot when reconciliation keeps finding posts that never arrived live.
+
+    Old posts missing in several channels while no live event came in at all
+    means Telethon's update loop is dead even though the connection is fine.
+    """
+    import bot as _bot_module
+    global _last_stall_restart_ts
+    now = time.time()
+    silent_for = now - _last_live_event_ts
+    if len(stale_channels) < STALL_MIN_CHANNELS or silent_for < STALL_NO_LIVE_SECONDS:
+        return
+    if now - _last_stall_restart_ts < STALL_RESTART_COOLDOWN:
+        return
+    _last_stall_restart_ts = now
+    sample = ", ".join(stale_channels[:5])
+    logger.warning(
+        f"Userbot live updates look stalled: no live event for {int(silent_for)}s, "
+        f"old missed posts in {len(stale_channels)} channels ({sample}). Restarting userbot."
+    )
+    admin_tg_id = database.get_config("admin_tg_id")
+    if admin_tg_id and _bot_module.tg_app:
+        try:
+            await _bot_module.tg_app.bot.send_message(
+                chat_id=int(admin_tg_id),
+                text=(f"🔄 <b>Userbot live updates stalled</b>\n"
+                      f"No live posts for {int(silent_for // 60)} min, but missed posts were found in "
+                      f"{len(stale_channels)} channels ({html.escape(sample)}).\n"
+                      f"Restarting the userbot; missed posts are re-fetched automatically."),
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify admin about userbot stall: {e}")
+    # Restarting drops queued events; their watermark was never advanced, so the
+    # next reconciliation pass fetches them again.
+    await _bot_module.start_userbot()
+
+
+def ensure_reconcile_loop():
+    """Start the reconciliation loop, or restart it if it died or stopped making progress."""
+    global _reconcile_task, _reconcile_heartbeat
+    task = _reconcile_task
+    if task is not None and not task.done():
+        stalled_for = time.time() - _reconcile_heartbeat
+        if stalled_for < RECONCILE_STALE_AFTER:
+            return
+        logger.warning(f"Reconciliation loop made no progress for {int(stalled_for)}s. Restarting it.")
+        task.cancel()
+    elif task is not None:
+        exc = None if task.cancelled() else task.exception()
+        logger.warning(f"Reconciliation loop task ended unexpectedly ({exc!r}). Restarting it.")
+    _reconcile_heartbeat = time.time()
+    # Keeping the reference also stops the task from being garbage-collected.
+    _reconcile_task = asyncio.create_task(reconcile_channels_loop())
 
 
 async def sync_userbot_channels(force=False):
@@ -477,7 +667,13 @@ async def _queue_userbot_event(tg_channel_id: int, event_type: str, event_data: 
     if tg_channel_id not in _channel_workers or _channel_workers[tg_channel_id].done():
         worker_task = asyncio.create_task(_channel_queue_worker(tg_channel_id))
         _channel_workers[tg_channel_id] = worker_task
-        
+
+    key = _chan_key(tg_channel_id)
+    _channel_pending[key] = _channel_pending.get(key, 0) + 1
+    if event_type == 'new':
+        msg_id = getattr(getattr(event_data, 'message', None), 'id', None)
+        if isinstance(msg_id, int) and msg_id > _channel_queued_max.get(key, 0):
+            _channel_queued_max[key] = msg_id
     await _channel_queues[tg_channel_id].put((event_type, event_data))
 
 
@@ -495,16 +691,28 @@ async def _channel_queue_worker(tg_channel_id: int):
                 _userbot_tasks.add(current_task)
             try:
                 if event_type == 'new':
-                    await _process_userbot_event_internal(event_data, is_edit=False)
+                    coro = _process_userbot_event_internal(event_data, is_edit=False)
                 elif event_type == 'edit':
-                    await _process_userbot_event_internal(event_data, is_edit=True)
+                    coro = _process_userbot_event_internal(event_data, is_edit=True)
                 elif event_type == 'delete':
-                    await _process_userbot_deletion_internal(event_data)
+                    coro = _process_userbot_deletion_internal(event_data)
+                else:
+                    coro = None
+                if coro is not None:
+                    await asyncio.wait_for(coro, timeout=EVENT_PROCESS_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(f"Queued {event_type} event for channel {tg_channel_id} took longer than {EVENT_PROCESS_TIMEOUT}s; skipping it.")
             except Exception as e:
                 logger.error(f"Error processing queued event for channel {tg_channel_id}: {e}")
             finally:
                 if current_task:
                     _userbot_tasks.discard(current_task)
+                key = _chan_key(tg_channel_id)
+                left = _channel_pending.get(key, 0) - 1
+                if left > 0:
+                    _channel_pending[key] = left
+                else:
+                    _channel_pending.pop(key, None)
                 queue.task_done()
     except asyncio.CancelledError:
         pass
@@ -637,7 +845,7 @@ async def _process_userbot_event_internal(event, is_edit=False):
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""
     import bot as _bot_module
-    global _userbot_tasks, _is_starting_userbot, _channel_workers, _channel_queues
+    global _userbot_tasks, _is_starting_userbot, _channel_workers, _channel_queues, _last_live_event_ts
     if not TelegramClient:
         return
     
@@ -662,6 +870,8 @@ async def start_userbot():
             await asyncio.gather(*_channel_workers.values(), return_exceptions=True)
             _channel_workers.clear()
             _channel_queues.clear()
+            _channel_pending.clear()
+            _channel_queued_max.clear()
 
         if _userbot_tasks:
             logger.info(f"Cancelling {len(_userbot_tasks)} pending Userbot tasks during restart...")
@@ -712,6 +922,8 @@ async def start_userbot():
         
         @_bot_module.userbot_client.on(tg_events.NewMessage())
         async def on_new_userbot_msg(event):
+            global _last_live_event_ts
+            _last_live_event_ts = time.time()
             asyncio.create_task(_process_userbot_event(event, is_edit=False))
             
         @_bot_module.userbot_client.on(tg_events.MessageEdited())
@@ -724,6 +936,7 @@ async def start_userbot():
 
         await asyncio.wait_for(_bot_module.userbot_client.start(), timeout=60.0)
         logger.info("Telethon Userbot client started successfully.")
+        _last_live_event_ts = time.time()
         
         # Auto-sync detection
         me = await asyncio.wait_for(_bot_module.userbot_client.get_me(), timeout=15.0)

@@ -30,7 +30,8 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Automatic Bridge Cleanup & Reconciliation Worker**: Automatic startup and daily background cleanup worker to detect and remove orphaned database records, purge empty duplicate bridges (`0 👤`) for the same Telegram chat, delete dead fallback ghost groups from Delta Chat, and reconcile broadcast channels.
 - **Automatic Transport Failover**: Link multiple mail relays to a single account. The bot automatically detects message delivery failures via raw core events, rotates `configured_addr` to the next transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
 - **Transport Statistics**: Detailed tracking of messages sent and received per relay, viewable via `/transports`.
-- **Rate Limiting & Safety**: Global outgoing limits and bulk-deletion protection with admin notifications.
+- **Rate Limiting & Safety**: Global outgoing limits (60 Delta Chat messages per minute) and bulk-deletion protection with admin notifications. The owner is notified about the send limit only when a real backlog builds up (30+ posts waiting), at most every 15 minutes, with an estimate of how long sending will take.
+- **Self-Healing Userbot**: Every 3 minutes all channels are checked for posts that never arrived live and those are fetched. Posts already waiting in the send queue are not fetched again. If missed posts keep turning up in several channels while no live post arrives for 15 minutes, Telegram's live update stream is considered stalled and the userbot restarts itself (the owner is notified). The check loop itself is supervised and restarted if it dies or hangs.
 - **Automatic Updates**: Self-updating via a simple script and cron job.
 - **Admin-Only Management**: Securely bridge channels and groups with restricted access.
 
@@ -389,7 +390,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/filters` — List active message filters.
 - `/filteradd <phrase>` — Add a keyword/phrase filter.
 - `/filterdel <id or phrase>` — Remove a message filter.
-- `/catchup [@channel]` — Catch up missed posts for a channel or all channels.
+- `/catchup [@channel]` — Catch up missed posts for a channel or all channels. The report lists how many posts were queued per channel, channels whose history could not be fetched (retried automatically), and how long sending the backlog will take.
 - `/userbotjoin <link>` — Join channel via Userbot (invite link support).
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/cleanup` — Clean up stale, duplicate & orphaned bridges.
