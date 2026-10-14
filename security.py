@@ -108,6 +108,70 @@ _dc_send_tokens_ts: float = time.monotonic()
 _dc_send_dispatcher: Optional[asyncio.Task] = None
 
 
+# Set when a new waiter arrives, so a group message doesn't sit out the
+# dispatcher's pause while channel posts are held back.
+_dc_send_wakeup: Optional[asyncio.Event] = None
+
+
+# The core sends its SMTP queue strictly in order, and after a relay rejection
+# it backs off with the rest of the queue waiting. A command reply sent while
+# hundreds of channel posts sit in that queue arrives many minutes late. So
+# channel posts are only handed to the core while few of the bridge's own
+# messages are still pending there; group messages and command replies are
+# never held back.
+CORE_OUTBOX_MAX_PENDING = 8
+
+
+CORE_OUTBOX_TRACK_TTL = 600   # stop waiting for a message the core sits on longer than this
+
+
+_core_outbox: collections.deque = collections.deque()   # (dc_msg_id, sent_at)
+
+
+# DC message states that mean "still in the core's outgoing queue".
+_DC_STATE_OUT_PREPARING = 18
+
+
+_DC_STATE_OUT_PENDING = 20
+
+
+def track_dc_outgoing(dc_msg_id) -> None:
+    """Remember a bridge message handed to the core, to measure the core's outbox."""
+    if isinstance(dc_msg_id, int) and dc_msg_id > 0:
+        _core_outbox.append((dc_msg_id, time.monotonic()))
+
+
+def _core_outbox_pending_count() -> int:
+    """How many tracked messages the core has not sent yet. Blocking RPC; run in a thread."""
+    import bot as _bot_module
+    now = time.monotonic()
+    dc = _bot_module.dc_bot_instance
+    keep = []
+    for msg_id, sent_at in list(_core_outbox):
+        if now - sent_at > CORE_OUTBOX_TRACK_TTL:
+            continue
+        try:
+            state = dc.rpc.get_message(_bot_module.dc_accid, msg_id).state
+        except Exception:
+            continue  # deleted or unreadable: not blocking anything
+        if state in (_DC_STATE_OUT_PREPARING, _DC_STATE_OUT_PENDING):
+            keep.append((msg_id, sent_at))
+    _core_outbox.clear()
+    _core_outbox.extend(keep)
+    return len(keep)
+
+
+async def _core_outbox_has_room() -> bool:
+    if len(_core_outbox) < CORE_OUTBOX_MAX_PENDING:
+        return True
+    try:
+        pending = await asyncio.to_thread(_core_outbox_pending_count)
+    except Exception as e:
+        logger.warning(f"Could not check the core outbox: {e}")
+        return True
+    return pending < CORE_OUTBOX_MAX_PENDING
+
+
 # Recent send timestamps, kept for diagnostics.
 _global_dc_send_times = collections.deque(maxlen=GLOBAL_DC_RATE_LIMIT)
 
@@ -132,17 +196,6 @@ def _refill_dc_send_tokens() -> None:
     rate = GLOBAL_DC_RATE_LIMIT / GLOBAL_DC_RATE_WINDOW
     _dc_send_tokens = min(float(DC_SEND_BURST), _dc_send_tokens + (now - _dc_send_tokens_ts) * rate)
     _dc_send_tokens_ts = now
-
-
-def _next_dc_send_waiter() -> Optional[asyncio.Future]:
-    """Oldest live waiter, group queue first. Drops waiters that were cancelled."""
-    for prio in (PRIORITY_GROUP, PRIORITY_CHANNEL):
-        q = _dc_send_waiters[prio]
-        while q and q[0].done():
-            q.popleft()
-        if q:
-            return q.popleft()
-    return None
 
 
 def _notify_owner_about_backlog() -> None:
@@ -176,23 +229,46 @@ def _notify_owner_about_backlog() -> None:
     asyncio.create_task(_bot_module.tg_app.bot.send_message(chat_id=admin_tg_id, text=notification, parse_mode='Markdown'))
 
 
+def _first_live_waiter(prio: int) -> Optional[asyncio.Future]:
+    q = _dc_send_waiters[prio]
+    while q and q[0].done():
+        q.popleft()
+    return q[0] if q else None
+
+
 async def _dc_send_dispatch_loop():
     """Hand out send tokens one by one while anyone is waiting, then exit."""
     global _dc_send_tokens, _dc_send_dispatcher
+    rate = GLOBAL_DC_RATE_LIMIT / GLOBAL_DC_RATE_WINDOW
     try:
-        while any(_dc_send_waiters.values()):
+        while True:
+            group = _first_live_waiter(PRIORITY_GROUP)
+            channel = _first_live_waiter(PRIORITY_CHANNEL)
+            if group is None and channel is None:
+                break
             _refill_dc_send_tokens()
-            if _dc_send_tokens >= 1:
-                fut = _next_dc_send_waiter()
-                if fut is None:
-                    continue
-                _dc_send_tokens -= 1
-                _global_dc_send_times.append(time.time())
-                fut.set_result(None)
+            if _dc_send_tokens < 1:
+                _notify_owner_about_backlog()
+                await asyncio.sleep((1 - _dc_send_tokens) / rate)
                 continue
-            _notify_owner_about_backlog()
-            rate = GLOBAL_DC_RATE_LIMIT / GLOBAL_DC_RATE_WINDOW
-            await asyncio.sleep((1 - _dc_send_tokens) / rate)
+            if group is not None:
+                fut = _dc_send_waiters[PRIORITY_GROUP].popleft()
+            else:
+                # Channel posts also wait until the core has worked off its outbox.
+                if not await _core_outbox_has_room():
+                    _notify_owner_about_backlog()
+                    _dc_send_wakeup.clear()
+                    try:
+                        await asyncio.wait_for(_dc_send_wakeup.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+                if channel.done():
+                    continue
+                fut = _dc_send_waiters[PRIORITY_CHANNEL].popleft()
+            _dc_send_tokens -= 1
+            _global_dc_send_times.append(time.time())
+            fut.set_result(None)
     finally:
         _dc_send_dispatcher = None
 
@@ -205,11 +281,15 @@ async def _wait_for_global_dc_rate_limit(priority: int = PRIORITY_GROUP):
     order of messages within a chat); PRIORITY_GROUP always goes before
     PRIORITY_CHANNEL.
     """
-    global _dc_send_dispatcher
+    global _dc_send_dispatcher, _dc_send_wakeup
     fut = asyncio.get_running_loop().create_future()
     _dc_send_waiters[priority].append(fut)
     if _dc_send_dispatcher is None or _dc_send_dispatcher.done():
+        # Created here so it belongs to the running event loop.
+        _dc_send_wakeup = asyncio.Event()
         _dc_send_dispatcher = asyncio.create_task(_dc_send_dispatch_loop())
+    else:
+        _dc_send_wakeup.set()
     try:
         await fut
     except asyncio.CancelledError:

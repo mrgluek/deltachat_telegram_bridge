@@ -44,6 +44,7 @@ from security import (
     _register_bot_initiated_delete,
     _consume_bot_initiated_delete,
     _wait_for_global_dc_rate_limit,
+    track_dc_outgoing,
     _edit_timestamps,
 )
 from live_locations import LIVE_LOCATIONS
@@ -1171,6 +1172,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await _wait_for_global_dc_rate_limit()
                     sent_msg_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                    track_dc_outgoing(sent_msg_id)
                 except Exception as e:
                     # If quoting failed because the message was deleted in DC, retry without the quote
                     if "does not exist" in str(e).lower() and "message" in str(e).lower():
@@ -1193,6 +1195,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         await _wait_for_global_dc_rate_limit()
                         sent_msg_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                        track_dc_outgoing(sent_msg_id)
                     else:
                         raise  # Re-raise other exceptions
                 

@@ -1,7 +1,8 @@
 import asyncio
 import time
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import bot  # noqa: F401  (sets up the module graph the same way as the bot)
 import security
@@ -14,6 +15,7 @@ class TestDcSendLimiter(unittest.TestCase):
         security._dc_send_dispatcher = None
         for q in security._dc_send_waiters.values():
             q.clear()
+        security._core_outbox.clear()
 
     def test_groups_go_before_channels_and_order_is_kept(self):
         order = []
@@ -67,6 +69,33 @@ class TestDcSendLimiter(unittest.TestCase):
 
         asyncio.run(scenario())
         self.assertEqual(got, [True])
+
+    def test_channel_posts_wait_for_core_outbox_groups_do_not(self):
+        # The core still has CORE_OUTBOX_MAX_PENDING bridge messages pending.
+        for i in range(security.CORE_OUTBOX_MAX_PENDING):
+            security.track_dc_outgoing(1000 + i)
+        pending_state = {"value": security._DC_STATE_OUT_PENDING}
+        dc = MagicMock()
+        dc.rpc.get_message.side_effect = lambda accid, mid: SimpleNamespace(state=pending_state["value"])
+        order = []
+
+        async def send(tag, prio):
+            await security._wait_for_global_dc_rate_limit(prio)
+            order.append(tag)
+
+        async def scenario():
+            with patch.object(bot, "dc_bot_instance", dc), patch.object(security, "GLOBAL_DC_RATE_LIMIT", 600), \
+                    patch.object(security, "_notify_owner_about_backlog", lambda: None):
+                ch = asyncio.create_task(send("channel", security.PRIORITY_CHANNEL))
+                await asyncio.sleep(0.3)
+                gr = asyncio.create_task(send("group", security.PRIORITY_GROUP))
+                await asyncio.sleep(0.3)
+                self.assertEqual(order, ["group"])  # channel post held back
+                pending_state["value"] = 26  # core delivered its outbox
+                await asyncio.wait_for(asyncio.gather(ch, gr), timeout=5)
+
+        asyncio.run(scenario())
+        self.assertEqual(order, ["group", "channel"])
 
 
 if __name__ == "__main__":
