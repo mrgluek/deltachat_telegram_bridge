@@ -72,7 +72,6 @@ from security import (
     GLOBAL_DC_RATE_LIMIT,
     GLOBAL_DC_RATE_WINDOW,
     _global_dc_send_times,
-    _global_dc_rate_limit_lock,
     _wait_for_global_dc_rate_limit,
     _processed_tg_msgs,
     DELETE_SYNC_MAX,

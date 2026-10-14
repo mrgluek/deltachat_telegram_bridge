@@ -70,19 +70,46 @@ def is_text_filtered(text: str | None) -> tuple[bool, str | None]:
     return False, None
 
 
-GLOBAL_DC_RATE_LIMIT = 60    # messages
+# Outgoing Delta Chat sends are paced by a token bucket, not a sliding window.
+# chatmail relays limit each sender with GCRA: max_user_send_per_minute = 60
+# and max_user_send_burst_size = 10. The old "60 per 60 s window" let up to 60
+# messages out at once, so the relay answered "450 4.7.1 Too much mail" after
+# the 10th and the core had to retry. 50/min (one every 1.2 s) with a burst of
+# 5 leaves headroom for the core's own SMTP traffic (sync messages, receipts).
+GLOBAL_DC_RATE_LIMIT = 50    # messages
 
 
 GLOBAL_DC_RATE_WINDOW = 60   # seconds
 
 
-_global_dc_send_times = collections.deque()
+DC_SEND_BURST = 5            # sends allowed back-to-back after an idle period
 
 
-_global_dc_rate_limit_lock = asyncio.Lock()
+# Two queues: bridged groups are conversations and go first; broadcast channel
+# posts (including catchup backlogs of hundreds of posts) wait behind them.
+PRIORITY_GROUP = 0
 
 
-_global_wait_counter = 0
+PRIORITY_CHANNEL = 1
+
+
+_dc_send_waiters: dict[int, collections.deque] = {
+    PRIORITY_GROUP: collections.deque(),
+    PRIORITY_CHANNEL: collections.deque(),
+}
+
+
+_dc_send_tokens: float = float(DC_SEND_BURST)
+
+
+_dc_send_tokens_ts: float = time.monotonic()
+
+
+_dc_send_dispatcher: Optional[asyncio.Task] = None
+
+
+# Recent send timestamps, kept for diagnostics.
+_global_dc_send_times = collections.deque(maxlen=GLOBAL_DC_RATE_LIMIT)
 
 
 _last_owner_notification_time = 0
@@ -94,58 +121,101 @@ RATE_LIMIT_NOTIFY_MIN_BACKLOG = 30   # posts waiting before the owner is told
 RATE_LIMIT_NOTIFY_INTERVAL = 900     # seconds between owner notifications
 
 
-async def _wait_for_global_dc_rate_limit():
-    """Ensures we don't exceed the global Delta Chat message rate limit."""
+def get_dc_send_waiting() -> dict[int, int]:
+    """Number of sends currently waiting for a token, per priority."""
+    return {prio: sum(1 for f in q if not f.done()) for prio, q in _dc_send_waiters.items()}
+
+
+def _refill_dc_send_tokens() -> None:
+    global _dc_send_tokens, _dc_send_tokens_ts
+    now = time.monotonic()
+    rate = GLOBAL_DC_RATE_LIMIT / GLOBAL_DC_RATE_WINDOW
+    _dc_send_tokens = min(float(DC_SEND_BURST), _dc_send_tokens + (now - _dc_send_tokens_ts) * rate)
+    _dc_send_tokens_ts = now
+
+
+def _next_dc_send_waiter() -> Optional[asyncio.Future]:
+    """Oldest live waiter, group queue first. Drops waiters that were cancelled."""
+    for prio in (PRIORITY_GROUP, PRIORITY_CHANNEL):
+        q = _dc_send_waiters[prio]
+        while q and q[0].done():
+            q.popleft()
+        if q:
+            return q.popleft()
+    return None
+
+
+def _notify_owner_about_backlog() -> None:
+    """Tell the owner about a real send backlog, at most every RATE_LIMIT_NOTIFY_INTERVAL."""
     import bot as _bot_module
-    global _global_dc_send_times, _global_wait_counter, _last_owner_notification_time
-    
-    _global_wait_counter += 1
+    global _last_owner_notification_time
+    now = time.time()
+    if now - _last_owner_notification_time <= RATE_LIMIT_NOTIFY_INTERVAL:
+        return
+    waiting = get_dc_send_waiting()
+    # Most of a channel backlog sits in the per-channel userbot queues, not here.
     try:
-        async with _global_dc_rate_limit_lock:
-            now = time.time()
-            # Remove timestamps older than the window
-            while _global_dc_send_times and now - _global_dc_send_times[0] > GLOBAL_DC_RATE_WINDOW:
-                _global_dc_send_times.popleft()
-            
-            if len(_global_dc_send_times) >= GLOBAL_DC_RATE_LIMIT:
-                # We hit the limit, wait until the oldest one expires
-                wait_time = GLOBAL_DC_RATE_WINDOW - (now - _global_dc_send_times[0])
-                if wait_time > 0:
-                    # _global_wait_counter only counts sends already blocked on this
-                    # lock; most of the backlog sits in the per-channel userbot queues.
-                    try:
-                        import userbot as _userbot_module
-                        backlog = _userbot_module.get_pending_event_count()
-                    except Exception:
-                        backlog = 0
-                    backlog = max(backlog, _global_wait_counter - 1)
+        import userbot as _userbot_module
+        pending = _userbot_module.get_pending_event_count()
+    except Exception:
+        pending = 0
+    backlog = max(pending, waiting[PRIORITY_CHANNEL]) + waiting[PRIORITY_GROUP]
+    if backlog < RATE_LIMIT_NOTIFY_MIN_BACKLOG:
+        return
+    admin_tg_id = database.get_config("admin_tg_id")
+    if not (admin_tg_id and _bot_module.tg_app):
+        return
+    _last_owner_notification_time = now
+    eta_min = max(1, round(backlog * GLOBAL_DC_RATE_WINDOW / GLOBAL_DC_RATE_LIMIT / 60))
+    notification = (
+        f"⏳ *Delta Chat send limit reached* ({GLOBAL_DC_RATE_LIMIT} msgs / {GLOBAL_DC_RATE_WINDOW}s)\n"
+        f"{backlog} posts are waiting, sending them takes ~{eta_min} min.\n"
+        f"Bridged groups are sent first, channel posts after them. Nothing is lost."
+    )
+    logger.info(f"DC send backlog: {backlog} waiting (groups: {waiting[PRIORITY_GROUP]}, channel events: {backlog - waiting[PRIORITY_GROUP]}).")
+    asyncio.create_task(_bot_module.tg_app.bot.send_message(chat_id=admin_tg_id, text=notification, parse_mode='Markdown'))
 
-                    # Notify the owner only about a real backlog, not every short
-                    # pause at the limit, and at most every RATE_LIMIT_NOTIFY_INTERVAL.
-                    admin_tg_id = database.get_config("admin_tg_id")
-                    if (admin_tg_id and _bot_module.tg_app
-                            and backlog >= RATE_LIMIT_NOTIFY_MIN_BACKLOG
-                            and now - _last_owner_notification_time > RATE_LIMIT_NOTIFY_INTERVAL):
-                        _last_owner_notification_time = now
-                        eta_min = max(1, round(backlog * GLOBAL_DC_RATE_WINDOW / GLOBAL_DC_RATE_LIMIT / 60))
-                        notification = (
-                            f"⏳ *Delta Chat send limit reached* ({GLOBAL_DC_RATE_LIMIT} msgs / {GLOBAL_DC_RATE_WINDOW}s)\n"
-                            f"{backlog} posts are waiting, sending them takes ~{eta_min} min.\n"
-                            f"Nothing is lost, posts arrive with a delay."
-                        )
-                        # Send notification in background to not block the relay
-                        asyncio.create_task(_bot_module.tg_app.bot.send_message(chat_id=admin_tg_id, text=notification, parse_mode='Markdown'))
 
-                    logger.info(f"Global DC rate limit reached. Waiting {wait_time:.2f}s (backlog: {backlog})...")
-                    await asyncio.sleep(wait_time + 0.1)
-                    # Re-clean after sleep
-                    now = time.time()
-                    while _global_dc_send_times and now - _global_dc_send_times[0] > GLOBAL_DC_RATE_WINDOW:
-                        _global_dc_send_times.popleft()
-            
-            _global_dc_send_times.append(time.time())
+async def _dc_send_dispatch_loop():
+    """Hand out send tokens one by one while anyone is waiting, then exit."""
+    global _dc_send_tokens, _dc_send_dispatcher
+    try:
+        while any(_dc_send_waiters.values()):
+            _refill_dc_send_tokens()
+            if _dc_send_tokens >= 1:
+                fut = _next_dc_send_waiter()
+                if fut is None:
+                    continue
+                _dc_send_tokens -= 1
+                _global_dc_send_times.append(time.time())
+                fut.set_result(None)
+                continue
+            _notify_owner_about_backlog()
+            rate = GLOBAL_DC_RATE_LIMIT / GLOBAL_DC_RATE_WINDOW
+            await asyncio.sleep((1 - _dc_send_tokens) / rate)
     finally:
-        _global_wait_counter -= 1
+        _dc_send_dispatcher = None
+
+
+async def _wait_for_global_dc_rate_limit(priority: int = PRIORITY_GROUP):
+    """Wait for a slot to send one Delta Chat message.
+
+    Sends are paced to GLOBAL_DC_RATE_LIMIT per window with bursts of at most
+    DC_SEND_BURST. Waiters of the same priority go in arrival order (keeps the
+    order of messages within a chat); PRIORITY_GROUP always goes before
+    PRIORITY_CHANNEL.
+    """
+    global _dc_send_dispatcher
+    fut = asyncio.get_running_loop().create_future()
+    _dc_send_waiters[priority].append(fut)
+    if _dc_send_dispatcher is None or _dc_send_dispatcher.done():
+        _dc_send_dispatcher = asyncio.create_task(_dc_send_dispatch_loop())
+    try:
+        await fut
+    except asyncio.CancelledError:
+        # A cancelled waiter is skipped by the dispatcher (fut.done() is True).
+        fut.cancel()
+        raise
 
 
 _processed_tg_msgs: dict[tuple[int, int, str], float] = {}

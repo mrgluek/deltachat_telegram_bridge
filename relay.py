@@ -21,7 +21,7 @@ import time
 import database
 from deltachat2 import MsgData
 
-from security import retry_async, is_text_filtered, _wait_for_global_dc_rate_limit
+from security import retry_async, is_text_filtered, _wait_for_global_dc_rate_limit, PRIORITY_GROUP, PRIORITY_CHANNEL
 from caching import (
     _is_media_group_processed,
     _update_cached_last_msg_id,
@@ -525,7 +525,9 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if file_path:
             msg_data.file = file_path
 
-        await _wait_for_global_dc_rate_limit()
+        # Broadcast channel posts queue behind bridged group messages.
+        send_priority = PRIORITY_CHANNEL if is_broadcast_channel else PRIORITY_GROUP
+        await _wait_for_global_dc_rate_limit(send_priority)
         sent_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
         if sent_id:
             c_hash = _get_content_hash(msg)
@@ -549,7 +551,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                             sub_data = MsgData(text=sub_cap, file=sub_img_path)
                             if display_author:
                                 sub_data.override_sender_name = display_author
-                            await _wait_for_global_dc_rate_limit()
+                            await _wait_for_global_dc_rate_limit(send_priority)
                             await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, sub_data)
                         except Exception as sub_err:
                             logger.warning(f"Failed to send follow-up userbot image {idx+1} for msg {msg.id}: {sub_err}")
