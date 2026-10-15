@@ -1,3 +1,10 @@
+## [2.29.1] - 2026-10-15
+- **Lost Group Messages Can Be Traced**: Messages from a bridged Telegram group could disappear without a single log line: several checks in the group handler (duplicate, sent by a bot, rate limit, empty message) returned silently, and the handler filter only accepted a fixed list of message types, so others never reached it. Now every group message is logged when it arrives (with its type and whether it is forwarded) and again when it is relayed or skipped, with the reason. Log lines for relayed and failed messages include the Telegram message ID.
+- **More Message Types From Groups**: All new group messages except service messages (joins, pins, title changes) reach the handler. Dice and games are shown as text; anything the bridge cannot show arrives as `[Unsupported Telegram message: <type>]` instead of being dropped.
+- **Watchdog for Group Message Processing**: The bot warns in the log when a group message is still being processed after 2 minutes, when no handler relayed it, or when Telegram updates are waiting while nothing gets processed. `/status` shows a new **Group messages** line with received / relayed / skipped counts since start and these problems.
+- **Clearer Health Check Log**: "Telegram Bot health check failed" now names the error type (it was empty for timeouts).
+- **License**: The project is now MIT licensed (`LICENSE`).
+
 ## [2.29.0] - 2026-10-14
 - **Channel Name and Avatar Changes Are Synced**: When a Telegram channel (or a group bridged via the Userbot) changes its title or photo, the bridge used to relay the service message as a post. It had no text or media, so subscribers got an empty message with only the `t.me` link. Now a new title renames the Delta Chat chat, a new photo replaces its avatar and a removed photo clears it, and the Delta Chat core shows its usual "name/image changed" notice. Other service messages (pinned posts, video chats, etc.) are skipped instead of arriving as empty links.
 

@@ -28,6 +28,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 - **Userbot Mode**: Bridge channels without needing administrator permissions.
 
 - **Watchdog & Polling Timeout Optimization**: Automatic detection and recovery from both Userbot and Telegram Bot API polling connection hangs. Configured tuned `get_updates_request` HTTP timeouts (`read_timeout=60s`, `connect_timeout=30s`) and log filters to suppress transient `httpcore.ConnectTimeout` errors during polling restarts and graceful shutdowns.
+- **Traceable Group Messages**: Every message from a bridged Telegram group gets one log line when it arrives (`Bot API: Received group msg …` with its type and whether it is forwarded) and one saying it was relayed or why it was skipped (duplicate, sent by a bot, rate limit, bot command, content filter, sending failed). Message types the bridge cannot show (e.g. a story without text) arrive as a short `[Unsupported Telegram message: …]` note instead of being dropped. A watchdog warns when a group message is still being processed after 2 minutes or when Telegram updates are waiting while nothing gets processed, and `/status` shows these counts.
 - **Automatic Bridge Cleanup & Reconciliation Worker**: Automatic startup and daily background cleanup worker to detect and remove orphaned database records, purge empty duplicate bridges (`0 👤`) for the same Telegram chat, delete dead fallback ghost groups from Delta Chat, and reconcile broadcast channels.
 - **Automatic Transport Failover**: Link multiple mail relays to a single account. The bot automatically detects message delivery failures via raw core events, rotates `configured_addr` to the next transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
 - **Relay Overview**: `/transports` shows which relay the Delta Chat core actually sends through (since core 2.61 that is the relay that last worked, not `configured_addr`), the core's send queue, and per relay the incoming connection status, when the last message arrived and mailbox storage usage.
@@ -396,7 +397,7 @@ Any Delta Chat user (not just admins) can use these commands in a private chat w
 - `/channelNqr` — Get the QR code image for channel #N (for easy sharing/onboarding).
 - `/cleanup` — Clean up stale, duplicate & orphaned bridges.
 - `/stats` — Show bridge statistics for the current chat.
-- `/status` — Show connection status and the Delta Chat send load (admin only). The **Send load** section shows what is waiting right now, how many bridge messages the core has not sent yet, sends this hour / last 24h / last 7 days as a share of the send limit (50/min = 3000/h), how long posts waited at the limit, the largest backlog, and the busiest chats. Hourly statistics are kept for 30 days. The verdict at the end (🟢 / 🟡 / 🔴) is based on normal busy hours (the top 10% of hours, so a single catchup does not count) and on daily time spent at the limit: 🔴 means it is time to move channels to a second bot account. A second transport on the same account does not add capacity, because the core sends through one relay at a time.
+- `/status` — Show connection status and the Delta Chat send load (admin only). The **Group messages** line counts messages from bridged Telegram groups since the bot started: received, relayed, skipped (with the most common reasons), and ⚠️ problems (not relayed, stuck over 2 minutes, update queue blocked). The **Send load** section shows what is waiting right now, how many bridge messages the core has not sent yet, sends this hour / last 24h / last 7 days as a share of the send limit (50/min = 3000/h), how long posts waited at the limit, the largest backlog, and the busiest chats. Hourly statistics are kept for 30 days. The verdict at the end (🟢 / 🟡 / 🔴) is based on normal busy hours (the top 10% of hours, so a single catchup does not count) and on daily time spent at the limit: 🔴 means it is time to move channels to a second bot account. A second transport on the same account does not add capacity, because the core sends through one relay at a time.
 - `/transports` — Show mail relays in the order the core tries them for sending. The first one is the relay the core currently sends through: it keeps using the relay that last worked and only moves to the next one when it cannot connect, so this can differ from the account's main address. Also shows the core's send queue (messages waiting and their retries; a message fails after 6 retries), and per relay the incoming connection status, when the last message arrived, mailbox storage usage and when it was added. The data comes from the core's connectivity report and a read-only look at the account database.
 - `/addtransport <addr>` — Add backup mail relay (private 1:1 chat only).
 - `/rmtransport <addr>` — Remove mail relay.
@@ -476,6 +477,10 @@ python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 Tests are also executed automatically via GitHub Actions on every push to the `master` branch.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
 
 ## Changelog
 

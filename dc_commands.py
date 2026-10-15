@@ -47,6 +47,7 @@ except ImportError:
 from formatting import get_dc_help_text, to_dc_markdown
 from security import _reload_filter_cache
 import security
+import group_watch
 import userbot
 from caching import _clear_dc_caches, _invalidate_dc_channel_cache, invalidate_channels_cache, _get_cached_last_msg_id
 from live_locations import LIVE_LOCATIONS
@@ -56,7 +57,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.29.0"
+VERSION = "2.29.1"
 dc_cli = BotCli("tgbridge")
 
 
@@ -1426,7 +1427,8 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
             f"🔌 <b>Bot API:</b> {tg_bot_status}\n"
             f"👤 <b>Userbot:</b> {ub_status}\n"
             f"📧 <b>Delta Chat:</b> {dc_status}\n\n"
-            f"📡 <b>Bridged:</b> {len(channels)} channels, {groups_count} groups\n\n"
+            f"📡 <b>Bridged:</b> {len(channels)} channels, {groups_count} groups\n"
+            f"💬 <b>Group messages:</b> {html.escape(group_watch.status_line())}\n\n"
             f"{send_load}\n\n"
             f"📝 <b>Recent Activity:</b>\n" + ("\n".join(activity_lines) if activity_lines else "None")
         )
@@ -1437,7 +1439,8 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
             f"🔌 **Bot API:** {tg_bot_status}\n"
             f"👤 **Userbot:** {ub_status}\n"
             f"📧 **Delta Chat:** {dc_status}\n\n"
-            f"📡 **Bridged:** {len(channels)} channels, {groups_count} groups\n\n"
+            f"📡 **Bridged:** {len(channels)} channels, {groups_count} groups\n"
+            f"💬 **Group messages:** {group_watch.status_line()}\n\n"
             f"{send_load}\n\n"
             f"📝 **Recent Activity:**\n" + ("\n".join(activity_lines) if activity_lines else "None")
         )

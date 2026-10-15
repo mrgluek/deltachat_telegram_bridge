@@ -8,7 +8,7 @@ from typing import Optional
 
 from deltachat2 import EventType, events
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler, ChatMemberHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler, ChatMemberHandler, TypeHandler
 
 try:
     from telethon import TelegramClient
@@ -37,6 +37,7 @@ logger = logging.getLogger("tg_dc_bridge")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import runtime_patches
+import group_watch
 runtime_patches.apply()
 from runtime_patches import _safe_telethon_reconnect, _custom_unraisablehook
 
@@ -778,6 +779,11 @@ async def main():
         .build()
     )
     tg_app.add_error_handler(tg_error_handler)
+    # Group -1 runs before and group 99 after all other handlers of an update:
+    # group_watch uses them to see when processing of a group message starts
+    # and ends, and logs messages that no handler relayed or that hang.
+    tg_app.add_handler(TypeHandler(Update, group_watch.on_update_start), group=-1)
+    tg_app.add_handler(TypeHandler(Update, group_watch.on_update_end), group=99)
     # Commands react to new messages only. CommandHandler also matches edited
     # messages by default, which re-ran a command whenever its message was
     # edited (and crashed on update.message being None).
@@ -838,14 +844,12 @@ async def main():
         filters.UpdateType.EDITED_CHANNEL_POST & (filters.TEXT | filters.CAPTION | filters.LOCATION),
         handle_tg_edited_channel_post
     ), group=1)
-    # Handler for group messages
+    # Handler for group messages. Every new message except service messages
+    # (joins, pins, title changes, ...) goes to the handler: a list of allowed
+    # types silently dropped everything not on it (stories, dice, paid media,
+    # contacts, ...). The handler shows types it cannot relay as a short note.
     tg_app.add_handler(MessageHandler(
-        filters.UpdateType.MESSAGE & (
-            filters.TEXT | filters.CAPTION | filters.PHOTO | filters.VIDEO |
-            filters.Document.ALL | filters.VOICE | filters.AUDIO |
-            filters.Sticker.ALL | filters.ANIMATION | filters.POLL |
-            filters.VIDEO_NOTE | filters.LOCATION | filters.VENUE
-        ),
+        filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL,
         handle_tg_message
     ), group=1)
     # Handler for edited group messages
@@ -957,7 +961,13 @@ async def main():
                         await asyncio.wait_for(tg_app.bot.get_me(), timeout=10.0)
                         is_tg_healthy = True
                 except Exception as e:
-                    logger.warning(f"Telegram Bot health check failed: {e}. Attempting polling restart...")
+                    logger.warning(f"Telegram Bot health check failed: {type(e).__name__}: {e}. Attempting polling restart...")
+
+                # Group messages that hang in processing or a blocked update queue
+                try:
+                    group_watch.check_stuck(tg_app.update_queue.qsize() if tg_app else 0)
+                except Exception as e:
+                    logger.warning(f"Group message watchdog failed: {e}")
                 
                 if not is_tg_healthy:
                     logger.info("Telegram Bot API polling is offline or unhealthy. Restarting polling...")

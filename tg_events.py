@@ -48,6 +48,7 @@ from security import (
     _edit_timestamps,
 )
 from live_locations import LIVE_LOCATIONS
+import group_watch
 from caching import (
     HISTORY_RELAY_COOLDOWN,
     get_history_cache,
@@ -954,24 +955,32 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_chat or not update.message:
         return
 
-    tg_chat_id = update.effective_chat.id
-    if _mark_processed(tg_chat_id, update.message.message_id):
-        return
-
     # Only bridge group chats
     if update.effective_chat.type == "private":
         return
 
+    tg_chat_id = update.effective_chat.id
+    # Every return below reports its reason to group_watch, which logs it, so a
+    # message that does not arrive in Delta Chat can be traced in the log.
+    if _mark_processed(tg_chat_id, update.message.message_id):
+        group_watch.note_outcome(update, "skipped", "duplicate update")
+        return
+
     # Skip messages from bots (including self) to prevent echo loops
     if update.message.from_user and update.message.from_user.is_bot:
+        group_watch.note_outcome(update, "skipped", "sent by a bot")
         return
 
     dc_chats = database.get_dc_chats(tg_chat_id)
-    if not dc_chats or not _bot_module.dc_bot_instance or not _bot_module.dc_accid:
+    if not dc_chats:
+        return  # group is not bridged (group_watch does not track it)
+    if not _bot_module.dc_bot_instance or not _bot_module.dc_accid:
+        group_watch.note_outcome(update, "skipped", "Delta Chat not ready")
         return
 
     # Rate limit check
     if _is_rate_limited(tg_chat_id):
+        group_watch.note_outcome(update, "skipped", "rate limit")
         return
 
     sender = update.message.from_user
@@ -983,6 +992,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Filter out commands ONLY if it's likely a bot command and not a post with media
     if text.startswith('/') and not update.message.photo and not update.message.video and not update.message.document:
+        group_watch.note_outcome(update, "skipped", "bot command")
         return
 
     # Inline hidden links so they are not lost in DC
@@ -1093,14 +1103,22 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loc_text = f"📍 Location: https://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
 
-    # Skip messages with no text and no media
+    if getattr(update.message, 'dice', None):
+        dice = update.message.dice
+        text = (text + f"\n\n{dice.emoji} {dice.value}").strip()
+
+    if getattr(update.message, 'game', None):
+        text = (text + f"\n\n🎮 Game: {update.message.game.title}").strip()
+
+    # Anything else (a type this bridge cannot show) still arrives as a short
+    # note instead of being dropped without a trace.
     if not text and not tg_file:
-        return
+        text = f"[Unsupported Telegram message: {group_watch.message_kind(update.message)}]"
 
     # Message content filter check
     filtered, matched_pat = is_text_filtered(text)
     if filtered:
-        logger.info(f"Bot API: Skipping group message {update.message.message_id} in {tg_chat_id} matching filter '{matched_pat}'")
+        group_watch.note_outcome(update, "skipped", f"content filter '{matched_pat}'")
         return
 
     # Check if this is a reply to another message
@@ -1149,6 +1167,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+    relayed_to = 0
     try:
         for dc_chat_id in dc_chats:
             try:
@@ -1204,9 +1223,14 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     database.save_message_map(sent_msg_id, dc_chat_id, update.message.message_id, tg_chat_id, content_hash=c_hash)
                 # Register in edit debounce so link-preview "edits" within 60s are suppressed
                 _edit_timestamps[(tg_chat_id, update.message.message_id)] = time.time()
-                logger.info(f"Relayed TG msg to DC chat {dc_chat_id}")
+                relayed_to += 1
+                logger.info(f"Relayed TG msg {update.message.message_id} from {tg_chat_id} to DC chat {dc_chat_id}")
             except Exception as e:
-                logger.error(f"Failed to relay msg to DC chat {dc_chat_id}: {e}")
+                logger.error(f"Failed to relay TG msg {update.message.message_id} from {tg_chat_id} to DC chat {dc_chat_id}: {e}")
+        if relayed_to:
+            group_watch.note_outcome(update, "relayed")
+        else:
+            group_watch.note_outcome(update, "skipped", "sending to Delta Chat failed")
     finally:
         # Clean up temp file
         if local_file_path and os.path.exists(local_file_path):
