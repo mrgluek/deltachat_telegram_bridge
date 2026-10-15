@@ -772,6 +772,15 @@ async def _process_userbot_event_internal(event, is_edit=False):
         return
 
     tg_channel_id = msg.chat_id
+    # Only channels bridged via the userbot are handled here, so check that
+    # before marking the message as processed: the mark is shared with the Bot
+    # API handlers, and marking a message of a Bot API-bridged group (the
+    # userbot is often a member too and usually sees it first) made the Bot
+    # API handler drop it as a "duplicate update".
+    if not _get_cached_dc_channel_chat_id(tg_channel_id) and not (
+            getattr(msg.chat, 'username', None)
+            and database.get_channel_by_tg_username(msg.chat.username)):
+        return
     if _mark_processed(tg_channel_id, msg.id):
         return
 

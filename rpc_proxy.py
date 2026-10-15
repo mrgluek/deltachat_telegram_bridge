@@ -9,6 +9,15 @@ import threading
 _download_semaphore = None
 
 
+# Long-polling RPC methods: they return only when the core has something new,
+# which can take minutes. They must not hold the lock, or every other RPC call
+# (e.g. send_msg from the asyncio loop) waits for the next core event and the
+# whole bridge freezes meanwhile. deltachat2's IOTransport is safe to call from
+# several threads (one writer thread, results matched by request id), so
+# running them unlocked is fine.
+_UNLOCKED_METHODS = frozenset({"get_next_event", "wait_next_msgs"})
+
+
 class RpcProxy:
     """Thread-safe proxy for Rpc to prevent race conditions on JSON-RPC stdin/stdout pipes."""
     def __init__(self, rpc_instance):
@@ -17,7 +26,7 @@ class RpcProxy:
 
     def __getattr__(self, name):
         attr = getattr(self._rpc, name)
-        if callable(attr):
+        if callable(attr) and name not in _UNLOCKED_METHODS:
             def wrapped(*args, **kwargs):
                 with self._lock:
                     return attr(*args, **kwargs)
