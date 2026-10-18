@@ -69,6 +69,8 @@ def init_db():
                     dc_chat_id INTEGER,
                     tg_chat_id INTEGER,
                     reactions_count INTEGER DEFAULT 0,
+                    created_by_tg_id INTEGER,
+                    created_at INTEGER DEFAULT (strftime('%s','now')),
                     PRIMARY KEY (dc_chat_id, tg_chat_id)
                 )
             ''')
@@ -234,7 +236,9 @@ def init_db():
             try:
                 col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
                 if 'created_at' not in col_names:
-                    cursor.execute("ALTER TABLE bridges ADD COLUMN created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))")
+                    # SQLite forbids non-constant defaults in ADD COLUMN, so backfill separately
+                    cursor.execute("ALTER TABLE bridges ADD COLUMN created_at INTEGER DEFAULT 0")
+                    cursor.execute("UPDATE bridges SET created_at = strftime(\'%s\',\'now\')")
             except Exception:
                 pass
             # Migration: add content_hash to message_map
