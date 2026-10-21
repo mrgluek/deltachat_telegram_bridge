@@ -1145,25 +1145,33 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not local_file_path:
             # Fallback (or first attempt if < 20MB) using regular Bot API
-            try:
+            tmp_fd, local_file_path_tmp = tempfile.mkstemp(suffix=suffix)
+            os.close(tmp_fd)
+
+            # get_file() is a network call too: retry it together with the
+            # download, otherwise one httpx.ConnectError blip loses the media.
+            async def _bot_api_download():
                 tg_file_obj = await tg_file.get_file()
-                tmp_fd, local_file_path_tmp = tempfile.mkstemp(suffix=suffix)
-                os.close(tmp_fd)
-                await retry_async(tg_file_obj.download_to_drive, custom_path=local_file_path_tmp)
+                await tg_file_obj.download_to_drive(custom_path=local_file_path_tmp)
+
+            try:
+                await retry_async(_bot_api_download)
                 local_file_path = local_file_path_tmp
-            except (TimeoutError, asyncio.TimeoutError):
-                logger.error(f"Timeout downloading file {file_name} after retries")
-                local_file_path = None
-                timeout_error_text = f"\n\n*[Failed to download media: {html.escape(file_name)} - timeout exceeded after retries]*"
             except Exception as e:
-                # If it's the "File is too big" error from Telegram
-                if "File is too big" in str(e) and not local_file_path:
-                    # Final attempt with Userbot if we haven't tried yet
+                try:
+                    os.unlink(local_file_path_tmp)
+                except OSError:
+                    pass
+                # Bot API failed for good (too big, or Telegram unreachable
+                # after retries): the userbot talks MTProto over a different
+                # connection, so it may still get the file.
+                if f_size <= 20 * 1024 * 1024:  # bigger files already went through the userbot above
                     local_file_path = await _download_via_userbot(tg_chat_id, update.message.message_id, suffix=suffix)
-                
                 if not local_file_path:
-                    logger.error(f"Failed to download TG file {file_name}: {e}")
-                    local_file_path = None
+                    logger.error(f"Failed to download TG file {file_name}: {type(e).__name__}: {e}")
+                    reason = "timeout exceeded after retries" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "download error"
+                    # Never relay a silent empty message: tell the DC side media was lost.
+                    timeout_error_text = f"\n\n*[Failed to download media: {html.escape(file_name)} - {reason}]*"
 
 
 
@@ -1180,7 +1188,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 formatted_msg = f"{chat_reply_prefix}{text}" if text else ""
                 formatted_msg = _truncate(formatted_msg, _bot_module.DC_MAX_MSG_LEN)
                 if timeout_error_text:
-                    formatted_msg += timeout_error_text
+                    # strip(): a caption-less photo would otherwise start with blank lines
+                    formatted_msg = (formatted_msg + timeout_error_text).strip()
 
                 msg_data = MsgData(text=formatted_msg)
                 msg_data.override_sender_name = sender_name

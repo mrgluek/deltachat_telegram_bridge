@@ -1,3 +1,6 @@
+## [2.29.4] - 2026-10-21
+- **Fix: Photos From Telegram Groups Arrived as Empty Messages**: When the Bot API connection blipped (`httpx.ConnectError`), the media download failed at once because only the file transfer was retried, not the `get_file` call before it. The message was then relayed with neither the file nor any text, so it showed up empty in Delta Chat. Now `get_file` and the download are retried together; if the Bot API still fails, the bridge tries the userbot. If that also fails, the message says `[Failed to download media: <name> - download error]` instead of arriving empty.
+
 ## [2.29.3] - 2026-10-18
 - **Fix: `/bridge` Failed With "no column named created_at"**: The database migration that adds `created_at` to the `bridges` table used a non-constant default (`strftime('%s','now')`), which SQLite does not allow in `ALTER TABLE ADD COLUMN`. The error was silently ignored, the column was never created, and creating a bridge failed. The column is now added with a constant default and existing bridges are backfilled with the current time; new databases create it directly.
 
