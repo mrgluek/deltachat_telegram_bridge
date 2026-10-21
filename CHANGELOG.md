@@ -1,3 +1,6 @@
+## [2.29.5] - 2026-10-21
+- **Fix: Error Reports to the Admin in Delta Chat Were Never Delivered**: Errors forwarded to the admin's Delta Chat went to a chat opened with `create_contact(admin address)`, the address-only contact, which current cores cannot send to (`e2e encryption unavailable`). The failure was swallowed silently, and the chat was not even cached (a missing `global`), so every report tried again and failed. Reports now go to the admin's contact with their key: the one with the fingerprint saved by `/initadmin`, otherwise the most recently seen key contact of the admin address. The chat is cached and resolved again after a failure; a report that still cannot be sent is written to stderr (`docker logs`) instead of disappearing.
+
 ## [2.29.4] - 2026-10-21
 - **Fix: Photos From Telegram Groups Arrived as Empty Messages**: When the Bot API connection blipped (`httpx.ConnectError`), the media download failed at once because only the file transfer was retried, not the `get_file` call before it. The message was then relayed with neither the file nor any text, so it showed up empty in Delta Chat. Now `get_file` and the download are retried together; if the Bot API still fails, the bridge tries the userbot. If that also fails, the message says `[Failed to download media: <name> - download error]` instead of arriving empty.
 

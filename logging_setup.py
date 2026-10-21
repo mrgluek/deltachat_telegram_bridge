@@ -17,6 +17,7 @@ import html
 import logging
 import queue
 import re
+import sys
 import threading
 import time
 from typing import Optional
@@ -132,28 +133,35 @@ def _enqueue_admin_dc_message(text: str):
         pass  # Drop if queue is full during error storms
 
 
+def _admin_dc_chat_id(bot, accid):
+    """1:1 chat with the admin's key contact (dc_helpers.admin_key_contact_id)."""
+    import dc_helpers  # lazy: logging is set up before the rest of the bot is imported
+    contact_id = dc_helpers.admin_key_contact_id(bot, accid)
+    return bot.rpc.create_chat_by_contact_id(accid, contact_id) if contact_id else None
+
+
 def _send_admin_dc_message_bg(text: str):
+    global _admin_dc_chat_id_cache
     import bot as _bot_module
     _, admin_dc_email = _get_cached_admin_targets()
-    if not (admin_dc_email and _bot_module.dc_bot_instance and _bot_module.dc_accid):
+    dc_bot, accid = _bot_module.dc_bot_instance, _bot_module.dc_accid
+    if not (admin_dc_email and dc_bot and accid):
         return
 
     with _admin_dc_chat_id_lock:
-        try:
-            if _admin_dc_chat_id_cache is None:
-                contact_id = _bot_module.dc_bot_instance.rpc.create_contact(_bot_module.dc_accid, admin_dc_email, "Admin")
-                _admin_dc_chat_id_cache = _bot_module.dc_bot_instance.rpc.create_chat_by_contact_id(_bot_module.dc_accid, contact_id)
-            
-            _bot_module.dc_bot_instance.rpc.send_msg(_bot_module.dc_accid, _admin_dc_chat_id_cache, MsgData(text=text))
-        except Exception:
-            _admin_dc_chat_id_cache = None
+        for attempt in (1, 2):
             try:
-                contact_id = _bot_module.dc_bot_instance.rpc.create_contact(_bot_module.dc_accid, admin_dc_email, "Admin")
-                chat_id = _bot_module.dc_bot_instance.rpc.create_chat_by_contact_id(_bot_module.dc_accid, contact_id)
-                _admin_dc_chat_id_cache = chat_id
-                _bot_module.dc_bot_instance.rpc.send_msg(_bot_module.dc_accid, chat_id, MsgData(text=text))
-            except Exception:
-                pass
+                if _admin_dc_chat_id_cache is None:
+                    _admin_dc_chat_id_cache = _admin_dc_chat_id(dc_bot, accid)
+                if _admin_dc_chat_id_cache is None:
+                    return
+                dc_bot.rpc.send_msg(accid, _admin_dc_chat_id_cache, MsgData(text=text))
+                return
+            except Exception as e:
+                _admin_dc_chat_id_cache = None  # resolve the chat again (the admin's key may have changed)
+                if attempt == 2:
+                    # stderr, not the logger: an error logged here would be forwarded again
+                    sys.stderr.write(f"Admin DC log forwarding failed: {e}\n")
 
 
 ADMIN_ALERT_THROTTLE_SECONDS = 3600

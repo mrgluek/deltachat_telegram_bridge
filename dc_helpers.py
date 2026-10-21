@@ -9,6 +9,7 @@ reasons documented in relay.py's module docstring.
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -154,6 +155,43 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
 
     except Exception as e:
         logger.error(f"Failed to run channels update: {e}")
+
+
+def admin_key_contact_id(bot, accid):
+    """The admin's contact WITH their key, for messages to the admin.
+
+    The core keeps an address-only contact and one contact per key for each address, and
+    lookup_contact_id_by_addr / create_contact give the address-only one: current cores cannot
+    send to it ("e2e encryption unavailable"), so admin notices were lost. The key contact with
+    the fingerprint saved by /initadmin is preferred, then the most recently seen key contact of
+    the admin address (another device of the admin), then the old lookup (older cores)."""
+    email = (database.get_config("admin_dc_email") or "").strip().lower()
+    if not email:
+        return None
+    admin_fp = re.sub(r"[^0-9A-F]", "", (database.get_admin_fingerprint() or "").upper())
+    try:
+        candidates = bot.rpc.get_contact_ids(accid, 0, email) or []
+    except Exception as e:
+        logger.debug(f"Could not list admin contacts: {e}")
+        candidates = []
+    key_contacts = []
+    for cid in candidates:
+        try:
+            c = bot.rpc.get_contact(accid, cid)
+            get_val = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+            if (get_val("address") or "").strip().lower() != email or not get_val("is_key_contact", False):
+                continue
+            if admin_fp and admin_fp in (_get_contact_fingerprint(bot, accid, cid, c) or "").split(","):
+                return cid
+            key_contacts.append((get_val("last_seen", 0) or 0, cid))
+        except Exception:
+            continue
+    if key_contacts:
+        return max(key_contacts)[1]
+    try:
+        return bot.rpc.lookup_contact_id_by_addr(accid, email) or None
+    except Exception:
+        return None
 
 
 def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
