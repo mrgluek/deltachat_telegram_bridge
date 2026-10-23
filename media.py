@@ -43,6 +43,23 @@ from formatting import (
 logger = logging.getLogger("tg_dc_bridge")
 
 
+def _sticker_file_info(is_animated: bool, is_video: bool) -> tuple[str, str]:
+    """File name and Delta Chat viewtype for a Telegram sticker.
+
+    Without an explicit viewtype the core guesses from the suffix and sends a
+    .webp as a plain image. "Sticker" makes it add `Chat-Content: sticker`, so
+    receivers show it as a sticker. Animated stickers (.tgs, gzipped Lottie)
+    are sent as stickers too; clients that can play Lottie (ArcaneChat) do.
+    Video stickers (.webm) arrive as video on the receiving side anyway (the
+    core only turns images into stickers), so they are sent as video.
+    """
+    if is_video:
+        return "sticker.webm", "Video"
+    if is_animated:
+        return "sticker.tgs", "Sticker"
+    return "sticker.webp", "Sticker"
+
+
 def _get_media_size(msg) -> int:
     """Helper to reliably extract media file size from a Telethon Message object."""
     if not (msg and msg.media):

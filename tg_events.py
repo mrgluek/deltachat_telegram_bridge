@@ -64,6 +64,7 @@ from caching import (
 )
 from formatting import _format_telegram_entities, _truncate, _format_poll_text
 from media import (
+    _sticker_file_info,
     _extract_public_tg_post,
     _download_image_url,
     _download_via_userbot,
@@ -440,6 +441,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     # Detect media
     tg_file = None
     file_name = None
+    dc_viewtype = None  # set for stickers, see _sticker_file_info
     if getattr(post, 'paid_media', None):
         star_count = getattr(post.paid_media, 'star_count', 0) or 0
         star_str = f" ({star_count} ⭐)" if star_count else ""
@@ -489,7 +491,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         file_name = post.document.file_name or "file"
     elif post.sticker:
         tg_file = post.sticker
-        file_name = "sticker.webp"
+        file_name, dc_viewtype = _sticker_file_info(tg_file.is_animated, tg_file.is_video)
     elif post.video_note:
         tg_file = post.video_note
         file_name = "video_note.mp4"
@@ -631,6 +633,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             msg_data.override_sender_name = author
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
+            if dc_viewtype:
+                msg_data.viewtype = dc_viewtype
         dc_msg_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
         if dc_msg_id:
             c_hash = _get_content_hash(post)
@@ -1014,6 +1018,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Detect media
     tg_file = None
     file_name = None
+    dc_viewtype = None  # set for stickers, see _sticker_file_info
     if getattr(update.message, 'paid_media', None):
         star_count = getattr(update.message.paid_media, 'star_count', 0) or 0
         star_str = f" ({star_count} ⭐)" if star_count else ""
@@ -1063,7 +1068,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_name = update.message.document.file_name or "file"
     elif update.message.sticker:
         tg_file = update.message.sticker
-        file_name = "sticker.webp"
+        file_name, dc_viewtype = _sticker_file_info(tg_file.is_animated, tg_file.is_video)
     elif update.message.video_note:
         tg_file = update.message.video_note
         file_name = "video_note.mp4"
@@ -1197,6 +1202,8 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     msg_data.quoted_message_id = dc_reply_id
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
+                    if dc_viewtype:
+                        msg_data.viewtype = dc_viewtype
                 try:
                     await _wait_for_global_dc_rate_limit()
                     sent_msg_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)

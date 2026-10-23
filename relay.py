@@ -30,6 +30,7 @@ from caching import (
 )
 from formatting import _format_telegram_entities, _format_poll_text, _truncate
 from rpc_proxy import _get_download_semaphore
+from media import _sticker_file_info
 
 import logging
 logger = logging.getLogger("tg_dc_bridge")
@@ -40,6 +41,73 @@ logger = logging.getLogger("tg_dc_bridge")
 # first-in-first-out, so holding it for the whole send keeps a text message
 # from overtaking an image that is still downloading or uploading.
 _tg_send_locks = {}
+
+
+# Telegram's send_sticker only takes these; other images are converted to WEBP.
+_TG_STICKER_SUFFIXES = ('.webp', '.tgs', '.webm')
+
+
+def _sticker_to_webp(file_path):
+    """Convert a PNG/JPG sticker to a WEBP that fits 512x512 (Telegram's
+    sticker size) and return the temp file path, or None if it fails."""
+    try:
+        from PIL import Image
+        tmp_fd, out_path = tempfile.mkstemp(suffix=".webp")
+        os.close(tmp_fd)
+        with Image.open(file_path) as img:
+            img = img.convert("RGBA")  # keep transparency
+            img.thumbnail((512, 512))
+            img.save(out_path, format="WEBP")
+        return out_path
+    except Exception as e:
+        logger.warning(f"Could not convert sticker {os.path.basename(file_path)} to WEBP: {e}")
+        return None
+
+
+async def _send_sticker_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id):
+    """Send a DC sticker as a real Telegram sticker. Stickers cannot have a
+    caption, so the sender name (and text, if any) follows as a silent reply
+    to the sticker. Returns the sticker message, or None so the caller falls
+    back to sending a photo."""
+    import bot as _bot_module
+    converted = None
+    if not file_path.lower().endswith(_TG_STICKER_SUFFIXES):
+        converted = _sticker_to_webp(file_path)
+        if not converted:
+            return None
+    try:
+        with open(converted or file_path, 'rb') as f:
+            sticker_msg = await retry_async(
+                _bot_module.tg_app.bot.send_sticker,
+                max_retries=3, delay=2.0, backoff=2.0,
+                chat_id=tg_chat_id, sticker=f, reply_to_message_id=tg_reply_id
+            )
+    except Exception as e:
+        logger.warning(f"Could not send DC msg {msg_id} as a sticker to TG chat {_bot_module._get_tg_chat_desc(tg_chat_id)}: {e}. Sending as photo instead.")
+        return None
+    finally:
+        if converted:
+            try:
+                os.unlink(converted)
+            except OSError:
+                pass
+
+    # Map the sticker before the name line, so lookups (replies from DC,
+    # edits) find the sticker first.
+    database.save_message_map(msg_id, dc_chat_id, sticker_msg.message_id, tg_chat_id)
+    try:
+        name_msg = await retry_async(
+            _bot_module.tg_app.bot.send_message,
+            max_retries=3, delay=2.0, backoff=2.0,
+            chat_id=tg_chat_id, text=formatted_msg, parse_mode='HTML',
+            reply_to_message_id=sticker_msg.message_id, disable_notification=True
+        )
+        # Map it too: a TG reply to the name line then quotes the sticker in
+        # DC, and deleting the sticker in DC removes both messages.
+        database.save_message_map(msg_id, dc_chat_id, name_msg.message_id, tg_chat_id)
+    except Exception as e:
+        logger.warning(f"Sent sticker for DC msg {msg_id} but not the sender name line: {e}")
+    return sticker_msg
 
 
 async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
@@ -69,7 +137,12 @@ async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg,
                 logger.warning(f"Timeout waiting for media to download for DC msg {msg_id} (chat {dc_chat_id})")
                 formatted_msg += "\n\n*[Failed to relay media: timeout waiting for DC download]*"
 
-        if file_path and os.path.exists(file_path):
+        if viewtype == 'Sticker' and file_path and os.path.exists(file_path):
+            tg_msg = await _send_sticker_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id)
+
+        if tg_msg:
+            pass  # already sent as a sticker
+        elif file_path and os.path.exists(file_path):
             filename = os.path.basename(file_path)
             try:
                 if is_image:
@@ -314,6 +387,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     
     file_path = None
     media_to_download = None
+    dc_viewtype = None  # set for stickers, see _sticker_file_info
     rich_post = None
     rich_mode = database.get_rich_mode()
 
@@ -506,12 +580,18 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         file_name = getattr(msg.file, 'name', '') if hasattr(msg, 'file') and msg.file else ""
         if not file_name:
             file_name = f"media_{msg.id}" + (getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg")
+        sticker_suffix = None
+        if getattr(msg, 'sticker', None):
+            # Telethon guesses no extension for .tgs, so derive it from the MIME type.
+            mime = getattr(msg.file, 'mime_type', '') or ''
+            file_name, dc_viewtype = _sticker_file_info(mime == 'application/x-tgsticker', mime == 'video/webm')
+            sticker_suffix = os.path.splitext(file_name)[1]
 
         if media_size > _bot_module.MAX_ATTACHMENT_SIZE:
             logger.warning(f"Userbot: Media in channel {tg_channel_id} (msg {msg.id}, file '{file_name}') is too large: {media_size // 1024 // 1024}MB > {_bot_module.MAX_ATTACHMENT_SIZE // 1024 // 1024}MB")
             formatted_msg += f"\n\n[Media is too large to be forwarded (limit {_bot_module.MAX_ATTACHMENT_SIZE // 1024 // 1024}MB)]"
         else:
-            suffix = getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg"
+            suffix = sticker_suffix or (getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg")
             tmp_fd, file_path_tmp = tempfile.mkstemp(suffix=suffix)
             os.close(tmp_fd)
 
@@ -582,6 +662,8 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         
         if file_path:
             msg_data.file = file_path
+            if dc_viewtype:
+                msg_data.viewtype = dc_viewtype
 
         # Broadcast channel posts queue behind bridged group messages.
         send_priority = PRIORITY_CHANNEL if is_broadcast_channel else PRIORITY_GROUP
