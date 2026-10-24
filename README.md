@@ -43,7 +43,7 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 - **Python 3.9+** (for local/venv setup)
 - **Telegram Bot token** (create a new bot and obtain one from [@BotFather](https://t.me/BotFather))
-- **Delta Chat account** (can be automatically created during setup by providing a valid email address, e.g. from one of [public chatmail relays](https://chatmail.at/relays), and a random password)
+- Optional: a **Delta Chat account** for the bot. Without one the bot creates its own chatmail account at first start; to choose it yourself, use an email account or one of the [public chatmail relays](https://chatmail.at/relays).
 
 ## Installation
 
@@ -63,14 +63,23 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 ## Setup and Running (Local / venv)
 
-1. **Initialize the Delta Chat account**
-   Configure your bot's Delta Chat account using `init dc`:
+1. **Configure Email and Admin (Optional)**
+   Skip the account step and the bot creates its account by itself at first `serve`: the Delta Chat core (2.62+) picks the fastest chatmail relay from its built-in list and later adds further relays in the background.
+
+   To choose the account yourself, initialize it with your email and password, or with `DCACCOUNT:server.tld` for an account on a specific chatmail relay:
 
    ```bash
    venv/bin/python bot.py init dc YOUR_DELTA_CHAT_EMAIL YOUR_EMAIL_PASSWORD
+   venv/bin/python bot.py init dc DCACCOUNT:server.tld
    ```
 
-   *This saves the account configuration locally, by default in your OS config directory under `tgbridge` (e.g. on linux it is located at `~/.config/tgbridge`, on macOS it is located at `~/Library/Application\ Support/tgbridge` etc).*
+   Set the admin address on the server, or skip this and later send `/initadmin` to the bot in a private chat: the first sender becomes the admin, bound to their address and cryptographic fingerprint.
+
+   ```bash
+   venv/bin/python bot.py init admin_dc admin@yourdomain.com
+   ```
+
+   *The account configuration is saved locally, by default in your OS config directory under `tgbridge` (e.g. on linux it is located at `~/.config/tgbridge`, on macOS it is located at `~/Library/Application\ Support/tgbridge` etc).*
 
 2. **Initialize the Telegram Token**
    Configure your bot's Telegram API token. You can pass it as an argument or enter it interactively to keep it out of your command history:
@@ -108,11 +117,15 @@ Built using `deltabot-cli-py` and `python-telegram-bot` (`asyncio`).
 
 Instead of using a local virtual environment, you can run the bot using Docker Compose:
 
-1. Initialise the database and accounts using `docker compose run`:
+1. Save the Telegram token, and optionally choose the Delta Chat account and admin, using `docker compose run`:
 
    ```bash
-   docker compose run --rm bridge python bot.py init dc me@example.com MyPassword
    docker compose run --rm bridge python bot.py init tg
+   # Optional: without an account the bot creates its own chatmail account at first start
+   docker compose run --rm bridge python bot.py init dc me@example.com MyPassword
+   docker compose run --rm bridge python bot.py init dc DCACCOUNT:server.tld
+   # Optional: set the admin on the server, or skip it and send /initadmin to the bot in a private chat
+   docker compose run --rm bridge python bot.py init admin_dc admin@yourdomain.com
    ```
 
 2. Start the bridge:
@@ -163,11 +176,17 @@ docker compose up -d
 
 ## Automatic Updates
 
-The repository includes an `update.sh` script that automates the update process. It performs the following steps:
+The repository includes an `update.sh` script that deploys the newest release: the highest `vX.Y.Z` tag, from GitHub or, when GitHub is unreachable, from the Forgejo mirror. If it differs from the checked-out commit, the script switches to it, rebuilds the Docker container (`--build`) and cleans up old images; `-f` rebuilds the container without changes. Commits on `master` that are not released yet are not deployed.
 
-1. Runs `git fetch` to check for new commits on the remote repository.
-2. Compares the local version with the remote version.
-3. If new changes are found, it runs `git pull`, rebuilds the Docker container (`--build`), and cleans up old images.
+Options in `.env.local` (next to `update.sh`):
+
+- `UPDATE_REF=v2.30.0` stays on that release (to roll back; remove it to follow new releases again).
+- `UPDATE_REF=master` follows the branch instead of releases.
+- `MONITOR_URL=https://...` pings a healthcheck on start, success and failure.
+
+### Releasing
+
+Merge into `master`, then tag the merge commit: `git tag -a vX.Y.Z -m "..." <commit> && git push origin vX.Y.Z`. The tag must match `VERSION` in `dc_commands.py`. Pushing it publishes the GitHub release with that version's `CHANGELOG.md` section and notifies ntfy and the Home Assistant add-on repository.
 
 ### Setting up a Cron Job
 
