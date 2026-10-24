@@ -1,3 +1,24 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.31.0] - 2026-10-24
+
+### Added
+- **Automatic Account Creation**: `serve` without a configured Delta Chat account no longer exits with "There are no configured accounts to serve". The bot asks the core (`init_transports`, core 2.62+) to create an account on the fastest chatmail relay of its built-in list; the core adds further relays in the background. The new address is logged. If creation fails, the error is logged and the bridge now exits so that the container restart tries again (before, the Telegram side kept running without Delta Chat whenever the Delta Chat bot could not start). `bot.py init dc <addr> <password>` and `bot.py init dc DCACCOUNT:server.tld` still choose the account explicitly.
+
+### Changed
+- **The server runs releases, not the tip of `master`.** `update.sh` deploys the newest `vX.Y.Z` tag, so a merge into `master` reaches the server only once it is released; several PRs can go out together. `UPDATE_REF` in `.env.local` pins a release (`UPDATE_REF=v2.30.0` - a rollback; empty again = newest) or follows a branch as before (`UPDATE_REF=master`). A release tag moved on GitHub or Forgejo makes the update fail instead of deploying the changed code. Errors that stopped the script with a message (both remotes unreachable, an unknown `UPDATE_REF`) now also ping the healthcheck's `/fail`, not only failed commands. The script now runs as one function, so the `git reset` that rewrites `update.sh` cannot confuse the running copy.
+- **Releases are published by a tag** (new `.github/workflows/release.yml`): pushing `vX.Y.Z` checks that `dc_commands.py` has that version, creates the GitHub release with the version's section of this file as its notes (an existing release is left alone), then sends the ntfy notification and the `bot-updated` dispatch to `hass-addons-deltachat` (now with `"version"` in the payload). Both used to go out on every push to `master` (`tg-bridge-changelog.yml`, removed), so Home Assistant users got unreleased code.
+- Releasing: merge, then `git tag -a vX.Y.Z -m "..." <commit> && git push origin vX.Y.Z`.
+- **Upgrading:** tag `v2.31.0` right after merging this. Until then the new `update.sh` would deploy `v2.30.0`, which still has the old script that follows `master` - and the server would switch back and forth on every run.
+
+### Fixed
+- **`bot.py init dc DCACCOUNT:server.tld`**: It asked for a password, and leaving it empty passed a broken argument list to the account setup, which then failed. A `DCACCOUNT:` URI no longer asks for a password.
+
 ## [2.30.0] - 2026-10-23
 - **Telegram Stickers Arrive as Stickers**: Stickers from Telegram were sent to Delta Chat without a message type, so the core guessed from the `.webp` suffix and sent them as plain images. They are now sent as stickers (Bot API groups and channels, and the userbot). Animated stickers used to be saved as `sticker.webp` although they are Lottie files and arrived as broken images; they are now sent as `.tgs` stickers, which clients with Lottie support (ArcaneChat) can play. Video stickers are sent as `.webm` video, since receiving cores turn only images into stickers.
 - **Delta Chat Stickers Sent as Telegram Stickers**: Stickers from Delta Chat went to Telegram as photos (losing transparency; `.tgs` stickers failed and only the name arrived). They are now sent with `send_sticker`; PNG/JPG stickers are converted to WEBP (max 512×512). A sticker cannot have a caption, so the sender name (and text, if any) follows as a silent reply to the sticker; both messages are mapped to the Delta Chat message, so deleting it in Delta Chat removes both. If Telegram rejects the sticker, it is sent as a photo as before.

@@ -1,9 +1,21 @@
 #!/bin/bash
-set -e
+set -eE  # -E: the ERR trap below also fires inside main()
 cd "$(dirname "$0")"
 
 # Prevent git from hanging on interactive credentials prompt
 export GIT_TERMINAL_PROMPT=0
+
+# Deploys the newest release: the highest vX.Y.Z tag, not the tip of master, so
+# only what was explicitly released reaches the server. In .env.local:
+#   UPDATE_REF=v2.30.0   stay on that release (roll back; empty = newest again)
+#   UPDATE_REF=master    follow a branch instead, as before releases
+# A tag that was moved on the remote makes the fetch fail ("would clobber
+# existing tag"): released versions do not change, so check before deleting
+# the local tag.
+
+# The whole script is one function: bash reads a script while running it, and
+# the git reset below rewrites this file.
+main() {
 
 # --- HEALTHCHECKS SUPPORT ---
 # Create a .env.local file in this directory to enable monitoring:
@@ -13,10 +25,13 @@ export GIT_TERMINAL_PROMPT=0
 hc_ping() {
     [ -n "$MONITOR_URL" ] && curl -fsS -m 10 --retry 5 -o /dev/null "${MONITOR_URL}${1:-}" || true
 }
+fail() {
+    echo "❌ ERROR: $*"
+    hc_ping /fail
+    exit 1
+}
 trap 'hc_ping /fail' ERR
 hc_ping /start
-
-
 
 # --- BACKUP REMOTE ---
 BACKUP_REMOTE_URL="https://git.gluek.info/gluek/deltachat_telegram_bridge"
@@ -31,37 +46,35 @@ echo "Checking for updates..."
 # --- FALLBACK LOGIC ---
 ACTIVE_REMOTE=""
 
-if git fetch origin; then
+if git fetch --tags origin; then
     ACTIVE_REMOTE="origin"
     echo "✅ GitHub (origin) is reachable."
-elif git fetch backup; then
+elif git fetch --tags backup; then
     ACTIVE_REMOTE="backup"
     echo "⚠️ GitHub unreachable. Using Forgejo (backup) instead."
 else
-    echo "❌ ERROR: Both GitHub and Forgejo are unreachable!"
-    exit 1
+    fail "Both GitHub and Forgejo are unreachable (or a release tag was moved, see above)!"
 fi
 
-# --- BRANCH DETECTION ---
-# Follow the checked-out branch (falling back to main/master), never just the first
-# remote branch alphabetically: leftover PR branches such as origin/claude/* sort
-# before origin/master and would otherwise be deployed instead of it.
-REMOTE_REF=""
-for b in "$(git symbolic-ref --short -q HEAD || true)" main master; do
-    if [ -n "$b" ] && git rev-parse --verify --quiet "refs/remotes/$ACTIVE_REMOTE/$b" >/dev/null; then
-        REMOTE_REF="$ACTIVE_REMOTE/$b"
-        break
+# --- WHAT TO DEPLOY ---
+if [ -z "$UPDATE_REF" ]; then
+    TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+    if [ -z "$TAG" ]; then
+        fail "No release tag (vX.Y.Z) found."
     fi
-done
-
-if [ -z "$REMOTE_REF" ]; then
-    echo "❌ ERROR: Could not detect a valid remote branch for $ACTIVE_REMOTE."
-    exit 1
+    TARGET="refs/tags/$TAG"
+    WHAT="release $TAG"
+elif git rev-parse --verify --quiet "refs/tags/$UPDATE_REF^{commit}" >/dev/null; then
+    TARGET="refs/tags/$UPDATE_REF"
+    WHAT="release $UPDATE_REF (pinned by UPDATE_REF)"
+elif git rev-parse --verify --quiet "refs/remotes/$ACTIVE_REMOTE/$UPDATE_REF" >/dev/null; then
+    TARGET="refs/remotes/$ACTIVE_REMOTE/$UPDATE_REF"
+    WHAT="branch $UPDATE_REF on $ACTIVE_REMOTE (UPDATE_REF)"
+else
+    fail "UPDATE_REF=$UPDATE_REF is neither a tag nor a branch on $ACTIVE_REMOTE."
 fi
 
-REMOTE=$(git rev-parse $REMOTE_REF)
-BRANCH_NAME=${REMOTE_REF#$ACTIVE_REMOTE/}
-
+REMOTE=$(git rev-parse "$TARGET^{commit}")
 LOCAL=$(git rev-parse HEAD)
 
 FORCE=false
@@ -73,14 +86,18 @@ if [ "$LOCAL" != "$REMOTE" ] || [ "$FORCE" = true ]; then
     if [ "$FORCE" = true ]; then
         echo "🔄 Force update requested."
     else
-        echo "🆕 New changes detected on $ACTIVE_REMOTE ($BRANCH_NAME). Updating..."
-        git reset --hard $REMOTE_REF
+        echo "🆕 Deploying $WHAT..."
+        git reset --hard "$REMOTE"
     fi
     docker compose up -d --build
     docker image prune -f
-    echo "✅ Updated, restarted, and cleaned up old images."
+    echo "✅ Updated, restarted, and cleaned up old images: $(git describe --tags --always)."
 else
-    echo "✅ Already up to date (via $ACTIVE_REMOTE). Use -f to force rebuild."
+    echo "✅ Already on $WHAT (via $ACTIVE_REMOTE). Use -f to force rebuild."
 fi
 
 hc_ping
+}
+
+main "$@"
+exit

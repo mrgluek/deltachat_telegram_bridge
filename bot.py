@@ -322,10 +322,34 @@ userbot_client = None
 # ---------------------------------------------------------
 
 
+def ensure_configured_account(bot, args) -> None:
+    """On `serve` without a configured account, let the core create one on a relay it picks.
+
+    init_transports (core 2.62+) with no QR code probes the core's built-in chatmail relay list,
+    configures the fastest one and later adds further relays in the background, so a new bot needs
+    no `init dc` step. An explicit `bot.py init dc <addr|DCACCOUNT:...>` still works and takes precedence."""
+    if getattr(getattr(args, "cmd", None), "__name__", "") != "_serve_cmd":
+        return
+    accids = [args.account] if getattr(args, "account", None) else bot.rpc.get_all_account_ids()
+    if any(bot.rpc.is_configured(a) for a in accids):
+        return
+    accid = accids[0] if accids else bot.rpc.add_account()
+    bot.logger.info("No configured account: creating one on a chatmail relay chosen by the core...")
+    try:
+        bot.rpc.set_config(accid, "bot", "1")
+        bot.rpc.init_transports(accid, None)
+        addr = bot.rpc.get_config(accid, "configured_addr")
+        bot.logger.info(f"Account created: {addr}")
+    except Exception as e:
+        # serve then exits with "no configured accounts" and the container restart retries
+        bot.logger.error(f"Automatic account creation failed: {e}")
+
+
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
     _make_rpc_thread_safe(bot)
     bot.logger.info("Initializing Delta Chat tgbridge...")
+    ensure_configured_account(bot, args)
     
     # Ensure our error handler is attached to the bot's own logger
     bot.logger.addHandler(admin_handler)
@@ -908,10 +932,18 @@ async def main():
     last_tg_bot_check = time.time()
     
     logger.info(f"Bridge v{VERSION} is now fully running. Waiting for events...")
+    dc_stopped = False
     try:
         while True:
             await asyncio.sleep(10)
             now = time.time()
+
+            # serve only returns when it could not start (e.g. no configured account and the
+            # automatic account creation failed): exit so the container restart tries again
+            if dc_task.done():
+                logger.error("Delta Chat bot stopped. Exiting so that the bridge is restarted.")
+                dc_stopped = True
+                break
             
             # Watchdog for Userbot (check connectivity every 60 seconds)
             if (now - last_userbot_check) > 60:
@@ -1006,6 +1038,8 @@ async def main():
     await tg_app.stop()
     await tg_app.shutdown()
     logger.info("Shutdown complete.")
+    if dc_stopped:
+        sys.exit(1)
 
 
 def run_cli():
@@ -1035,9 +1069,9 @@ def run_cli():
                 email = input("Delta Chat email: ").strip()
                 password = getpass.getpass("Password (input will be hidden): ").strip()
                 new_args = [email, password] if password else [email]
-            elif len(new_args) < 2:
+            elif len(new_args) < 2 and not new_args[0].startswith("DCACCOUNT:"):
                 password = getpass.getpass("Password (input will be hidden): ").strip()
-                new_args = [new_args[0], password] if password else [new_args]
+                new_args = [new_args[0], password] if password else [new_args[0]]
 
             name = input("Bot display name (default: TG Bridge): ").strip()
             if name:
@@ -1140,7 +1174,7 @@ def run_cli():
             sys.exit(0)
         else:
             print("Usage:")
-            print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account")
+            print("  python bot.py init dc <email> [password]  - Initialize Delta Chat account (or DCACCOUNT:server.tld)")
             print("  python bot.py init tg [token]             - Initialize Telegram bot token")
             print("  python bot.py init admin_tg <tg_id>       - Set Admin Telegram ID for error logs")
             print("  python bot.py init admin_dc <email>       - Set Admin Delta Chat email (resets fingerprint)")
