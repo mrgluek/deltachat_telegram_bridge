@@ -57,7 +57,9 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.31.0"
+VERSION = "2.32.0"
+# Attachments over 64 KB are only downloaded for bridged groups (see dc_events)
+DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("tgbridge")
 
 

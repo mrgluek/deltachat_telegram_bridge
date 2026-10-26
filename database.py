@@ -292,6 +292,15 @@ def init_db():
             ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tg_post_cache_created ON telegram_post_cache (created_at)')
 
+            # DC messages of bridged chats whose large attachment is being downloaded before the relay
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS pending_downloads (
+                    dc_msg_id INTEGER PRIMARY KEY,
+                    dc_chat_id INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+            ''')
+
             conn.commit()
         finally:
             conn.close()
@@ -457,6 +466,50 @@ def remove_bridge_pair(dc_chat_id: int, tg_chat_id: int) -> bool:
             deleted = cursor.rowcount > 0
             conn.commit()
             return deleted
+        finally:
+            conn.close()
+
+def add_pending_download(dc_msg_id: int, dc_chat_id: int):
+    with _lock:
+        conn = _connect()
+        try:
+            conn.cursor().execute(
+                "INSERT OR REPLACE INTO pending_downloads (dc_msg_id, dc_chat_id, created_at) VALUES (?, ?, ?)",
+                (dc_msg_id, dc_chat_id, int(time.time())))
+            conn.commit()
+        finally:
+            conn.close()
+
+def is_pending_download(dc_msg_id: int) -> bool:
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM pending_downloads WHERE dc_msg_id = ?", (dc_msg_id,))
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+def pop_pending_download(dc_msg_id: int) -> bool:
+    """Removes the entry; True only for the one caller that removed it (so a message is relayed once)."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pending_downloads WHERE dc_msg_id = ?", (dc_msg_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+def get_pending_downloads() -> list[tuple[int, int, int]]:
+    """(dc_msg_id, dc_chat_id, created_at) of all messages still waiting for their attachment."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT dc_msg_id, dc_chat_id, created_at FROM pending_downloads")
+            return cursor.fetchall()
         finally:
             conn.close()
 

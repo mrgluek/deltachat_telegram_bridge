@@ -60,6 +60,21 @@ def _sticker_file_info(is_animated: bool, is_video: bool) -> tuple[str, str]:
     return "sticker.webp", "Sticker"
 
 
+def _userbot_sticker_info(msg) -> tuple[str, str] | None:
+    """_sticker_file_info for a Telethon message that is a sticker, else None.
+
+    Only a message whose own media is a document can be one: Telethon's
+    msg.sticker also looks at the document of a link preview, so a channel post
+    whose link preview was downloaded as a photo went out as a sticker
+    ("sticker.webp", viewtype Sticker) - @airfield1972/6643 on 2026-10-26.
+    Telethon guesses no extension for .tgs, so the kind comes from the MIME type.
+    """
+    if type(getattr(msg, "media", None)).__name__ != "MessageMediaDocument" or not getattr(msg, "sticker", None):
+        return None
+    mime = getattr(getattr(msg, "file", None), "mime_type", "") or ""
+    return _sticker_file_info(mime == "application/x-tgsticker", mime == "video/webm")
+
+
 def _get_media_size(msg) -> int:
     """Helper to reliably extract media file size from a Telethon Message object."""
     if not (msg and msg.media):

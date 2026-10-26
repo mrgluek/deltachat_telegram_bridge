@@ -173,6 +173,8 @@ docker compose up -d
 
 *Note: The local message retention duration (`DELETE_DEVICE_AFTER`) is applied to all active Delta Chat accounts on startup.*
 
+*Attachments over 64 KB are not downloaded automatically (`download_limit`). In bridged groups the bridge downloads a large attachment itself and relays the message to Telegram once the file is there (a few seconds later than its text arrived); if the download fails or takes over 2 minutes, the text goes with a note `📎 [attachment could not be downloaded]`. In groups that are not bridged (where the bot only expands Telegram links) large photos and videos are no longer downloaded: about 97 MB a day on the main instance.*
+
 
 ## Automatic Updates
 

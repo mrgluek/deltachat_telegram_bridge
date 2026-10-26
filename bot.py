@@ -234,6 +234,7 @@ MAX_ATTACHMENT_SIZE = int(os.environ.get("MAX_ATTACHMENT_SIZE_MB", "50")) * 1024
 db_lock = threading.Lock()
 
 from dc_commands import (
+    DOWNLOAD_LIMIT,
     VERSION,
     dc_cli,
     setprimary_command,
@@ -276,6 +277,7 @@ from dc_events import (
     handle_dc_message_changed,
     handle_dc_msg_deleted,
     handle_dc_reaction,
+    resume_pending_downloads,
     setup_custom_command_parser,
 )
 _dc_cli_hooks_registered = False
@@ -382,6 +384,10 @@ def on_init(bot, args):
         # Configure local message retention policy (in seconds, default: 7 days)
         delete_after = os.environ.get("DELETE_DEVICE_AFTER", "604800")
         bot.rpc.set_config(accid, "delete_device_after", delete_after)
+        # Large attachments (sent as pre-message + post-message) are not downloaded automatically:
+        # ~97 MB a day arrived in groups where the bridge only expands Telegram links. In bridged
+        # groups the relay downloads them on demand (see dc_events.request_attachment_download).
+        bot.rpc.set_config(accid, "download_limit", str(DOWNLOAD_LIMIT))
         avatar_path = database.get_config("bot_avatar_path")
         if avatar_path:
             if not os.path.isabs(avatar_path):
@@ -439,6 +445,12 @@ def on_start(bot, _args):
                 bot_contact_id = 1
             except Exception:
                 pass
+
+        # Bridged messages that were waiting for their attachment when the bridge stopped
+        try:
+            resume_pending_downloads(bot, dc_accid)
+        except Exception as e:
+            logger.warning(f"Could not resume pending attachment downloads: {e}")
 
         try:
             qrdata = bot.rpc.get_chat_securejoin_qr_code(dc_accid, None)

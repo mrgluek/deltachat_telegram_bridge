@@ -25,6 +25,7 @@ import html
 import logging
 import os
 import re
+import threading
 import time
 from typing import Optional
 
@@ -461,6 +462,22 @@ def handle_dc_message(bot, accid, event):
     if _is_rate_limited(dc_chat_id):
         return
 
+    # A large attachment arrives as a pre-message (text + file metadata) and a post-message with
+    # the file, which the core does not download over download_limit. Fetch it, relay when complete
+    # (commands are not relayed, so their attachments are not fetched either).
+    if getattr(msg, "download_state", None) == "Available" and not (msg.text or "").strip().startswith('/'):
+        request_attachment_download(bot, accid, msg.id, dc_chat_id)
+        return
+
+    relay_dc_message_to_tg(bot, accid, msg, tg_chats)
+
+
+def relay_dc_message_to_tg(bot, accid, msg, tg_chats, note: str = None):
+    """Sends one DC message (text, sender, reply, file) to every mapped Telegram chat.
+    note: appended to the text, e.g. when the attachment could not be downloaded."""
+    import bot as _bot_module
+    dc_chat_id = msg.chat_id
+
     try:
         sender_contact = bot.rpc.get_contact(accid, msg.from_id)
         sender_name = msg.override_sender_name or sender_contact.display_name or sender_contact.address
@@ -469,6 +486,8 @@ def handle_dc_message(bot, accid, event):
 
     text = msg.text or ""
     text = DC_FALLBACK_PATTERN.sub('', text).strip()
+    if note:
+        text = f"{text}\n{note}" if text else note
 
     # Do not relay command messages (starting with '/') to Telegram
     if text.startswith('/'):
@@ -535,6 +554,72 @@ def handle_dc_message(bot, accid, event):
             bot.logger.error(f"Error scheduling relay of DC msg {msg.id} to TG chat {tg_chat_id}: {e}")
 
 
+# Bridged messages waiting for their large attachment: relayed when it is downloaded, or after this
+# many seconds without it (text and a note), so a message is never lost silently.
+PENDING_DOWNLOAD_TIMEOUT = 120
+ATTACHMENT_FAILED_NOTE = "📎 [attachment could not be downloaded]"
+
+
+def request_attachment_download(bot, accid, msg_id: int, dc_chat_id: int):
+    """Asks the core for the post-message of a bridged message and remembers it (in the database,
+    so a restart does not lose it). The core reports progress with MsgsChanged for msg_id."""
+    database.add_pending_download(msg_id, dc_chat_id)
+    try:
+        bot.rpc.download_full_message(accid, msg_id)
+        logger.info(f"DC→TG: downloading the attachment of msg {msg_id} in bridged chat {dc_chat_id} before relaying")
+    except Exception as e:
+        logger.warning(f"DC→TG: could not request the attachment of msg {msg_id}: {e}")
+        resolve_pending_download(bot, accid, msg_id, timed_out=True)
+        return
+    _schedule_pending_timeout(bot, accid, msg_id, PENDING_DOWNLOAD_TIMEOUT)
+
+
+def _schedule_pending_timeout(bot, accid, msg_id: int, delay: float):
+    t = threading.Timer(delay, resolve_pending_download, args=(bot, accid, msg_id), kwargs={"timed_out": True})
+    t.daemon = True
+    t.start()
+
+
+def resolve_pending_download(bot, accid, msg_id: int, timed_out: bool = False) -> bool:
+    """Relays a waiting message once its attachment is there (state Done), it failed, or it timed
+    out (text with ATTACHMENT_FAILED_NOTE). Returns True if this call relayed it."""
+    import bot as _bot_module
+    if not _bot_module.main_loop:
+        # The Telegram side is not up yet (right after a start): keep it waiting
+        _schedule_pending_timeout(bot, accid, msg_id, 10)
+        return False
+    try:
+        msg = bot.rpc.get_message(accid, msg_id)
+    except Exception as e:
+        logger.warning(f"DC→TG: waiting msg {msg_id} is gone ({e}); dropping it")
+        database.pop_pending_download(msg_id)
+        return False
+    state = getattr(msg, "download_state", None)
+    downloaded = state == "Done" and getattr(msg, "file", None)
+    if not (downloaded or timed_out or state in ("Failure", "Undecipherable")):
+        return False  # still InProgress / Available: a later MsgsChanged or the timeout decides
+    if not database.pop_pending_download(msg_id):
+        return False  # relayed already (MsgsChanged and timeout raced)
+    tg_chats = database.get_tg_chats(msg.chat_id)
+    if not tg_chats:
+        return False  # unbridged meanwhile
+    relay_dc_message_to_tg(bot, accid, msg, tg_chats, note=None if downloaded else ATTACHMENT_FAILED_NOTE)
+    return True
+
+
+def resume_pending_downloads(bot, accid):
+    """At start: messages that were waiting when the bridge stopped get their timeout again
+    (or are relayed now, if their attachment arrived or the timeout passed meanwhile)."""
+    now = time.time()
+    for msg_id, _chat_id, created_at in database.get_pending_downloads():
+        left = created_at + PENDING_DOWNLOAD_TIMEOUT - now
+        if left <= 0:
+            resolve_pending_download(bot, accid, msg_id, timed_out=True)
+        elif not resolve_pending_download(bot, accid, msg_id):
+            _schedule_pending_timeout(bot, accid, msg_id, left)
+
+
+
 def handle_dc_message_changed(bot, accid, event):
     """Detect when a Delta Chat message is edited and edit it on Telegram."""
     import bot as _bot_module
@@ -544,6 +629,11 @@ def handle_dc_message_changed(bot, accid, event):
     msg_id = getattr(event, 'msg_id', None)
     chat_id = getattr(event, 'chat_id', None)
     if not msg_id or not chat_id:
+        return
+
+    # The attachment of a bridged message we are waiting for (its download state changed)
+    if database.is_pending_download(msg_id):
+        resolve_pending_download(bot, accid, msg_id)
         return
 
     # Look up all TG mappings for this message

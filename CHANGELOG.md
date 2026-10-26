@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.32.0] - 2026-10-26
+
+### Changed
+- **Large Attachments Are Downloaded Only for Bridged Groups**: The bridge downloaded every attachment in every group it is in, though in most of them it only expands Telegram links: in one day ~97 MB in groups that are not bridged, 0.5 MB in bridged ones. Now `download_limit` is 64 KB: a large attachment (sent by current clients as a pre-message with the text and a post-message with the file) is not downloaded automatically. In a bridged group the bridge requests the file (`download_full_message`) and relays the message to Telegram when the core reports it complete (`MsgsChanged`); if the download fails or takes longer than 2 minutes, the text is relayed with `📎 [attachment could not be downloaded]`, so no message is lost. Waiting messages are kept in the database (`pending_downloads`) and resumed after a restart. Small attachments, and attachments from older clients sent in one message, arrive as before.
+
+### Fixed
+- **Channel Post With a Link Preview Relayed as a Sticker**: A channel post whose link preview the userbot downloaded as a photo went to Delta Chat named `sticker.webp` with the Sticker viewtype (since v2.30.0): Telethon's `msg.sticker` also looks at the document of a link preview. A message is now only a sticker when its own media is a document.
+
 ## [2.31.0] - 2026-10-24
 
 ### Added

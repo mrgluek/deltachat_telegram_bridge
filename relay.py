@@ -30,7 +30,7 @@ from caching import (
 )
 from formatting import _format_telegram_entities, _format_poll_text, _truncate
 from rpc_proxy import _get_download_semaphore
-from media import _sticker_file_info
+from media import _userbot_sticker_info
 
 import logging
 logger = logging.getLogger("tg_dc_bridge")
@@ -581,10 +581,9 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         if not file_name:
             file_name = f"media_{msg.id}" + (getattr(msg.file, 'ext', "") if hasattr(msg, 'file') and msg.file else ".jpg")
         sticker_suffix = None
-        if getattr(msg, 'sticker', None):
-            # Telethon guesses no extension for .tgs, so derive it from the MIME type.
-            mime = getattr(msg.file, 'mime_type', '') or ''
-            file_name, dc_viewtype = _sticker_file_info(mime == 'application/x-tgsticker', mime == 'video/webm')
+        sticker_info = _userbot_sticker_info(msg)
+        if sticker_info:
+            file_name, dc_viewtype = sticker_info
             sticker_suffix = os.path.splitext(file_name)[1]
 
         if media_size > _bot_module.MAX_ATTACHMENT_SIZE:

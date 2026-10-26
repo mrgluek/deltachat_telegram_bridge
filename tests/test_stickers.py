@@ -21,6 +21,23 @@ class TestStickerFileInfo(unittest.TestCase):
     def test_video_sticker_is_webm_video(self):
         self.assertEqual(_sticker_file_info(False, True), ("sticker.webm", "Video"))
 
+    def test_userbot_sticker_needs_its_own_document(self):
+        from types import SimpleNamespace
+        from media import _userbot_sticker_info
+        MessageMediaDocument = type("MessageMediaDocument", (), {})
+        MessageMediaWebPage = type("MessageMediaWebPage", (), {})
+        webp = SimpleNamespace(mime_type="image/webp")
+        sticker = SimpleNamespace(media=MessageMediaDocument(), sticker=object(), file=webp)
+        self.assertEqual(_userbot_sticker_info(sticker), ("sticker.webp", "Sticker"))
+        tgs = SimpleNamespace(media=MessageMediaDocument(), sticker=object(), file=SimpleNamespace(mime_type="application/x-tgsticker"))
+        self.assertEqual(_userbot_sticker_info(tgs), ("sticker.tgs", "Sticker"))
+        # A channel post whose link preview carries a document: Telethon's msg.sticker is set, but
+        # the media downloaded is the preview photo (@airfield1972/6643)
+        preview = SimpleNamespace(media=MessageMediaWebPage(), sticker=object(), file=webp)
+        self.assertIsNone(_userbot_sticker_info(preview))
+        photo = SimpleNamespace(media=MessageMediaDocument(), sticker=None, file=webp)
+        self.assertIsNone(_userbot_sticker_info(photo))
+
 
 def _tg_msg(message_id):
     m = MagicMock()
