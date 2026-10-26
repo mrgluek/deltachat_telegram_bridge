@@ -59,37 +59,64 @@ class _Base(unittest.TestCase):
 
 
 class TestPreMessageInBridgedChat(_Base):
-    def test_downloads_first_and_relays_with_the_file(self):
+    """The core reports a pre-message to bots only with MsgsChanged; the full message, once its
+    post-message is downloaded, as a new message (IncomingMsg) - or MsgsChanged if not fresh."""
+
+    def setUp(self):
+        super().setUp()
+        dc_events._seen_pre_messages.clear()
+
+    def _pre_message_arrives(self, msg):
+        self.rpc.get_message.return_value = msg
+        self._changed(msg.id, msg.chat_id)
+
+    def test_downloads_then_relays_the_full_message_once(self):
         with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
-            self._incoming(_msg(state="Available"))
+            self._pre_message_arrives(_msg(state="Available"))
             self.rpc.download_full_message.assert_called_once_with(1, 7)
             relay.assert_not_called()
             self.assertTrue(database.is_pending_download(7))
 
             self.rpc.get_message.return_value = _msg(state="InProgress")
-            self._changed()
+            self._changed()  # the core's own InProgress notice
             relay.assert_not_called()
 
-            self.rpc.get_message.return_value = _msg(state="Done", file="/blobs/video.mp4")
-            self._changed()
+            self._incoming(_msg(state="Done", file="/blobs/photo.jpg"))  # IncomingMsg with the file
             relay.assert_called_once()
-            self.assertEqual(relay.call_args.args[2].file, "/blobs/video.mp4")
-            self.assertIsNone(relay.call_args.kwargs["note"])
+            self.assertEqual(relay.call_args.args[2].file, "/blobs/photo.jpg")
             self.assertFalse(database.is_pending_download(7))
 
-            self._changed()  # a later MsgsChanged (edit, reaction) does not relay it again
+            # the timeout and later MsgsChanged (reactions, edits) do not relay it again
+            self.assertFalse(dc_events.resolve_pending_download(self.bot, 1, 7, timed_out=True))
+            self.rpc.get_message.return_value = _msg(state="Done", file="/blobs/photo.jpg")
+            self._changed()
             relay.assert_called_once()
+
+    def test_not_fresh_message_completes_with_msgs_changed(self):
+        with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
+            self._pre_message_arrives(_msg(state="Available"))
+            self.rpc.get_message.return_value = _msg(state="Done", file="/blobs/video.mp4")
+            self._changed()
+        relay.assert_called_once()
+        self.assertIsNone(relay.call_args.kwargs["note"])
+
+    def test_repeated_msgs_changed_requests_once(self):
+        with patch.object(dc_events, "relay_dc_message_to_tg"):
+            self._pre_message_arrives(_msg(state="Available"))
+            database.pop_pending_download(7)  # e.g. resolved meanwhile
+            self._pre_message_arrives(_msg(state="Available"))  # a reaction on the pre-message
+        self.rpc.download_full_message.assert_called_once()
 
     def test_failure_relays_text_with_a_note(self):
         with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
-            self._incoming(_msg(state="Available"))
+            self._pre_message_arrives(_msg(state="Available"))
             self.rpc.get_message.return_value = _msg(state="Failure")
             self._changed()
         self.assertEqual(relay.call_args.kwargs["note"], dc_events.ATTACHMENT_FAILED_NOTE)
 
-    def test_timeout_relays_once(self):
+    def test_timeout_relays_text_once(self):
         with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
-            self._incoming(_msg(state="Available"))
+            self._pre_message_arrives(_msg(state="Available"))
             self.rpc.get_message.return_value = _msg(state="InProgress")
             self.assertTrue(dc_events.resolve_pending_download(self.bot, 1, 7, timed_out=True))
             self.assertFalse(dc_events.resolve_pending_download(self.bot, 1, 7, timed_out=True))
@@ -98,29 +125,40 @@ class TestPreMessageInBridgedChat(_Base):
 
     def test_request_error_relays_text_right_away(self):
         self.rpc.download_full_message.side_effect = RuntimeError("Download already in progress.")
-        self.rpc.get_message.return_value = _msg(state="Available")
         with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
-            self._incoming(_msg(state="Available"))
+            self._pre_message_arrives(_msg(state="Available"))
         relay.assert_called_once()
         self.assertFalse(database.is_pending_download(7))
 
     def test_command_with_attachment_is_not_downloaded(self):
         with patch.object(dc_events, "relay_dc_message_to_tg"):
-            self._incoming(_msg(state="Available", text="/help"))
+            self._pre_message_arrives(_msg(state="Available", text="/help"))
         self.rpc.download_full_message.assert_not_called()
 
 
 class TestOtherMessages(_Base):
-    def test_unbridged_group_does_not_download(self):
-        with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
-            self._incoming(_msg(chat_id=OTHER, state="Available"))
+    def setUp(self):
+        super().setUp()
+        dc_events._seen_pre_messages.clear()
+
+    def test_unbridged_pre_message_is_handled_without_download(self):
+        self.rpc.get_message.return_value = _msg(chat_id=OTHER, state="Available", text="see t.me/chan/5")
+        with patch.object(dc_events, "handle_dc_message") as handle:
+            self._changed(7, OTHER)
+            self._changed(7, OTHER)  # repeated MsgsChanged: handled once
         self.rpc.download_full_message.assert_not_called()
-        relay.assert_not_called()
+        handle.assert_called_once()
+        self.assertEqual(handle.call_args.args[2].msg.text, "see t.me/chan/5")
 
     def test_complete_message_relays_at_once(self):
         with patch.object(dc_events, "relay_dc_message_to_tg") as relay:
             self._incoming(_msg(state="Done", file="/blobs/small.jpg"))
         relay.assert_called_once()
+        self.rpc.download_full_message.assert_not_called()
+
+    def test_ordinary_msgs_changed_is_not_a_pre_message(self):
+        self.rpc.get_message.return_value = _msg(state="Done")
+        self.assertFalse(dc_events.handle_pre_message(self.bot, 1, 7))
         self.rpc.download_full_message.assert_not_called()
 
     def test_note_is_added_to_the_relayed_text(self):

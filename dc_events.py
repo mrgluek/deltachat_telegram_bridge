@@ -21,6 +21,7 @@ bot.py) goes through a function-local `import bot as _bot_module`,
 same pattern as the rest of this refactor.
 """
 import asyncio
+import collections
 import html
 import logging
 import os
@@ -462,12 +463,9 @@ def handle_dc_message(bot, accid, event):
     if _is_rate_limited(dc_chat_id):
         return
 
-    # A large attachment arrives as a pre-message (text + file metadata) and a post-message with
-    # the file, which the core does not download over download_limit. Fetch it, relay when complete
-    # (commands are not relayed, so their attachments are not fetched either).
-    if getattr(msg, "download_state", None) == "Available" and not (msg.text or "").strip().startswith('/'):
-        request_attachment_download(bot, accid, msg.id, dc_chat_id)
-        return
+    # The attachment of a message we were waiting for has arrived (the core reports a completed
+    # post-message to bots as a new message): relay it now; the timeout then finds nothing to do
+    database.pop_pending_download(msg.id)
 
     relay_dc_message_to_tg(bot, accid, msg, tg_chats)
 
@@ -558,6 +556,40 @@ def relay_dc_message_to_tg(bot, accid, msg, tg_chats, note: str = None):
 # many seconds without it (text and a note), so a message is never lost silently.
 PENDING_DOWNLOAD_TIMEOUT = 120
 ATTACHMENT_FAILED_NOTE = "📎 [attachment could not be downloaded]"
+_seen_pre_messages = collections.OrderedDict()  # pre-message ids already handled (MsgsChanged repeats)
+
+
+def handle_pre_message(bot, accid, msg_id: int) -> bool:
+    """A pre-message: the text and file metadata of a message with a large attachment, whose
+    post-message (the file) is over download_limit. The core does not report it to bots as a new
+    message (no IncomingMsg until the file is there), only with MsgsChanged - so it is caught here.
+    Bridged group: request the file; the core then reports the full message as new and
+    handle_dc_message relays it. Other chats: handle the text now (Telegram link previews).
+    Returns True if msg_id was such a message."""
+    if msg_id in _seen_pre_messages:
+        return False
+    try:
+        msg = bot.rpc.get_message(accid, msg_id)
+    except Exception:
+        return False
+    if getattr(msg, "download_state", None) != "Available" or (msg.from_id or 0) <= 9:
+        return False
+    _seen_pre_messages[msg_id] = True
+    while len(_seen_pre_messages) > 2000:
+        _seen_pre_messages.popitem(last=False)
+    if (msg.text or "").strip().startswith('/'):
+        return True  # commands are neither relayed nor need their attachment
+    if database.get_tg_chats(msg.chat_id):
+        request_attachment_download(bot, accid, msg_id, msg.chat_id)
+    else:
+        handle_dc_message(bot, accid, _PreMessageEvent(msg))
+    return True
+
+
+class _PreMessageEvent:
+    """What handle_dc_message reads from a NewMessage event, for a pre-message."""
+    def __init__(self, msg):
+        self.msg, self.command, self.payload = msg, "", ""
 
 
 def request_attachment_download(bot, accid, msg_id: int, dc_chat_id: int):
@@ -634,6 +666,8 @@ def handle_dc_message_changed(bot, accid, event):
     # The attachment of a bridged message we are waiting for (its download state changed)
     if database.is_pending_download(msg_id):
         resolve_pending_download(bot, accid, msg_id)
+        return
+    if handle_pre_message(bot, accid, msg_id):
         return
 
     # Look up all TG mappings for this message

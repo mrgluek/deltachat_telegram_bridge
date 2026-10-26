@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.32.1] - 2026-10-26
+
+### Fixed
+- **Large Attachments in Bridged Groups Were Not Relayed at All**: The Delta Chat core does not report a pre-message to bots as a new message - only with `MsgsChanged`, and as new once the file (post-message) is downloaded. With the 64 KB limit of 2.32.0 the file was never downloaded, so the bridge never saw the message: a photo sent to a bridged group did not reach Telegram. Pre-messages are now caught in `MsgsChanged`: in a bridged group the file is requested and the full message, reported as new when it arrives, is relayed as usual (or with the "could not be downloaded" note after a failure or 2 minutes); in other groups the text is handled right away, so Telegram links in a caption of a large photo are still expanded.
+
 ## [2.32.0] - 2026-10-26
 
 ### Changed
