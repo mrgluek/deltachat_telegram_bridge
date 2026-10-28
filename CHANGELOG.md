@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.1] - 2026-10-28
+
+### Security
+- **Admin Check No Longer Fooled by a Display Name**: The contact's key fingerprint was found by searching the whole `get_contact_encryption_info()` text for hex strings, including the line with the contact's display name, so a contact named `x<admin fingerprint>x` passed the admin check. The fingerprint is now read only from the lines under each key header, and the bot's own key is recognised by the fingerprint in its invite link instead of by its address. When the keys cannot be told apart the check fails instead of guessing. The code is in `dc_fingerprint.py`, shared verbatim between the bots.
+
+### Changed
+- **Ready for the Core 2.66 Fingerprint Format**: Core 2.66 prints `Me:` instead of `Me (address):` and sorts the key blocks by fingerprint, so finding a key block by address stops working. The new parser handles both formats.
+- **Core Pinned to 2.65.0**: `deltachat-rpc-server` was `>=2.62.0`, so any image rebuild pulled core 2.66.0, which removes the `configured_addr` option the bot still reads. Core upgrades are now made on purpose, after reading the core changelog.
+
 ## [2.33.0] - 2026-10-28
 
 ### Changed

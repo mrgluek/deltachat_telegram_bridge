@@ -14,6 +14,7 @@ import time
 from typing import Optional
 
 import database
+import dc_fingerprint
 from deltachat2 import MsgData
 
 from caching import files_are_identical
@@ -195,79 +196,8 @@ def admin_key_contact_id(bot, accid):
 
 
 def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
-    self_fps = set()
-    try:
-        bot_addrs = []
-        bot_addr = bot.rpc.get_config(accid, "addr")
-        if bot_addr: bot_addrs.append(bot_addr.lower().strip())
-            
-        try:
-            transports = bot.rpc.list_transports(accid)
-            for t in transports:
-                t_addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
-                if t_addr: bot_addrs.append(t_addr.lower().strip())
-        except: pass
-        
-        if bot_addrs:
-            for args in [(accid, contact_id), (contact_id,)]:
-                try:
-                    enc_info_self = bot.rpc.get_contact_encryption_info(*args)
-                    if enc_info_self:
-                        import re
-                        blocks = re.split(r'\n\s*\n', enc_info_self.strip())
-                        for block in blocks:
-                            if any(a in block.lower() for a in bot_addrs):
-                                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(block.split()).replace(':', ''))
-                                self_fps.update(m.upper() for m in matches)
-                        break
-                except Exception:
-                    continue
-        if self_fps:
-            logger.debug(f"Detected bot's own fingerprints from enc_info: {[f[-8:] for f in self_fps]}")
-    except Exception as e:
-        logger.error(f"Error detecting self-fingerprint: {e}")
-
-    # 1. Try directly from the contact object if available
-    if contact:
-        get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
-        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
-            val = get_val(attr)
-            if val:
-                import re
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
-                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
-                if valid_matches:
-                    fps = ",".join(valid_matches)
-                    logger.debug(f"Found fingerprint(s) in contact.{attr}: {fps}")
-                    return fps
-
-    # 2. Try get_contact_config(accid, contact_id, "fp")
-    try:
-        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
-        if fp and fp.upper().replace(' ', '') not in self_fps:
-            logger.debug(f"Found fingerprint in contact config 'fp': {fp}")
-            return fp.upper().replace(' ', '')
-    except Exception:
-        pass
-
-    # 3. Try get_contact_encryption_info
-    for args in [(accid, contact_id), (contact_id,)]:
-        try:
-            enc_info = bot.rpc.get_contact_encryption_info(*args)
-            if enc_info:
-                import re
-                cleaned_info = "".join(enc_info.split()).replace(':', '')
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned_info)
-                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
-                if valid_matches:
-                    fps = ",".join(valid_matches)
-                    logger.debug(f"Found fingerprint(s) in encryption info: {fps}")
-                    return fps
-        except Exception as e:
-            logger.debug(f"get_contact_encryption_info{args} failed: {e}")
-            continue
-            
-    return None
+    """The contact's key fingerprint, or None; see dc_fingerprint. `contact` is unused, kept for callers."""
+    return dc_fingerprint.get_contact_fingerprint(bot.rpc, accid, contact_id)
 
 
 def _parse_chat_info_is_private(chat_info) -> bool:
