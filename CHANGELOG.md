@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.32.2] - 2026-10-28
+
+### Fixed
+- **Filtered Album Leaked One Image**: A Telegram album arrives as one message per image and only one of them carries the caption. The first message claimed the whole album, so the filter only saw its own (empty) text: a captionless image of a post with `#реклама` was relayed while the captioned message was dropped as "already processed". The userbot now filters on the captions of the whole album (read from its sibling messages) and drops all of it. The Bot API also checks the caption on the public post page, remembers a filtered album, and if the captioned message arrives after an image was already relayed, deletes that Delta Chat message.
+
 ## [2.32.1] - 2026-10-26
 
 ### Fixed

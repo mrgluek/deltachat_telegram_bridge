@@ -30,7 +30,7 @@ from caching import (
 )
 from formatting import _format_telegram_entities, _format_poll_text, _truncate
 from rpc_proxy import _get_download_semaphore
-from media import _userbot_sticker_info
+from media import _userbot_sticker_info, _album_caption_text
 
 import logging
 logger = logging.getLogger("tg_dc_bridge")
@@ -380,6 +380,18 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         logger.info(f"Userbot: Skipping already processed album post in grouped_id {grouped_id}")
         _update_cached_last_msg_id(tg_channel_id, msg.id)
         return
+
+    # The caption of an album sits on one of its messages, and whichever arrives first claims
+    # the group above; filter on the captions of the whole album so a captionless image
+    # cannot slip past a filtered post.
+    if isinstance(grouped_id, int):
+        album_text = await _album_caption_text(msg, _bot_module.userbot_client)
+        album_filtered, album_pat = is_text_filtered(album_text)
+        if album_filtered:
+            logger.info(f"Userbot: Skipping album {grouped_id} (message {msg.id}) in {tg_channel_id} matching filter '{album_pat}'")
+            database.mark_media_group_processed(grouped_id, tg_channel_id)
+            _update_cached_last_msg_id(tg_channel_id, msg.id)
+            return
 
     raw_text = getattr(msg, 'message', '') or getattr(msg, 'raw_text', '') or getattr(msg, 'text', '') or ""
     entities = getattr(msg, 'entities', []) or []

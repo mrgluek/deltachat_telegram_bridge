@@ -392,7 +392,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 ## Message & Post Content Filters
 
-The bot includes unified keyword and phrase filtering for all bridged channels and group chats. When an incoming Telegram post, edit, or group message contains any filtered word or phrase (case-insensitive substring match), it is skipped and not relayed to Delta Chat.
+The bot includes unified keyword and phrase filtering for all bridged channels and group chats. When an incoming Telegram post, edit, or group message contains any filtered word or phrase (case-insensitive substring match), it is skipped and not relayed to Delta Chat. An album (several images in one post) is judged by the captions of all its images, so a filtered post is dropped completely.
 
 - `/filters` — Show all active filters with their numbered IDs.
 - `/filteradd <word or phrase>` — Add a filter (e.g. `/filteradd #реклама` or `/filteradd erid=`).

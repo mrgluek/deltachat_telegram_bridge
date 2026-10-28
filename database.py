@@ -1179,6 +1179,20 @@ def is_media_group_processed(group_id: str | int) -> bool:
         finally:
             conn.close()
 
+def get_media_group_dc_msg_id(group_id: str | int) -> Optional[int]:
+    """DC message that carried a Telegram album, or None if it was filtered / not sent."""
+    if not group_id:
+        return None
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT dc_msg_id FROM processed_media_groups WHERE group_id = ?", (str(group_id),))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+        finally:
+            conn.close()
+
 def mark_media_group_processed(group_id: str | int, tg_channel_id: int, dc_msg_id: Optional[int] = None):
     """Mark a Telegram media group / album as processed in persistent storage."""
     if not group_id:

@@ -889,6 +889,71 @@ class TestTelegramBridge(unittest.TestCase):
             bot.dc_bot_instance = orig_dc
             bot.dc_accid = orig_accid
 
+    def test_relay_userbot_album_filtered_by_sibling_caption(self):
+        """A captionless image that arrives first must not leak when another album message has a filtered caption."""
+        database.add_filter("#реклама")
+        bot._reload_filter_cache()
+
+        first = MagicMock()
+        first.chat_id = -100556
+        first.id = 10
+        first.grouped_id = 987001
+        first.message = ""
+        first.media = None
+        first.entities = []
+        first.get_input_chat = AsyncMock(return_value=MagicMock())
+        captioned = MagicMock()
+        captioned.grouped_id = 987001
+        captioned.message = "Блок мульти-сплит #реклама"
+        other_post = MagicMock()
+        other_post.grouped_id = 111
+        other_post.message = "unrelated"
+
+        mock_ub = MagicMock()
+        mock_ub.is_connected.return_value = True
+        mock_ub.get_messages = AsyncMock(return_value=[first, captioned, other_post, None])
+        mock_dc_bot = MagicMock()
+
+        orig = (bot.userbot_client, bot.dc_bot_instance, bot.dc_accid)
+        try:
+            bot.userbot_client = mock_ub
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+            asyncio.run(bot._relay_userbot_message(dc_chat_id=123, msg=first))
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+            self.assertTrue(database.is_media_group_processed(987001))
+            self.assertEqual(bot._get_cached_last_msg_id(-100556), 10)
+        finally:
+            bot.userbot_client, bot.dc_bot_instance, bot.dc_accid = orig
+
+    def test_bot_api_late_album_caption_deletes_leaked_message(self):
+        database.add_filter("#реклама")
+        bot._reload_filter_cache()
+        # An earlier, captionless album message was already relayed as DC message 555
+        database.mark_media_group_processed("987002", -100557, 555)
+        self.assertEqual(database.get_media_group_dc_msg_id("987002"), 555)
+
+        update = MagicMock()
+        post = update.channel_post
+        post.chat.id = -100557
+        post.message_id = 21
+        post.media_group_id = "987002"
+        post.text = None
+        post.caption = "Акция #реклама"
+
+        mock_dc_bot = MagicMock()
+        orig = (bot.dc_bot_instance, bot.dc_accid)
+        try:
+            bot.dc_bot_instance = mock_dc_bot
+            bot.dc_accid = 1
+            asyncio.run(bot.handle_tg_channel_post(update, MagicMock()))
+            mock_dc_bot.rpc.delete_messages.assert_called_once_with(1, [555])
+            self.assertIsNone(database.get_media_group_dc_msg_id("987002"))
+            self.assertTrue(database.is_media_group_processed("987002"))
+            mock_dc_bot.rpc.send_msg.assert_not_called()
+        finally:
+            bot.dc_bot_instance, bot.dc_accid = orig
+
     def _run_service_action(self, action, mock_ub=None):
         """Relay a Telethon service message carrying `action`; return the mock DC bot."""
         mock_ub = mock_ub or MagicMock()

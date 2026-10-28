@@ -394,6 +394,18 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
     media_group_id = getattr(post, 'media_group_id', None)
     if media_group_id and _is_media_group_processed(media_group_id):
         logger.info(f"Bot API: Skipping already processed album post {post.message_id} in media_group {media_group_id}")
+        # The caption may be on a later message than the one that already went out;
+        # if it matches a filter, take the already relayed part of the album back.
+        late_filtered, late_pat = is_text_filtered(post.text or post.caption)
+        if late_filtered:
+            leaked_dc_msg_id = database.get_media_group_dc_msg_id(media_group_id)
+            if leaked_dc_msg_id and _bot_module.dc_bot_instance and _bot_module.dc_accid:
+                try:
+                    await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.delete_messages, _bot_module.dc_accid, [leaked_dc_msg_id])
+                    database.mark_media_group_processed(media_group_id, tg_channel_id)
+                    logger.info(f"Bot API: Deleted DC message {leaked_dc_msg_id} of album {media_group_id}, caption of post {post.message_id} matches filter '{late_pat}'")
+                except Exception as e:
+                    logger.warning(f"Bot API: Failed to delete filtered album message {leaked_dc_msg_id}: {e}")
         _update_cached_last_msg_id(tg_channel_id, post.message_id)
         return
     
@@ -586,8 +598,13 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
 
     # Message content filter check
     filtered, matched_pat = is_text_filtered(text)
+    if not filtered and media_group_id and rich_post:
+        # The public page shows the caption of the whole album, which this message may lack.
+        filtered, matched_pat = is_text_filtered(rich_post.text_markdown)
     if filtered:
         logger.info(f"Bot API: Skipping channel post {post.message_id} in channel {tg_channel_id} matching filter '{matched_pat}'")
+        if media_group_id:
+            database.mark_media_group_processed(media_group_id, tg_channel_id)
         _update_cached_last_msg_id(tg_channel_id, post.message_id)
         return
 

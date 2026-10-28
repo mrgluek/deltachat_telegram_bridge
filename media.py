@@ -936,6 +936,33 @@ async def _extract_public_tg_post(username: str, post_id: int) -> tuple[Optional
     return None, None
 
 
+async def _album_caption_text(msg, userbot_client) -> str:
+    """Captions of every message in msg's album, joined. An album is one Telegram post but
+    arrives as separate messages and only one carries the caption, so a text filter has to
+    look at all of them, not just the one that happened to arrive first."""
+    grouped_id = getattr(msg, 'grouped_id', None)
+    if grouped_id is None or not userbot_client:
+        return ""
+    try:
+        input_chat = await asyncio.wait_for(msg.get_input_chat(), timeout=15.0)
+        if not input_chat:
+            return ""
+        msg_id = getattr(msg, 'id', 0)
+        ids = list(range(max(1, msg_id - 12), msg_id + 13))
+        siblings = await asyncio.wait_for(userbot_client.get_messages(input_chat, ids=ids), timeout=15.0)
+        texts = []
+        for sib in siblings or []:
+            if not sib or getattr(sib, 'grouped_id', None) != grouped_id:
+                continue
+            t = getattr(sib, 'message', '') or getattr(sib, 'raw_text', '') or ""
+            if isinstance(t, str) and t:
+                texts.append(t)
+        return "\n".join(texts)
+    except Exception as e:
+        logger.debug(f"Failed reading album captions for grouped_id {grouped_id}: {e}")
+        return ""
+
+
 async def _resolve_full_res_photos_for_group(msg, userbot_client) -> dict:
     """RichMessage.photos often only carries low-res preview stubs (PhotoStrippedSize) for
     photos that also exist as full-resolution attachments on sibling messages in the same
