@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.0] - 2026-10-28
+
+### Changed
+- **Albums in Bridged Groups Arrive as One WebXDC Gallery**: A photo/video album sent to a bridged Telegram group was relayed as a separate Delta Chat message per item: a burst of notifications that also filled the send queue. With `/richmode webxdc` or `both` the Bot API items of one album (`media_group_id`) are now collected (until 2 s pass without a new item, at most 20 s) and sent as a single WebXDC gallery with the caption, the sender name and an item count; every item of the album maps to that one message, so replies and reactions still find it. Videos up to 20 MB are embedded, larger ones become a link card. The rate limit counts an album once, and the filters judge the captions of the whole album. If packaging or sending fails, the items are relayed one by one as before, so nothing is lost. `split` and `off` keep the old behavior; albums of documents or audio stay separate messages.
+
 ## [2.32.2] - 2026-10-28
 
 ### Fixed

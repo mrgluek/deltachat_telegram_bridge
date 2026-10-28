@@ -49,6 +49,7 @@ from security import (
 )
 from live_locations import LIVE_LOCATIONS
 import group_watch
+import tg_albums
 from caching import (
     HISTORY_RELAY_COOLDOWN,
     get_history_cache,
@@ -997,6 +998,13 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # group is not bridged (group_watch does not track it)
     if not _bot_module.dc_bot_instance or not _bot_module.dc_accid:
         group_watch.note_outcome(update, "skipped", "Delta Chat not ready")
+        return
+
+    # Photo/video albums arrive as one update per item; tg_albums collects them and sends
+    # one WebXDC gallery (and counts the album once for the rate limit).
+    album_outcome = tg_albums.try_buffer(update)
+    if album_outcome:
+        group_watch.note_outcome(update, *album_outcome)
         return
 
     # Rate limit check
