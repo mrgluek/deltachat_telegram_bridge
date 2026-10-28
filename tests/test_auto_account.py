@@ -19,7 +19,7 @@ class TestAutoAccount(unittest.TestCase):
         b = MagicMock()
         b.rpc.get_all_account_ids.return_value = []
         b.rpc.add_account.return_value = 1
-        b.rpc.get_config.return_value = "abc@chatmail.example"
+        b.rpc.get_contact.return_value = {"address": "abc@chatmail.example"}  # self contact
         bot.ensure_configured_account(b, self._serve_args())
         b.rpc.set_config.assert_any_call(1, "bot", "1")
         b.rpc.init_transports.assert_called_once_with(1, None)

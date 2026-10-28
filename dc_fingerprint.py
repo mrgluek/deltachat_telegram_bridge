@@ -21,6 +21,8 @@ a fingerprint: a contact named "x<admin fingerprint>x" must not pass for the adm
 block is recognised by the fingerprint in our SecureJoin invite link, not by name or address,
 which differ between core versions and UI languages.
 
+get_self_addr() is here too, as both answer "who is this bot" in a way that survives core changes.
+
 This file is shared verbatim between the Delta Chat bots; keep the copies in sync.
 """
 
@@ -33,6 +35,21 @@ logger = logging.getLogger(__name__)
 _FP_RE = re.compile(r"[0-9A-F]{40}|[0-9A-F]{64}")
 # Invite link: "https://i.delta.chat/#<FP>&..." (current cores) or "OPENPGP4FPR:<FP>#..." (older)
 _QR_FP_RE = re.compile(r"(?:i\.delta\.chat/#|OPENPGP4FPR:)([0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Fa-f])")
+
+
+def get_self_addr(rpc, accid: int) -> str:
+    """The bot's own address, or "" if the account is not configured.
+
+    It is the self contact's address, which the core takes from the primary transport.
+    get_config("configured_addr") raises "unknown key" since core 2.66, and "addr" is empty
+    since 2.61 (no default) and 2.63 (no longer written)."""
+    try:
+        contact = rpc.get_contact(accid, 1)
+    except Exception as e:
+        logger.debug(f"Own address unavailable: {e}")
+        return ""
+    addr = contact.get("address") if isinstance(contact, dict) else getattr(contact, "address", "")
+    return addr.strip() if isinstance(addr, str) else ""
 
 
 def get_self_fingerprint(rpc, accid: int) -> str | None:

@@ -35,6 +35,25 @@ def make_rpc(info, invite=INVITE):
     return rpc
 
 
+class TestSelfAddr(unittest.TestCase):
+    def test_dict_contact(self):
+        rpc = MagicMock()
+        rpc.get_contact.return_value = {"address": " bot@example.org "}
+        self.assertEqual(dc_fingerprint.get_self_addr(rpc, 1), "bot@example.org")
+        rpc.get_contact.assert_called_once_with(1, 1)
+
+    def test_attribute_contact(self):
+        rpc = MagicMock()
+        rpc.get_contact.return_value.address = "bot@example.org"
+        self.assertEqual(dc_fingerprint.get_self_addr(rpc, 1), "bot@example.org")
+
+    def test_unconfigured_account(self):
+        # Core 2.66: "Cannot get address for self-contact" when there is no transport
+        rpc = MagicMock()
+        rpc.get_contact.side_effect = Exception("Cannot get address for self-contact")
+        self.assertEqual(dc_fingerprint.get_self_addr(rpc, 1), "")
+
+
 class TestSelfFingerprint(unittest.TestCase):
     def test_current_invite_link(self):
         self.assertEqual(dc_fingerprint.get_self_fingerprint(make_rpc(""), 1), SELF_FP)

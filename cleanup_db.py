@@ -5,6 +5,8 @@ import sqlite3
 import logging
 from deltachat2 import Rpc, IOTransport
 
+import dc_fingerprint
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("cleanup_db")
 
@@ -97,7 +99,7 @@ def main():
                 return
 
             for i, accid in enumerate(accids):
-                addr = rpc.get_config(accid, "addr")
+                addr = dc_fingerprint.get_self_addr(rpc, accid)
                 if not addr:
                     continue
                 

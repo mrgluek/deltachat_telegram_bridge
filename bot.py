@@ -17,6 +17,7 @@ except ImportError:
 
 
 import database
+import dc_fingerprint
 import io
 import sys
 import getpass
@@ -340,7 +341,7 @@ def ensure_configured_account(bot, args) -> None:
     try:
         bot.rpc.set_config(accid, "bot", "1")
         bot.rpc.init_transports(accid, None)
-        addr = bot.rpc.get_config(accid, "configured_addr")
+        addr = dc_fingerprint.get_self_addr(bot.rpc, accid)
         bot.logger.info(f"Account created: {addr}")
     except Exception as e:
         # serve then exits with "no configured accounts" and the container restart retries

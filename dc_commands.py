@@ -33,6 +33,7 @@ import time
 from typing import Optional
 
 import database
+import dc_fingerprint
 from deltachat2 import EventType, MsgData, SystemMessageType, events
 from deltabot_cli import BotCli
 
@@ -57,7 +58,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.33.1"
+VERSION = "2.34.0"
 # Attachments over 64 KB are only downloaded for bridged groups (see dc_events)
 DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("tgbridge")
@@ -1385,13 +1386,13 @@ async def generate_status_report(is_html=True, bot_ref=None, accid=None) -> str:
     dc_addr = "Unknown"
     if bot_ref and accid:
         try:
-            dc_addr = bot_ref.rpc.get_config(accid, "configured_addr") or bot_ref.rpc.get_config(accid, "addr") or "Unknown"
+            dc_addr = dc_fingerprint.get_self_addr(bot_ref.rpc, accid) or "Unknown"
             dc_status = f"🟢 Connected (as {dc_addr})"
         except Exception as e:
             dc_status = f"🟡 Connected (error: {e})"
     elif _bot_module.dc_bot_instance and _bot_module.dc_accid:
         try:
-            dc_addr = _bot_module.dc_bot_instance.rpc.get_config(_bot_module.dc_accid, "configured_addr") or _bot_module.dc_bot_instance.rpc.get_config(_bot_module.dc_accid, "addr") or "Unknown"
+            dc_addr = dc_fingerprint.get_self_addr(_bot_module.dc_bot_instance.rpc, _bot_module.dc_accid) or "Unknown"
             dc_status = f"🟢 Connected (as {dc_addr})"
         except Exception:
             pass
