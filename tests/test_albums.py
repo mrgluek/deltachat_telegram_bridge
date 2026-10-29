@@ -107,7 +107,30 @@ class AlbumTest(unittest.IsolatedAsyncioTestCase):
     async def test_hidden_profile_photo_is_no_avatar(self):
         bot_api = SimpleNamespace(get_user_profile_photos=AsyncMock(return_value=SimpleNamespace(photos=[])))
         msg = SimpleNamespace(from_user=SimpleNamespace(id=7), get_bot=lambda: bot_api)
-        self.assertIsNone(await tg_albums._download_author_avatar(msg))
+        with patch.object(bot, "userbot_client", None):
+            self.assertIsNone(await tg_albums._download_author_avatar(msg))
+
+    async def test_userbot_gives_the_photo_the_bot_api_hides(self):
+        bot_api = SimpleNamespace(get_user_profile_photos=AsyncMock(return_value=SimpleNamespace(photos=[])))
+        msg = SimpleNamespace(from_user=SimpleNamespace(id=7), message_id=5, chat=SimpleNamespace(id=TG),
+                              get_bot=lambda: bot_api)
+
+        async def download(entity, file):
+            with open(file, "wb") as f:
+                f.write(b"jpeg")
+            return file
+
+        tl_msg = SimpleNamespace(get_sender=AsyncMock(return_value="sender-entity"))
+        client = MagicMock()
+        client.is_connected.return_value = True
+        client.get_messages = AsyncMock(return_value=tl_msg)
+        client.download_profile_photo = AsyncMock(side_effect=download)
+        with patch.object(bot, "userbot_client", client):
+            path = await tg_albums._download_author_avatar(msg)
+        self.assertTrue(path and os.path.getsize(path) > 0)
+        os.unlink(path)
+        client.download_profile_photo.assert_awaited_once()
+        self.assertEqual(client.download_profile_photo.call_args[0][0], "sender-entity")
 
     async def test_forwarded_album_names_original_author(self):
         updates = [_update(1), _update(2)]

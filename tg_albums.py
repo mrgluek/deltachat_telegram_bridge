@@ -159,16 +159,29 @@ async def _download_item(item, tg_chat_id):
 async def _download_author_avatar(message):
     """The sender's current Telegram profile photo as a temp file, or None.
 
-    The gallery's app icon falls back to the bot's own avatar without it. None is also what
-    a user gets who hides the photo from non-contacts, so every failure is just "no avatar".
+    The gallery's app icon falls back to the bot's own avatar without it. The Bot API returns
+    no photo for a user whose privacy settings hide it from the bot, so the userbot (a normal
+    group member, which may be allowed to see it) is asked next. Every failure just means
+    "no avatar", but is logged so a missing one can be explained.
     """
     sender = message.from_user
     if not sender:
         return None
+    path = await _avatar_via_bot_api(message, sender)
+    if path:
+        return path
+    path = await _avatar_via_userbot(message, sender)
+    if not path:
+        logger.info(f"Album: no profile photo for {sender.id} from the Bot API or the userbot, using the default icon")
+    return path
+
+
+async def _avatar_via_bot_api(message, sender):
     path = None
     try:
         photos = await retry_async(message.get_bot().get_user_profile_photos, sender.id, limit=1, max_retries=2, delay=1.0)
         if not photos or not photos.photos:
+            logger.info(f"Album: Bot API has no profile photo for {sender.id}")
             return None
         tmp_fd, path = tempfile.mkstemp(suffix=".jpg")
         os.close(tmp_fd)
@@ -176,10 +189,32 @@ async def _download_author_avatar(message):
         await tg_file.download_to_drive(custom_path=path)
         return path
     except Exception as e:
-        logger.debug(f"No author avatar for {sender.id}: {type(e).__name__}: {e}")
+        logger.warning(f"Album: Bot API avatar download for {sender.id} failed: {type(e).__name__}: {e}")
         if path and os.path.exists(path):
             os.unlink(path)
         return None
+
+
+async def _avatar_via_userbot(message, sender):
+    import bot as _bot_module
+    client = _bot_module.userbot_client
+    if not (client and client.is_connected()):
+        return None
+    tmp_fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(tmp_fd)
+    try:
+        # The sender entity comes from the message itself: a bare user id may not be known to Telethon.
+        tl_msg = await asyncio.wait_for(client.get_messages(message.chat.id, ids=message.message_id), timeout=15.0)
+        tl_sender = await asyncio.wait_for(tl_msg.get_sender(), timeout=15.0) if tl_msg else None
+        if tl_sender:
+            saved = await asyncio.wait_for(client.download_profile_photo(tl_sender, file=path), timeout=30.0)
+            if saved and os.path.getsize(saved) > 0:
+                return saved
+    except Exception as e:
+        logger.warning(f"Album: userbot avatar download for {sender.id} failed: {type(e).__name__}: {e}")
+    if os.path.exists(path):
+        os.unlink(path)
+    return None
 
 
 def _caption_html(caption: str) -> str:

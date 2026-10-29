@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.35.1] - 2026-10-29
+
+### Fixed
+- **Album Gallery Kept the Bot's Icon**: The Bot API returns no profile photo for a user whose privacy settings hide it from bots, so the gallery of such a sender (2.35.0) kept the bot's avatar. The userbot, a normal member of the group, is now asked next and reads the photo through the sender of the message. Every step of the lookup is logged, so a missing avatar can be explained.
+
 ## [2.35.0] - 2026-10-29
 
 ### Added
