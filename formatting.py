@@ -33,6 +33,43 @@ def _truncate(text: str, max_len: int) -> str:
     return text[:max_len - 1] + "…"
 
 
+def _forward_origin_name(message) -> str:
+    """Who a forwarded Telegram message originally came from ('' if it is not forwarded).
+
+    PTB's forward_origin is one of MessageOriginUser (sender_user), MessageOriginHiddenUser
+    (sender_user_name: the user hides the account behind forwards), MessageOriginChat
+    (sender_chat, an anonymous group admin) and MessageOriginChannel (chat).
+    """
+    origin = getattr(message, "forward_origin", None)
+    if not origin:
+        return ""
+    kind = getattr(origin, "type", None)
+    name = ""
+    if kind == "user":
+        user = getattr(origin, "sender_user", None)
+        if user:
+            name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    elif kind == "hidden_user":
+        name = getattr(origin, "sender_user_name", "") or ""
+    elif kind == "chat":
+        name = getattr(getattr(origin, "sender_chat", None), "title", "") or ""
+    elif kind == "channel":
+        name = getattr(getattr(origin, "chat", None), "title", "") or ""
+    return name if isinstance(name, str) else ""
+
+
+def _group_sender_name(message) -> str:
+    """Display name for a group message: 'Alice', or 'Alice (Fwd: Bob)' when it is forwarded."""
+    sender = message.from_user
+    name = sender.first_name or ""
+    if sender.last_name:
+        name += f" {sender.last_name}"
+    origin = _forward_origin_name(message)
+    if origin:
+        name += f" (Fwd: {_truncate(origin, 40)})"
+    return name
+
+
 def _utf16_to_py_indices(text: str) -> list[int]:
     """Map each UTF-16 code unit offset to the corresponding Python character index."""
     utf16_map = []

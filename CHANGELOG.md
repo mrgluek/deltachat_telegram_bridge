@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.35.0] - 2026-10-29
+
+### Added
+- **Forwarded Messages Show the Original Author**: A forwarded message in a bridged group arrived under the name of whoever forwarded it, with nothing to tell it was forwarded. The sender name now carries the origin: `Alice (Fwd: Bob)`. It works for users, hidden accounts (the name Telegram gives), chats and channels, and for new messages, edits and albums.
+
+### Changed
+- **Album Gallery Uses the Sender's Avatar**: The WebXDC gallery of an album in a bridged group got the bot's own avatar as app icon. It now takes the sender's current Telegram profile photo (icon and header); without one (hidden from non-contacts, or a download error) the bot's avatar stays as the fallback.
+
 ## [2.34.0] - 2026-10-28
 
 ### Changed

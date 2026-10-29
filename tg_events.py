@@ -63,7 +63,7 @@ from caching import (
     invalidate_channels_cache,
     _get_content_hash,
 )
-from formatting import _format_telegram_entities, _truncate, _format_poll_text
+from formatting import _format_telegram_entities, _truncate, _format_poll_text, _group_sender_name
 from media import (
     _sticker_file_info,
     _extract_public_tg_post,
@@ -903,9 +903,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     sender = msg.from_user
-    sender_name = sender.first_name
-    if sender.last_name:
-        sender_name += f" {sender.last_name}"
+    sender_name = _group_sender_name(msg)
 
     text = msg.text or msg.caption or ""
     
@@ -1013,9 +1011,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sender = update.message.from_user
-    sender_name = sender.first_name
-    if sender.last_name:
-        sender_name += f" {sender.last_name}"
+    sender_name = _group_sender_name(update.message)
 
     text = update.message.text or update.message.caption or ""
     

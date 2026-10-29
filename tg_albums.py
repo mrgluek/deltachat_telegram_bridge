@@ -22,7 +22,7 @@ import database
 from deltachat2 import MsgData
 
 from caching import _get_content_hash
-from formatting import TelegramRichPost, TelegramRichVideo, _format_telegram_entities, _truncate
+from formatting import TelegramRichPost, TelegramRichVideo, _format_telegram_entities, _group_sender_name, _truncate
 from media import _download_via_userbot
 from security import (
     retry_async,
@@ -43,14 +43,6 @@ BOT_API_MAX_BYTES = 20 * 1024 * 1024   # what getFile can serve; also the WebXDC
 _albums: dict[tuple, dict] = {}
 # message ids being replayed one by one after a failed package; they must not be buffered again
 _replaying: set[tuple] = set()
-
-
-def _sender_name(message) -> str:
-    sender = message.from_user
-    name = sender.first_name if sender else ""
-    if sender and sender.last_name:
-        name += f" {sender.last_name}"
-    return name
 
 
 def _album_item(update):
@@ -164,6 +156,32 @@ async def _download_item(item, tg_chat_id):
     return await _download_via_userbot(tg_chat_id, message.message_id, suffix=suffix)
 
 
+async def _download_author_avatar(message):
+    """The sender's current Telegram profile photo as a temp file, or None.
+
+    The gallery's app icon falls back to the bot's own avatar without it. None is also what
+    a user gets who hides the photo from non-contacts, so every failure is just "no avatar".
+    """
+    sender = message.from_user
+    if not sender:
+        return None
+    path = None
+    try:
+        photos = await retry_async(message.get_bot().get_user_profile_photos, sender.id, limit=1, max_retries=2, delay=1.0)
+        if not photos or not photos.photos:
+            return None
+        tmp_fd, path = tempfile.mkstemp(suffix=".jpg")
+        os.close(tmp_fd)
+        tg_file = await retry_async(photos.photos[0][-1].get_file, max_retries=2, delay=1.0)
+        await tg_file.download_to_drive(custom_path=path)
+        return path
+    except Exception as e:
+        logger.debug(f"No author avatar for {sender.id}: {type(e).__name__}: {e}")
+        if path and os.path.exists(path):
+            os.unlink(path)
+        return None
+
+
 def _caption_html(caption: str) -> str:
     """Plain caption as HTML: escaped, links clickable, line breaks kept."""
     escaped = html.escape(caption)
@@ -217,12 +235,16 @@ async def _relay_album(tg_chat_id, group_id, items) -> bool:
 
         first = messages[0]
         chat = first.chat
-        sender_name = _sender_name(first)
+        sender_name = _group_sender_name(first)
         raw_caption = "\n".join(m.caption for m in messages if m.caption)
         username = getattr(chat, "username", None) or ""
+        avatar_path = await _download_author_avatar(first)
+        if avatar_path:
+            paths.append(avatar_path)
         post = TelegramRichPost(
             username=username,
             post_id=first.message_id,
+            author_avatar_url=avatar_path or "",
             author_name=sender_name or getattr(chat, "title", "") or "Telegram",
             text_html=_caption_html(raw_caption) if raw_caption else "",
             text_markdown=raw_caption,
