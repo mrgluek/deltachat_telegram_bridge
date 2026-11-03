@@ -545,7 +545,7 @@ def relay_dc_message_to_tg(bot, accid, msg, tg_chats, note: str = None):
 
             if _bot_module.main_loop:
                 asyncio.run_coroutine_threadsafe(
-                    async_relay_to_tg(tg_chat_id, dc_chat_id, msg.id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype),
+                    async_relay_to_tg(tg_chat_id, dc_chat_id, msg.id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype, getattr(msg, 'file_name', None) or None),
                     _bot_module.main_loop
                 )
         except Exception as e:

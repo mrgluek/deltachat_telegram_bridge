@@ -110,13 +110,13 @@ async def _send_sticker_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatt
     return sticker_msg
 
 
-async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
+async def async_relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype='', file_name=None):
     lock = _tg_send_locks.setdefault(tg_chat_id, asyncio.Lock())
     async with lock:
-        await _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype)
+        await _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype, file_name)
 
 
-async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype=''):
+async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg, tg_reply_id, is_image, is_video, is_voice, viewtype='', file_name=None):
     import bot as _bot_module
     try:
         tg_msg = None
@@ -143,7 +143,8 @@ async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg,
         if tg_msg:
             pass  # already sent as a sticker
         elif file_path and os.path.exists(file_path):
-            filename = os.path.basename(file_path)
+            # DC stores blobs under hashed names; the original one is in file_name.
+            filename = file_name or os.path.basename(file_path)
             try:
                 if is_image:
                     f = open(file_path, 'rb')
@@ -161,7 +162,8 @@ async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg,
                     f = open(file_path, 'rb')
                     func = _bot_module.tg_app.bot.send_document
                     kwargs = {'chat_id': tg_chat_id, 'document': f, 'caption': formatted_msg, 'parse_mode': 'HTML', 'reply_to_message_id': tg_reply_id}
-                
+                kwargs['filename'] = filename
+
                 tg_msg = await retry_async(func, max_retries=3, delay=2.0, backoff=2.0, **kwargs)
                 try:
                     f.close()
@@ -398,6 +400,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
     text = _format_telegram_entities(raw_text, entities) if entities else raw_text
     
     file_path = None
+    file_name = None
     media_to_download = None
     dc_viewtype = None  # set for stickers, see _sticker_file_info
     rich_post = None
@@ -673,6 +676,8 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
         
         if file_path:
             msg_data.file = file_path
+            if isinstance(file_name, str) and file_name:
+                msg_data.filename = file_name
             if dc_viewtype:
                 msg_data.viewtype = dc_viewtype
 

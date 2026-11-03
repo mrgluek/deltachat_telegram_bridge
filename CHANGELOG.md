@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.35.2] - 2026-11-03
+
+### Fixed
+- **Attachments Kept Their File Names**: A file bridged from Telegram arrived in Delta Chat under the name of the bridge's temp file (`tmp6_dbmamo.json`), and a file sent from Delta Chat reached Telegram under the hashed name of the DC blob (`42f8ee8e….zip`). Both directions now carry the original name (`log-windows-2.json`, `passage-iroh.zip`).
+
 ## [2.35.1] - 2026-10-29
 
 ### Fixed

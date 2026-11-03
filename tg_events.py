@@ -651,6 +651,8 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             msg_data.override_sender_name = author
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
+            # Otherwise DC shows the temp file's name (tmpXXXX.json).
+            msg_data.filename = file_name or None
             if dc_viewtype:
                 msg_data.viewtype = dc_viewtype
         dc_msg_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
@@ -1223,6 +1225,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     msg_data.quoted_message_id = dc_reply_id
                 if local_file_path and os.path.exists(local_file_path):
                     msg_data.file = local_file_path
+                    msg_data.filename = file_name or None
                     if dc_viewtype:
                         msg_data.viewtype = dc_viewtype
                 try:
