@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import database
@@ -20,6 +21,17 @@ from deltachat2 import MsgData
 from caching import files_are_identical
 
 logger = logging.getLogger("tg_dc_bridge")
+
+
+@dataclass
+class FileMsgData(MsgData):
+    """MsgData that can name its attachment.
+
+    deltachat2 0.10 sends what dataclasses.asdict() returns, so an attribute
+    MsgData doesn't declare never reaches the core, which does accept filename.
+    """
+
+    filename: Optional[str] = None
 
 
 def _get_tg_chat_desc(tg_chat_id: int) -> str:

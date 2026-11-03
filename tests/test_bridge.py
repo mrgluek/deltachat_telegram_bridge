@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import sys
 import unittest
@@ -14,11 +15,11 @@ try:
     import deltachat2
 except ImportError:
     mock_deltachat2 = MagicMock()
+    @dataclasses.dataclass
     class MsgData:
-        def __init__(self, text="", file="", override_sender_name=None):
-            self.text = text
-            self.file = file
-            self.override_sender_name = override_sender_name
+        text: str = ""
+        file: str = ""
+        override_sender_name: str = None
     mock_deltachat2.MsgData = MsgData
     sys.modules['deltachat2'] = mock_deltachat2
 

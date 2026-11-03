@@ -26,6 +26,7 @@ import time
 from typing import Optional
 
 import database
+from dc_helpers import FileMsgData
 from deltachat2 import MsgData
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -646,13 +647,16 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
             formatted_msg += f"\n\n[Failed to download media: {file_name}]"
 
     try:
-        msg_data = MsgData(text=formatted_msg)
+        msg_data = FileMsgData(text=formatted_msg)
         if author:
             msg_data.override_sender_name = author
         if local_file_path and os.path.exists(local_file_path):
             msg_data.file = local_file_path
-            # Otherwise DC shows the temp file's name (tmpXXXX.json).
-            msg_data.filename = file_name or None
+            # Otherwise DC shows the temp file's name (tmpXXXX.json). Only for
+            # the file downloaded above: the core picks the viewtype from this
+            # name, so an album's WebXDC named photo.jpg would stop being one.
+            if tg_file and not is_webxdc_package:
+                msg_data.filename = file_name
             if dc_viewtype:
                 msg_data.viewtype = dc_viewtype
         dc_msg_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
@@ -1219,7 +1223,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # strip(): a caption-less photo would otherwise start with blank lines
                     formatted_msg = (formatted_msg + timeout_error_text).strip()
 
-                msg_data = MsgData(text=formatted_msg)
+                msg_data = FileMsgData(text=formatted_msg)
                 msg_data.override_sender_name = sender_name
                 if dc_reply_id:
                     msg_data.quoted_message_id = dc_reply_id

@@ -21,6 +21,7 @@ import time
 import database
 from deltachat2 import MsgData
 
+from dc_helpers import FileMsgData
 from security import retry_async, is_text_filtered, _wait_for_global_dc_rate_limit, PRIORITY_GROUP, PRIORITY_CHANNEL, track_dc_outgoing
 from caching import (
     _is_media_group_processed,
@@ -129,6 +130,7 @@ async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg,
                 try:
                     updated_msg = _bot_module.dc_bot_instance.rpc.get_message(_bot_module.dc_accid, msg_id)
                     file_path = getattr(updated_msg, 'file', None) or None
+                    file_name = file_name or getattr(updated_msg, 'file_name', None) or None
                     if file_path and os.path.exists(file_path):
                         break
                 except Exception:
@@ -630,7 +632,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                 formatted_msg += f"\n\n[Failed to download media after retries: {file_name}]"
 
     try:
-        msg_data = MsgData(text=formatted_msg)
+        msg_data = FileMsgData(text=formatted_msg)
         
         # Determine author if not provided
         if not display_author:
