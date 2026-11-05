@@ -330,7 +330,7 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
     try:
         import httpx
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
         }
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -402,7 +402,7 @@ async def _download_video_with_limit(url: str, output_path: str, max_bytes: int)
     try:
         import httpx
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
         }
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -797,7 +797,7 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
     try:
         import httpx
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36'
         }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
