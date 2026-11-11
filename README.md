@@ -346,8 +346,8 @@ Sub-admins **cannot** see or manage resources created by the owner or other sub-
 
 | Command | Description |
 |---------|-------------|
-| `/adminadd <user_id>` | Add a sub-admin (owner only, private chat) |
-| `/adminremove <user_id>` | Remove a sub-admin (owner only, private chat) |
+| `/adminadd <user_id or @username>` | Add a sub-admin (owner only, private chat); an @username is resolved through the userbot |
+| `/adminremove <user_id or @username>` | Remove a sub-admin (owner only, private chat) |
 | `/admins` | List all sub-admins (owner only, private chat) |
 
 ### Delta Chat sub-admins

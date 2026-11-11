@@ -346,6 +346,28 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.effective_message.reply_text("❌ This group is not bridged.")
 
 
+async def _resolve_tg_user_arg(arg: str):
+    """Turn a numeric ID or an @username into (user_id, error). Usernames are looked up through the userbot."""
+    import bot as _bot_module
+    arg = arg.strip()
+    if re.fullmatch(r"-?\d+", arg):
+        return int(arg), None
+    name = arg[1:] if arg.startswith("@") else arg
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", name):
+        return None, "❌ Please provide a numeric user ID or an @username."
+    client = _bot_module.userbot_client
+    if not (client and client.is_connected()):
+        return None, "❌ The userbot is not connected, so @username cannot be resolved. Use the numeric user ID instead."
+    try:
+        entity = await asyncio.wait_for(client.get_entity(name), timeout=15.0)
+    except Exception as e:
+        logger.info(f"Could not resolve @{name}: {e}")
+        return None, f"❌ Could not find @{html.escape(name)}. Check the username or use the numeric user ID."
+    if type(entity).__name__ != "User" or getattr(entity, "bot", False):
+        return None, f"❌ @{html.escape(name)} is not a regular user account."
+    return entity.id, None
+
+
 async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add a sub-admin. Owner only, private chat only."""
     chat = update.effective_chat
@@ -361,16 +383,14 @@ async def tg_adminadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not context.args or len(context.args) < 1:
         await update.effective_message.reply_text(
-            "Usage: <code>/adminadd user_id</code>\n\n"
-            "The user should send /start to the bot first to get their user ID.",
+            "Usage: <code>/adminadd user_id</code> or <code>/adminadd @username</code>",
             parse_mode='HTML'
         )
         return
 
-    try:
-        new_admin_id = int(context.args[0])
-    except ValueError:
-        await update.effective_message.reply_text("❌ Please provide a valid numeric user ID.")
+    new_admin_id, err = await _resolve_tg_user_arg(context.args[0])
+    if err:
+        await update.effective_message.reply_text(err, parse_mode='HTML')
         return
 
     # Don't allow adding self
@@ -398,13 +418,12 @@ async def tg_adminremove_command(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     if not context.args or len(context.args) < 1:
-        await update.effective_message.reply_text("Usage: <code>/adminremove user_id</code>", parse_mode='HTML')
+        await update.effective_message.reply_text("Usage: <code>/adminremove user_id</code> or <code>/adminremove @username</code>", parse_mode='HTML')
         return
 
-    try:
-        admin_id = int(context.args[0])
-    except ValueError:
-        await update.effective_message.reply_text("❌ Please provide a valid numeric user ID.")
+    admin_id, err = await _resolve_tg_user_arg(context.args[0])
+    if err:
+        await update.effective_message.reply_text(err, parse_mode='HTML')
         return
 
     if database.remove_admin(admin_id):
