@@ -94,6 +94,9 @@ async def _check_invite_permissions(update: Update) -> bool:
             if not database.is_owner_or_admin(user.id):
                 await update.effective_message.reply_text("❌ Only the bot admin can generate invite links.")
                 return False
+            if not database.is_owner(user.id) and not any(tg == chat.id for dc, tg in database.get_bridges_by_creator(user.id)):
+                await update.effective_message.reply_text("❌ Sub-admins can only get invites for bridges they created.")
+                return False
         else:
             try:
                 member = await chat.get_member(user.id)
@@ -183,7 +186,7 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
         logger.error(f"Failed to relay history for TG {ub_target} to DC {dc_chat_id}: {e}")
 
 
-async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, creator_dc_fp: str | None = None) -> str:
+async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, creator_dc_fp: str | None = None, created_channel: dict | None = None) -> str:
     """Core logic to bridge a TG channel/group. Shared between TG and DC commands."""
     import bot as _bot_module
     
@@ -312,6 +315,8 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, cre
         row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id, created_by_dc_fp=creator_dc_fp)
 
         if row_id:
+            if created_channel is not None:
+                created_channel.update(id=row_id, tg_channel_username=resolved_username)
             _invalidate_dc_channel_cache(tg_channel_id)
             invalidate_channels_cache()
             # Register in cooldown so subsequent joins immediately after creation don't trigger history relay again

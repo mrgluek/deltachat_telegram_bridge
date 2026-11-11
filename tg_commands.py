@@ -200,11 +200,9 @@ async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("❌ For security reasons, the /status command can only be used in a private chat.")
         return
 
-    admin_tg_id = database.get_config("admin_tg_id")
-    if admin_tg_id:
-        if not database.is_owner_or_admin(user.id):
-            await update.effective_message.reply_text("❌ Only the bot admin can view status.")
-            return
+    if not database.is_owner(user.id):
+        await update.effective_message.reply_text("❌ Only the bot owner can use /status.")
+        return
 
     try:
         report = await _bot_module.generate_status_report(is_html=True)
@@ -322,14 +320,15 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Permission check
+    own_pairs = None
     admin_tg_id = database.get_config("admin_tg_id")
     if admin_tg_id:
         if database.is_owner(user.id):
             pass  # owner can unbridge anything
         elif database.is_admin(user.id):
-            creator = database.get_bridge_creator_by_tg(chat.id)
-            if creator != user.id:
-                await update.effective_message.reply_text("❌ You can only unbridge groups you created.")
+            own_pairs = [(dc, tg) for dc, tg in database.get_bridges_by_creator(user.id) if tg == chat.id]
+            if not own_pairs:
+                await update.effective_message.reply_text("❌ Sub-admins can only remove bridges they created.")
                 return
         else:
             await update.effective_message.reply_text("❌ Only the bot admin can use /unbridge.")
@@ -345,15 +344,16 @@ async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
             return
 
-    # Get dc_chat_ids before deletion to clear caches
-    dc_chat_ids = database.get_dc_chats(chat.id)
-    
-    if database.remove_bridge_by_tg(chat.id):
+    pairs = own_pairs if own_pairs is not None else [(dc, chat.id) for dc in database.get_dc_chats(chat.id)]
+    dc_chat_ids = [dc for dc, tg in pairs if database.remove_bridge_pair(dc, tg)]
+
+    if dc_chat_ids:
         for dc_cid in dc_chat_ids:
             _clear_dc_caches(dc_cid)
         
         # Userbot leave
-        asyncio.create_task(_userbot_leave_chat(chat.id))
+        if not database.get_dc_chats(chat.id):
+            asyncio.create_task(_userbot_leave_chat(chat.id))
         
         await update.effective_message.reply_text("✔️ Bridge removed.")
     else:
@@ -470,6 +470,14 @@ async def tg_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
+def _invite_dc_chats(update):
+    chat = update.effective_chat
+    user = update.effective_user
+    if database.get_config("admin_tg_id") and not database.is_owner(user.id):
+        return [dc for dc, tg in database.get_bridges_by_creator(user.id) if tg == chat.id]
+    return database.get_dc_chats(chat.id)
+
+
 async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate invite link for the bridged Delta Chat group or the bot itself."""
     import bot as _bot_module
@@ -491,7 +499,7 @@ async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("❌ Error generating bot setup link.")
         return
 
-    dc_chats = database.get_dc_chats(chat.id)
+    dc_chats = _invite_dc_chats(update)
     if not dc_chats:
         await update.effective_message.reply_text("❌ This group is not bridged to any Delta Chat group.")
         return
@@ -555,7 +563,7 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.effective_message.reply_text("❌ Error generating QR code.")
         return
 
-    dc_chats = database.get_dc_chats(chat.id)
+    dc_chats = _invite_dc_chats(update)
     if not dc_chats:
         return
 

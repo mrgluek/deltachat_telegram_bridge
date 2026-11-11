@@ -480,9 +480,23 @@ def dc_channeladd_command(bot, accid, event):
     # Use run_coroutine_threadsafe since dc_cli hooks might run in a separate thread
     async def run_add():
         status_id = _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
-        result = await _add_channel_bridge(payload, creator_dc_fp=creator_fp)
+        created_channel = {}
+        result = await _add_channel_bridge(payload, creator_dc_fp=creator_fp, created_channel=created_channel)
         # Convert HTML response to Markdown for DC
         result_md = to_dc_markdown(result)
+        if created_channel and not created_channel.get("tg_channel_username") and not _bot_module._is_private_chat(bot, accid, msg.chat_id):
+            try:
+                private_chat_id = bot.rpc.create_chat_by_contact_id(accid, msg.from_id)
+                if not private_chat_id or not _bot_module._is_private_chat(bot, accid, private_chat_id):
+                    raise ValueError("Private chat unavailable")
+                sent = _bot_module._dc_send_msg_with_stats(bot, accid, private_chat_id, MsgData(text=result_md))
+                if not sent:
+                    raise ValueError("Private message could not be sent")
+                reply = "✔️ Channel bridged. The invite link was sent privately."
+            except Exception:
+                reply = "✔️ Channel bridged, but the invite could not be sent. Ask in a private chat with the bot."
+            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
+            return
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=result_md))
     
     if _bot_module.main_loop:
@@ -689,6 +703,7 @@ def unbridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
+    sub_fp = None
     # Admin check: the owner removes any bridge, a DC sub-admin only bridges they created
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
         if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
@@ -696,7 +711,7 @@ def unbridge_command(bot, accid, event):
             if not sub_fp:
                 _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator or a sub-admin can use /unbridge."))
                 return
-            if database.get_bridge_dc_creator(chat_id) != sub_fp:
+            if not any(dc == chat_id for dc, tg in database.get_bridges_by_dc_creator(sub_fp)):
                 _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Sub-admins can only remove bridges they created."))
                 return
     else:
@@ -710,7 +725,11 @@ def unbridge_command(bot, accid, event):
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Could not verify group administrator status."))
             return
 
-    tg_chat_ids = database.remove_bridge(chat_id)
+    if sub_fp:
+        tg_chat_ids = [tg for dc, tg in database.get_bridges_by_dc_creator(sub_fp)
+                       if dc == chat_id and database.remove_bridge_pair(dc, tg)]
+    else:
+        tg_chat_ids = database.remove_bridge(chat_id)
     if tg_chat_ids:
         _clear_dc_caches(chat_id)
         if _bot_module.main_loop:

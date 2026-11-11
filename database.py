@@ -487,8 +487,8 @@ def remove_bridge_pair(dc_chat_id: int, tg_chat_id: int) -> bool:
         try:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM bridges WHERE dc_chat_id = ? AND tg_chat_id = ?", (dc_chat_id, tg_chat_id))
-            cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ? AND tg_chat_id = ?", (dc_chat_id, tg_chat_id))
             deleted = cursor.rowcount > 0
+            cursor.execute("DELETE FROM message_map WHERE dc_chat_id = ? AND tg_chat_id = ?", (dc_chat_id, tg_chat_id))
             conn.commit()
             return deleted
         finally:

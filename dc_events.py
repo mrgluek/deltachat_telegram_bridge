@@ -352,6 +352,10 @@ def handle_dc_message(bot, accid, event):
                         _bot_module._dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
                         return
 
+                if not is_public and not _bot_module._is_private_chat(bot, accid, dc_chat_id):
+                    _bot_module._dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text="❌ Ask for this invite in a private chat with the bot."))
+                    return
+
                 invite_link = ch.get('invite_link', '')
                 if not invite_link:
                     _bot_module._dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text="❌ No invite link available for this channel."))
