@@ -118,6 +118,7 @@ from caching import (
     files_are_identical,
 )
 from live_locations import LIVE_LOCATIONS, get_live_location, set_live_location, clear_live_location
+from media import sweep_rich_post_intermediates
 from rpc_proxy import RpcProxy, _make_rpc_thread_safe, _get_download_semaphore
 from relay import async_relay_to_tg, async_edit_in_tg, _delete_tg_message, _relay_userbot_message
 from dc_helpers import (
@@ -746,6 +747,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
 
 
 async def db_cleanup_loop():
+    sweep_rich_post_intermediates()
     cleanup_counter = 0
     while True:
         try:
@@ -754,6 +756,7 @@ async def db_cleanup_loop():
             # Run full bridge reconciliation cleanup once every 24 hours (24 iterations of 1h)
             if cleanup_counter >= 24:
                 cleanup_counter = 0
+                sweep_rich_post_intermediates()
                 await cleanup_stale_bridges()
             await asyncio.sleep(3600)  # Every hour
         except Exception as e:

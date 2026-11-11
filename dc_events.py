@@ -36,7 +36,7 @@ from telegram import ReactionTypeEmoji
 
 from formatting import TelegramRichPost, get_dc_help_text, _truncate, _format_telegram_entities
 from caching import _get_content_hash
-from media import _extract_telethon_rich_message
+from media import _extract_telethon_rich_message, _with_rich_post_inputs
 from dc_helpers import async_update_channels_dc, _get_tg_chat_desc
 from security import _is_rate_limited, DC_FALLBACK_PATTERN, _consume_bot_initiated_delete, _is_deletion_rate_limited, DELETE_SYNC_MAX, DELETE_SYNC_WINDOW
 from relay import async_relay_to_tg, _delete_tg_message
@@ -54,6 +54,7 @@ def _react(bot, accid, msg_id, reaction: str):
         logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
 
 
+@_with_rich_post_inputs
 async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None):
     """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
     import bot as _bot_module

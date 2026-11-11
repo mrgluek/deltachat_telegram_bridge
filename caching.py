@@ -162,11 +162,18 @@ _processed_media_groups: dict[str, float] = {}
 
 
 def _get_content_hash(msg) -> str:
-    """Return a SHA-256 hash of the message content (text or caption)."""
+    """Return a SHA-256 hash of the message text and media identity."""
     # Safe access for both PTB and Telethon objects
     text = getattr(msg, 'message', "") or getattr(msg, 'text', "") or getattr(msg, 'raw_text', "") or ""
     caption = getattr(msg, 'caption', "") or ""
     content = str(text or caption or "")
+    for kind in ("photo", "document", "video", "audio", "animation", "sticker"):
+        media = getattr(msg, kind, None)
+        if isinstance(media, (list, tuple)):
+            media = media[-1] if media else None
+        identity = getattr(media, "file_unique_id", None) or getattr(media, "id", None)
+        if identity is not None:
+            content += f"_{kind}_{identity}"
     paid = getattr(msg, 'paid_media', None)
     if paid:
         content += f"_paid_{getattr(paid, 'star_count', 0)}"

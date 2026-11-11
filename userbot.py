@@ -781,13 +781,11 @@ async def _process_userbot_event_internal(event, is_edit=False):
             getattr(msg.chat, 'username', None)
             and database.get_channel_by_tg_username(msg.chat.username)):
         return
-    if _mark_processed(tg_channel_id, msg.id):
+    event_key = f"edit_{_get_content_hash(msg)}" if is_edit else "new"
+    if _mark_processed(tg_channel_id, msg.id, event_key):
         return
 
     if is_edit:
-        if _is_edit_debounced(tg_channel_id, msg.id):
-            return
-
         # Check message age (older than 7 days)
         try:
             from datetime import datetime, timezone

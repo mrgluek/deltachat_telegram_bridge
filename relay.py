@@ -31,7 +31,7 @@ from caching import (
 )
 from formatting import _format_telegram_entities, _format_poll_text, _truncate
 from rpc_proxy import _get_download_semaphore
-from media import _userbot_sticker_info, _album_caption_text
+from media import _userbot_sticker_info, _album_caption_text, _with_rich_post_inputs
 
 import logging
 logger = logging.getLogger("tg_dc_bridge")
@@ -363,6 +363,7 @@ async def _handle_userbot_service_action(dc_chat_id, msg, action):
     _update_cached_last_msg_id(tg_channel_id, msg.id)
 
 
+@_with_rich_post_inputs
 async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=None):
     """Core logic to relay a Telethon message (from event or history) to Delta Chat."""
     import bot as _bot_module
@@ -419,7 +420,16 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
             if has_rich_content and rich_mode in ("webxdc", "both") and not is_edit:
                 tmp_fd, xdc_path = tempfile.mkstemp(suffix=".xdc")
                 os.close(tmp_fd)
-                if await _bot_module._package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
+                packaged = False
+                try:
+                    packaged = await _bot_module._package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id)
+                finally:
+                    if not packaged:
+                        try:
+                            os.unlink(xdc_path)
+                        except OSError:
+                            pass
+                if packaged:
                     file_path = xdc_path
                     clean_title = rich_post.author_name or (f"@{msg.chat.username}" if getattr(msg, 'chat', None) and getattr(msg.chat, 'username', None) else "Telegram")
                     text = f"📰 **{clean_title}**\n\n{rich_post.teaser}" if rich_post.teaser else f"📰 **{clean_title}**"

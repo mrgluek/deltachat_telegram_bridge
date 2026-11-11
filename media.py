@@ -23,6 +23,8 @@ import shutil
 import tempfile
 import time
 import zipfile
+from contextvars import ContextVar
+from functools import wraps
 from typing import Optional
 
 import database
@@ -41,6 +43,44 @@ from formatting import (
 )
 
 logger = logging.getLogger("tg_dc_bridge")
+
+
+# Only disposable native rich-post inputs live here; cached deliverables stay elsewhere.
+RICH_POST_INTERMEDIATE_DIR = os.path.join(tempfile.gettempdir(), "tg_rich_inputs")
+
+
+def sweep_rich_post_intermediates() -> None:
+    """Remove abandoned rich-post inputs older than 24 hours."""
+    if not os.path.isdir(RICH_POST_INTERMEDIATE_DIR):
+        return
+    cutoff = time.time() - 86400
+    for entry in os.scandir(RICH_POST_INTERMEDIATE_DIR):
+        try:
+            if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                if entry.is_dir(follow_symlinks=False):
+                    shutil.rmtree(entry.path)
+                else:
+                    os.unlink(entry.path)
+        except OSError as e:
+            logger.debug(f"Failed sweeping rich-post input {entry.name}: {e}")
+
+
+_rich_post_input_dirs = ContextVar("rich_post_input_dirs", default=None)
+
+
+def _with_rich_post_inputs(func):
+    """Own all native rich-post inputs for one relay, including cancellation."""
+    @wraps(func)
+    async def scoped(*args, **kwargs):
+        directories = []
+        token = _rich_post_input_dirs.set(directories)
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            _rich_post_input_dirs.reset(token)
+            for directory in directories:
+                shutil.rmtree(directory, ignore_errors=True)
+    return scoped
 
 
 def _sticker_file_info(is_animated: bool, is_video: bool) -> tuple[str, str]:
@@ -999,6 +1039,12 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
     if not rich_msg:
         return None
 
+    os.makedirs(RICH_POST_INTERMEDIATE_DIR, exist_ok=True)
+    intermediate_dir = tempfile.mkdtemp(prefix="post_", dir=RICH_POST_INTERMEDIATE_DIR)
+    directories = _rich_post_input_dirs.get()
+    if directories is not None:
+        directories.append(intermediate_dir)
+    extracted = False
     try:
         chat_username = getattr(msg.chat, 'username', '') if getattr(msg, 'chat', None) else ""
         chat_title = getattr(msg.chat, 'title', '') if getattr(msg, 'chat', None) else ""
@@ -1030,7 +1076,8 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             chat_to_photo = getattr(msg, 'chat', None) or entity
             if chat_to_photo:
                 try:
-                    av_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, dir=intermediate_dir) as tmp:
+                        av_tmp = tmp.name
                     av_path = await asyncio.wait_for(userbot_client.download_profile_photo(chat_to_photo, file=av_tmp), timeout=30.0)
                     if av_path and os.path.exists(av_path) and os.path.getsize(av_path) > 0:
                         author_avatar_url = av_path
@@ -1083,14 +1130,15 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
         blocks = getattr(rich_msg, 'blocks', []) or []
         md_parts, htm_parts = await _process_page_blocks(
             blocks, photos_map, docs_map, userbot_client,
-            post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+            post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
         )
 
         # Also download any photos/videos attached to rich_msg that were not explicitly referenced in blocks
         for pid, pobj in photos_map.items():
             if pid not in downloaded_photo_ids and userbot_client:
                 try:
-                    p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, dir=intermediate_dir) as tmp:
+                        p_tmp = tmp.name
                     best_size = _largest_real_photo_size(pobj)
                     p_path = await asyncio.wait_for(userbot_client.download_media(pobj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
@@ -1138,7 +1186,7 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             (len(image_urls) >= 1 and len(text_markdown) > 200)
         )
 
-        return TelegramRichPost(
+        post = TelegramRichPost(
             username=chat_username or "",
             post_id=post_id,
             author_name=author_name,
@@ -1152,7 +1200,11 @@ async def _extract_telethon_rich_message(msg, userbot_client, entity=None, dc_ch
             views=views,
             is_rich=is_rich,
         )
+        extracted = True
+        return post
     except Exception as e:
         logger.error(f"Failed to extract Telethon RichMessage: {e}", exc_info=True)
         return None
-
+    finally:
+        if not extracted:
+            shutil.rmtree(intermediate_dir, ignore_errors=True)

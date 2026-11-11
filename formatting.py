@@ -1171,6 +1171,7 @@ async def _process_page_blocks(
     videos: list,
     downloaded_photo_ids: set,
     downloaded_doc_ids: set,
+    intermediate_dir: Optional[str] = None,
 ) -> tuple[list[str], list[str]]:
     """Recursively process a list of Telethon PageBlock objects into (md_parts, htm_parts)."""
     md_parts = []
@@ -1215,7 +1216,7 @@ async def _process_page_blocks(
             child_blocks = getattr(b, 'blocks', []) or []
             c_md, c_htm = await _process_page_blocks(
                 child_blocks, photos_map, docs_map, userbot_client,
-                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
             )
             if c_md:
                 md_parts.append("\n".join(f"> {line}" for line in "\n\n".join(c_md).split("\n")))
@@ -1242,7 +1243,7 @@ async def _process_page_blocks(
                 if hasattr(item, 'blocks'):
                     c_md, c_htm = await _process_page_blocks(
                         item.blocks, photos_map, docs_map, userbot_client,
-                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
                     )
                     if c_md:
                         l_md.append(f"- {' '.join(c_md)}")
@@ -1269,7 +1270,7 @@ async def _process_page_blocks(
                 if hasattr(item, 'blocks'):
                     c_md, c_htm = await _process_page_blocks(
                         item.blocks, photos_map, docs_map, userbot_client,
-                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                        post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
                     )
                     if c_md:
                         l_md.append(f"{idx}. {' '.join(c_md)}")
@@ -1314,7 +1315,7 @@ async def _process_page_blocks(
             if cover:
                 c_md, c_htm = await _process_page_blocks(
                     [cover], photos_map, docs_map, userbot_client,
-                    post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                    post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
                 )
                 md_parts.extend(c_md)
                 htm_parts.extend(c_htm)
@@ -1325,7 +1326,8 @@ async def _process_page_blocks(
             p_path = None
             if photo_obj and userbot_client:
                 try:
-                    p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, dir=intermediate_dir) as tmp:
+                        p_tmp = tmp.name
                     best_size = _largest_real_photo_size(photo_obj)
                     p_path = await asyncio.wait_for(userbot_client.download_media(photo_obj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                     if p_path and os.path.exists(p_path) and os.path.getsize(p_path) > 0:
@@ -1368,7 +1370,8 @@ async def _process_page_blocks(
                     p_obj = photos_map.get(p_id)
                     if p_obj and userbot_client:
                         try:
-                            p_tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, dir=intermediate_dir) as tmp:
+                                p_tmp = tmp.name
                             best_size = _largest_real_photo_size(p_obj)
                             dl_p = await asyncio.wait_for(userbot_client.download_media(p_obj, file=p_tmp, thumb=getattr(best_size, "type", None)), timeout=60.0)
                             if dl_p and os.path.exists(dl_p) and os.path.getsize(dl_p) > 0:
@@ -1403,7 +1406,8 @@ async def _process_page_blocks(
                 doc_size = getattr(doc_obj, 'size', 0) or 0
                 if 0 < doc_size <= TG_WEBXDC_VIDEO_MAX_BYTES:
                     try:
-                        v_tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=intermediate_dir) as tmp:
+                            v_tmp = tmp.name
                         v_path = await asyncio.wait_for(userbot_client.download_media(doc_obj, file=v_tmp), timeout=90.0)
                         if v_path and os.path.exists(v_path) and os.path.getsize(v_path) > 0:
                             is_playable = True
@@ -1453,7 +1457,7 @@ async def _process_page_blocks(
 
             c_md, c_htm = await _process_page_blocks(
                 child_blocks, photos_map, docs_map, userbot_client,
-                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
             )
             # Show content directly inline without folding
             skip_title_words = ("show more", "view more", "развернуть", "показать больше", "читать далее")
@@ -1470,7 +1474,7 @@ async def _process_page_blocks(
             child_blocks = getattr(b, 'blocks', []) or []
             c_md, c_htm = await _process_page_blocks(
                 child_blocks, photos_map, docs_map, userbot_client,
-                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids
+                post_id, image_urls, videos, downloaded_photo_ids, downloaded_doc_ids, intermediate_dir
             )
             md_parts.extend(c_md)
             htm_parts.extend(c_htm)

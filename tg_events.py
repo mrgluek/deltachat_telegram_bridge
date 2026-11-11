@@ -48,7 +48,7 @@ from security import (
     track_dc_outgoing,
     _edit_timestamps,
 )
-from live_locations import LIVE_LOCATIONS
+from live_locations import get_live_location, set_live_location, clear_live_location
 import group_watch
 import tg_albums
 from caching import (
@@ -552,7 +552,7 @@ async def handle_tg_channel_post(update: Update, context: ContextTypes.DEFAULT_T
         if is_live:
             live_mins = post.location.live_period // 60
             loc_text = f"📍 Live Location ({live_mins} min)\nhttps://maps.google.com/?q={post.location.latitude},{post.location.longitude}\n\n(Reply with /locupdate to get the latest coordinates)"
-            LIVE_LOCATIONS[post.message_id] = (post.location.latitude, post.location.longitude)
+            set_live_location(tg_channel_id, post.message_id, post.location.latitude, post.location.longitude, post.location.live_period, post.date.timestamp())
         else:
             loc_text = f"📍 Location: https://maps.google.com/?q={post.location.latitude},{post.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()
@@ -741,13 +741,14 @@ async def handle_tg_edited_channel_post(update: Update, context: ContextTypes.DE
     # Check if this is a live location update
     if post.location:
         is_live = getattr(post.location, 'live_period', None) is not None
-        if is_live or post.message_id in LIVE_LOCATIONS:
+        if is_live or get_live_location(tg_channel_id, post.message_id) is not None:
             lat, lon = post.location.latitude, post.location.longitude
-            LIVE_LOCATIONS[post.message_id] = (lat, lon)
+            if is_live:
+                set_live_location(tg_channel_id, post.message_id, lat, lon, post.location.live_period, post.date.timestamp())
             
             if not is_live:
                 # Live location ended either manually or expired.
-                LIVE_LOCATIONS.pop(post.message_id, None)
+                clear_live_location(tg_channel_id, post.message_id)
                 final_text = f"🛑 Live Location Ended\nFinal coordinates: https://maps.google.com/?q={lat},{lon}"
                 dc_chat_id = _get_cached_dc_channel_chat_id(tg_channel_id)
                 if not dc_chat_id and tg_username:
@@ -866,13 +867,14 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
     # Check if this is a live location update
     if msg.location:
         is_live = getattr(msg.location, 'live_period', None) is not None
-        if is_live or msg.message_id in LIVE_LOCATIONS:
+        if is_live or get_live_location(tg_chat_id, msg.message_id) is not None:
             lat, lon = msg.location.latitude, msg.location.longitude
-            LIVE_LOCATIONS[msg.message_id] = (lat, lon)
+            if is_live:
+                set_live_location(tg_chat_id, msg.message_id, lat, lon, msg.location.live_period, msg.date.timestamp())
             
             if not is_live:
                 # Live location ended
-                LIVE_LOCATIONS.pop(msg.message_id, None)
+                clear_live_location(tg_chat_id, msg.message_id)
                 final_text = f"🛑 Live Location Ended\nFinal coordinates: https://maps.google.com/?q={lat},{lon}"
                 dc_chats = database.get_dc_chats(tg_chat_id)
                 if dc_chats and _bot_module.dc_bot_instance and _bot_module.dc_accid:
@@ -1135,7 +1137,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_live:
             live_mins = update.message.location.live_period // 60
             loc_text = f"📍 Live Location ({live_mins} min)\nhttps://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}\n\n(Reply with /locupdate to get the latest coordinates)"
-            LIVE_LOCATIONS[update.message.message_id] = (update.message.location.latitude, update.message.location.longitude)
+            set_live_location(tg_chat_id, update.message.message_id, update.message.location.latitude, update.message.location.longitude, update.message.location.live_period, update.message.date.timestamp())
         else:
             loc_text = f"📍 Location: https://maps.google.com/?q={update.message.location.latitude},{update.message.location.longitude}"
         text = (text + "\n\n" + loc_text).strip()

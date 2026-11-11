@@ -51,7 +51,7 @@ import security
 import group_watch
 import userbot
 from caching import _clear_dc_caches, _invalidate_dc_channel_cache, invalidate_channels_cache, _get_cached_last_msg_id
-from live_locations import LIVE_LOCATIONS
+from live_locations import get_live_location
 from dc_helpers import async_update_channels_dc, _userbot_leave_chat
 from tg_events import _add_channel_bridge, _send_bot_message
 from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers, _channel_queues
@@ -952,8 +952,9 @@ def locupdate_command(bot, accid, event):
     if tg_chats:
         for tg_chat_id in tg_chats:
             tg_msg_id = database.get_tg_msg_id(quote_msg_id, chat_id, tg_chat_id)
-            if tg_msg_id and tg_msg_id in LIVE_LOCATIONS:
-                lat, lon = LIVE_LOCATIONS[tg_msg_id]
+            location = get_live_location(tg_chat_id, tg_msg_id) if tg_msg_id else None
+            if location is not None:
+                lat, lon = location
                 _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"📍 Updated Location: https://maps.google.com/?q={lat},{lon}", quoted_message_id=quote_msg_id))
                 found = True
                 break
