@@ -96,5 +96,38 @@ class TestDcSubadminCommands(unittest.TestCase):
             self.assertEqual(database.get_tg_chats(10), [])
 
 
+    def _vcard_setup(self, cards, ids, contacts, fp):
+        from unittest.mock import patch
+        self.mock_bot.rpc.parse_vcard.return_value = cards
+        self.mock_bot.rpc.import_vcard.return_value = ids
+        self.mock_bot.rpc.get_contact.side_effect = lambda a, c: contacts[c]
+        self.event.msg.file = "/tmp/card.vcf"
+        self.event.payload = ""
+        return [patch.object(self.bot, "_is_dc_admin", return_value=True),
+                patch.object(self.bot, "_is_private_chat", return_value=True),
+                patch.object(self.bot, "_get_contact_fingerprint", return_value=fp),
+                patch.object(self.bot, "_dc_send_msg_with_stats")]
+
+    def test_subadminadd_from_vcard(self):
+        card = {"addr": "Bob@Example.org", "key": "AAAA"}
+        contact = {"address": "bob@example.org", "is_key_contact": True}
+        patches = self._vcard_setup([card], [7], {7: contact}, FP1)
+        with patches[0], patches[1], patches[2], patches[3] as send:
+            self.dc.dc_subadminadd_command(self.mock_bot, 1, self.event)
+        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1)])
+        self.assertIn("is now a sub-admin", self._sent(send))
+
+    def test_vcard_without_key_or_wrong_address_refused(self):
+        patches = self._vcard_setup([{"addr": "bob@example.org", "key": None}], [], {}, FP1)
+        with patches[0], patches[1], patches[2], patches[3] as send:
+            self.dc.dc_subadminadd_command(self.mock_bot, 1, self.event)
+        self.assertIn("has no key", self._sent(send))
+        other = {"address": "eve@example.org", "is_key_contact": True}
+        patches = self._vcard_setup([{"addr": "bob@example.org", "key": "AAAA"}], [8], {8: other}, FP1)
+        with patches[0], patches[1], patches[2], patches[3] as send:
+            self.dc.dc_subadminadd_command(self.mock_bot, 1, self.event)
+        self.assertEqual(database.get_dc_subadmins(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.36.2] - 2026-11-11
+
+### Added
+- **`/subadminadd` by contact card**: Send the bot the person's contact card (vCard) with the caption `/subadminadd`. The bot takes the address and the key from the card, so the person does not have to write to the bot first. A card without a key is refused with a hint; `/subadminadd <email>` still works for people the bot already knows.
+
 ## [2.36.1] - 2026-11-11
 
 ### Added

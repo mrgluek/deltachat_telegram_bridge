@@ -58,7 +58,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.36.1"
+VERSION = "2.36.2"
 # Attachments over 64 KB are only downloaded for bridged groups (see dc_events)
 DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("tgbridge")
@@ -736,6 +736,46 @@ def _dc_contact_key_fingerprints(bot, accid, email: str) -> list[str]:
     return fps
 
 
+def _dc_vcard_key_fingerprints(bot, accid, path: str):
+    """Read a contact card: returns (email, key fingerprints, error text or None)."""
+    import bot as _bot_module
+    try:
+        cards = bot.rpc.parse_vcard(path) or []
+    except Exception as e:
+        logger.info(f"parse_vcard failed: {e}")
+        return None, [], "❌ Could not read that contact card."
+    if len(cards) != 1:
+        return None, [], "❌ Send a card of exactly one contact."
+    card = cards[0]
+    get_val = card.get if isinstance(card, dict) else (lambda k, d=None, _c=card: getattr(_c, k, d))
+    email = (get_val("addr") or "").strip().lower()
+    if "@" not in email:
+        return None, [], "❌ The contact card has no e-mail address."
+    if not get_val("key"):
+        return email, [], f"❌ The card of {email} has no key. Ask them to send the bot a message (e.g. /help) first, then use /subadminadd {email}."
+    try:
+        ids = bot.rpc.import_vcard(accid, path) or []
+    except Exception as e:
+        logger.info(f"import_vcard failed: {e}")
+        return email, [], "❌ Could not import that contact card."
+    fps = []
+    for cid in ids:
+        try:
+            c = bot.rpc.get_contact(accid, cid)
+            cget = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+            if (cget("address") or "").strip().lower() != email or not cget("is_key_contact", False):
+                continue
+            for fp in (_bot_module._get_contact_fingerprint(bot, accid, cid, c) or "").split(","):
+                fp = database._norm_fp(fp)
+                if fp and fp not in fps:
+                    fps.append(fp)
+        except Exception:
+            continue
+    if not fps:
+        return email, [], f"❌ Could not read the key of {email} from the card. Ask them to send the bot a message (e.g. /help) first."
+    return email, fps, None
+
+
 @dc_cli.on(events.NewMessage(command="/subadminadd"))
 def dc_subadminadd_command(bot, accid, event):
     """Add a Delta Chat sub-admin by e-mail (owner only, private chat)."""
@@ -748,14 +788,21 @@ def dc_subadminadd_command(bot, accid, event):
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot owner can manage sub-admins."))
         return
-    email = (event.payload or "").strip().lower()
-    if "@" not in email or " " in email:
-        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminadd user@example.org\n\nThe person must write to the bot in a private chat first, so that the bot knows their key."))
-        return
-    fps = _dc_contact_key_fingerprints(bot, accid, email)
-    if not fps:
-        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ No known key for {email}. Ask them to send the bot a message (e.g. /help) first, then try again."))
-        return
+    vcard_path = getattr(msg, "file", None)
+    if vcard_path and str(vcard_path).lower().endswith(".vcf"):
+        email, fps, err = _dc_vcard_key_fingerprints(bot, accid, str(vcard_path))
+        if err:
+            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=err))
+            return
+    else:
+        email = (event.payload or "").strip().lower()
+        if "@" not in email or " " in email:
+            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminadd user@example.org\n\nOr send the person's contact card with the caption /subadminadd. With an e-mail the person must write to the bot in a private chat first, so that the bot knows their key."))
+            return
+        fps = _dc_contact_key_fingerprints(bot, accid, email)
+        if not fps:
+            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ No known key for {email}. Ask them to send the bot a message (e.g. /help) first, or send their contact card with the caption /subadminadd."))
+            return
     added = [fp for fp in fps if database.add_dc_subadmin(fp, email)]
     if added:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} is now a sub-admin ({len(added)} key{'s' if len(added) != 1 else ''}). They can use /bridge and /unbridge for their own groups."))

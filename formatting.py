@@ -1535,7 +1535,7 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
-            f"/subadminadd <email> — Let a person bridge and unbridge their own groups\n"
+            f"/subadminadd <email> (or a contact card with this caption) — Let a person bridge and unbridge their own groups\n"
             f"/subadminremove <email> — Remove a sub-admin\n"
             f"/subadmins — List sub-admins\n"
             f"/cleanup — Clean up stale, duplicate & orphaned bridges\n"

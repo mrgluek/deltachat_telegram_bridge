@@ -357,6 +357,7 @@ A person can also be a sub-admin in **Delta Chat**, identified by their key fing
 | Command | Description |
 |---------|-------------|
 | `/subadminadd <email>` | Add a DC sub-admin (owner only, private chat). The person must message the bot first so the bot knows their key. |
+| contact card + caption `/subadminadd` | Same, but the key comes from the card, so the person does not have to write first |
 | `/subadminremove <email>` | Remove a DC sub-admin; their existing bridges stay |
 | `/subadmins` | List DC sub-admins |
 
