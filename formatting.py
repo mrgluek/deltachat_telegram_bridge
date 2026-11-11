@@ -1600,7 +1600,7 @@ def get_tg_help_text(name: str, user_id: int) -> str:
         lines.append(f"/filterdel <i>id or phrase</i> — Remove a filter")
         
         lines.append(f"\n<b>👥 Sub-admins (Owner):</b>")
-        lines.append(f"/adminadd <i>user_id</i> — Add a sub-admin")
+        lines.append(f"/adminadd <i>user_id or @username</i> — Add a sub-admin")
         lines.append(f"/adminremove <i>user_id</i> — Remove a sub-admin")
         lines.append(f"/admins — List sub-admins")
     else:
