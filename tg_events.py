@@ -183,7 +183,7 @@ async def _relay_channel_history(dc_chat_id: int, tg_channel_id: int, ub_target:
         logger.error(f"Failed to relay history for TG {ub_target} to DC {dc_chat_id}: {e}")
 
 
-async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> str:
+async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, creator_dc_fp: str | None = None) -> str:
     """Core logic to bridge a TG channel/group. Shared between TG and DC commands."""
     import bot as _bot_module
     
@@ -309,7 +309,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None) -> 
             invite_link = "https://i.delta.chat/#" + invite_link[5:]
 
         # 5. Save to DB
-        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id)
+        row_id = database.add_channel_by_id(tg_channel_id, dc_chat_id, invite_link, username=resolved_username, created_by_tg_id=creator_tg_id, created_by_dc_fp=creator_dc_fp)
 
         if row_id:
             _invalidate_dc_channel_cache(tg_channel_id)

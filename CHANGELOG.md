@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.37.0] - 2026-11-11
+
+### Added
+- **Channels for Delta Chat sub-admins**: A DC sub-admin can now use `/channeladd`, `/channelremove` (only channels they added) and `/channels` in a private chat (public channels plus their own) and open their own private channels with `/channelN`. Channels now record the key of the sub-admin who added them.
+- **Readable `/subadmins`**: The list shows the name, the last 8 characters of the key and, in brackets, the latest address the person wrote from. The address and name are refreshed whenever a sub-admin uses the bot. `/subadminremove` also accepts the last 8+ characters of the key.
+
 ## [2.36.2] - 2026-11-11
 
 ### Added

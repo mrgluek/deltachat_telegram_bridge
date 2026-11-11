@@ -338,6 +338,11 @@ def handle_dc_message(bot, accid, event):
                     # Note: sub-admins are identified by TG ID in the DB, so for DC we mostly rely on admin_dc_email
                     
                     if not is_admin:
+                        sub_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+                        if sub_fp and database.get_channel_dc_creator(ch['id']) == sub_fp:
+                            is_admin = True
+
+                    if not is_admin:
                         # Deny access to private channels for regular users
                         _bot_module._dc_send_msg_with_stats(bot, accid, dc_chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
                         return

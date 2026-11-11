@@ -261,10 +261,19 @@ def _is_private_chat(bot, accid, chat_id) -> bool:
 def _dc_subadmin_fp(bot, accid, from_id):
     """The sender's sub-admin key fingerprint if they are a Delta Chat sub-admin, else None.
 
-    Sub-admins are matched by key fingerprint only (no email fallback)."""
+    Sub-admins are matched by key fingerprint only (no email fallback). A match also refreshes the
+    address and name stored for the key, so /subadmins shows the latest address they write from."""
     try:
         fps = _get_contact_fingerprint(bot, accid, from_id)
-        return database.is_dc_subadmin_fp(fps) if fps else None
+        fp = database.is_dc_subadmin_fp(fps) if fps else None
+        if fp:
+            try:
+                c = bot.rpc.get_contact(accid, from_id)
+                get_val = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+                database.update_dc_subadmin_info(fp, get_val("address") or "", get_val("display_name") or "")
+            except Exception as e:
+                logger.debug(f"Could not refresh sub-admin info: {e}")
+        return fp
     except Exception as e:
         logger.error(f"Error during sub-admin verification: {e}")
         return None

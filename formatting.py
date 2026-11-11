@@ -1552,6 +1552,9 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"\n🛠 **Sub-admin:**\n"
             f"/bridge <tg_group_id> — Link this DC group to a Telegram group\n"
             f"/unbridge — Remove a bridge you created\n"
+            f"/channeladd @name or ID — Bridge a TG channel or group\n"
+            f"/channelremove N — Remove a channel you added\n"
+            f"/channels — Public channels and the ones you added\n"
             f"/stats — In a private chat: statistics of your bridges\n"
         )
 

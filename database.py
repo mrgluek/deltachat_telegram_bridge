@@ -205,6 +205,16 @@ def init_db():
                     created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))
                 )
             ''')
+            # Migration: sub-admin display name; channel creator key
+            try:
+                col_names = [c[1] for c in cursor.execute("PRAGMA table_info(dc_subadmins)").fetchall()]
+                if 'name' not in col_names:
+                    cursor.execute("ALTER TABLE dc_subadmins ADD COLUMN name TEXT DEFAULT ''")
+                col_names = [c[1] for c in cursor.execute("PRAGMA table_info(channels)").fetchall()]
+                if 'created_by_dc_fp' not in col_names:
+                    cursor.execute("ALTER TABLE channels ADD COLUMN created_by_dc_fp TEXT")
+            except Exception:
+                pass
             # Migration: add created_by_dc_fp to bridges
             try:
                 col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
@@ -957,15 +967,15 @@ def add_channel(tg_username: str, dc_chat_id: int, invite_link: str | None = Non
         finally:
             conn.close()
 
-def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | None = None, username: str | None = None, created_by_tg_id: int | None = None) -> int | None:
+def add_channel_by_id(tg_channel_id: int, dc_chat_id: int, invite_link: str | None = None, username: str | None = None, created_by_tg_id: int | None = None, created_by_dc_fp: str | None = None) -> int | None:
     """Add a TG channel -> DC broadcast mapping by numeric ID (for private channels). Returns the row id."""
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id, reactions_count) VALUES (?, ?, ?, ?, ?, 0)",
-                (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id)
+                "INSERT INTO channels (tg_channel_username, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id, created_by_dc_fp, reactions_count) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                (username.lower() if username else None, tg_channel_id, dc_chat_id, invite_link, created_by_tg_id, _norm_fp(created_by_dc_fp) if created_by_dc_fp else None)
             )
             conn.commit()
             return cursor.lastrowid
@@ -1287,7 +1297,7 @@ def is_owner(tg_user_id: int) -> bool:
 def _norm_fp(fp: str | None) -> str:
     return re.sub(r"[^0-9A-F]", "", (fp or "").upper())
 
-def add_dc_subadmin(fingerprint: str, email: str) -> bool:
+def add_dc_subadmin(fingerprint: str, email: str, name: str = "") -> bool:
     """Add a Delta Chat sub-admin key. Returns False if the fingerprint is invalid or already present."""
     fp = _norm_fp(fingerprint)
     if len(fp) != 40 or not email:
@@ -1295,7 +1305,7 @@ def add_dc_subadmin(fingerprint: str, email: str) -> bool:
     with _lock:
         conn = _connect()
         try:
-            conn.cursor().execute("INSERT INTO dc_subadmins (fingerprint, email) VALUES (?, ?)", (fp, email.strip().lower()))
+            conn.cursor().execute("INSERT INTO dc_subadmins (fingerprint, email, name) VALUES (?, ?, ?)", (fp, email.strip().lower(), (name or "").strip()))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -1303,27 +1313,45 @@ def add_dc_subadmin(fingerprint: str, email: str) -> bool:
         finally:
             conn.close()
 
-def remove_dc_subadmin(email: str) -> int:
-    """Remove all keys of a sub-admin address. Returns the number of removed keys."""
+def remove_dc_subadmin(ident: str) -> int:
+    """Remove sub-admin keys by e-mail or by (the end of) a fingerprint. Returns the number of removed keys."""
+    ident = (ident or "").strip().lower()
+    suffix = _norm_fp(ident)
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM dc_subadmins WHERE email = ?", ((email or "").strip().lower(),))
+            cursor.execute("DELETE FROM dc_subadmins WHERE email = ?", (ident,))
             n = cursor.rowcount
+            if n == 0 and "@" not in ident and len(suffix) >= 8:
+                cursor.execute("DELETE FROM dc_subadmins WHERE fingerprint LIKE ?", ("%" + suffix,))
+                n = cursor.rowcount
             conn.commit()
             return n
         finally:
             conn.close()
 
-def get_dc_subadmins() -> list[tuple[str, str]]:
-    """Return (email, fingerprint) pairs of all DC sub-admins."""
+def update_dc_subadmin_info(fingerprint: str, email: str, name: str) -> None:
+    """Remember the latest address and display name a sub-admin key was seen with."""
+    email = (email or "").strip().lower()
+    with _lock:
+        conn = _connect()
+        try:
+            conn.cursor().execute(
+                "UPDATE dc_subadmins SET email = CASE WHEN ? != '' THEN ? ELSE email END, name = CASE WHEN ? != '' THEN ? ELSE name END WHERE fingerprint = ?",
+                (email, email, (name or "").strip(), (name or "").strip(), _norm_fp(fingerprint)))
+            conn.commit()
+        finally:
+            conn.close()
+
+def get_dc_subadmins() -> list[tuple[str, str, str]]:
+    """Return (email, fingerprint, name) triples of all DC sub-admin keys."""
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT email, fingerprint FROM dc_subadmins ORDER BY created_at, email")
-            return [(r[0], r[1]) for r in cursor.fetchall()]
+            cursor.execute("SELECT email, fingerprint, COALESCE(name, '') FROM dc_subadmins ORDER BY created_at, email")
+            return [(r[0], r[1], r[2]) for r in cursor.fetchall()]
         finally:
             conn.close()
 
@@ -1415,6 +1443,18 @@ def get_channel_creator(channel_id: int) -> int | None:
             cursor.execute("SELECT created_by_tg_id FROM channels WHERE id = ?", (channel_id,))
             row = cursor.fetchone()
             return row[0] if row else None
+        finally:
+            conn.close()
+
+def get_channel_dc_creator(channel_id: int) -> str | None:
+    """Fingerprint of the DC sub-admin who added this channel, or None."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT created_by_dc_fp FROM channels WHERE id = ?", (channel_id,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
         finally:
             conn.close()
 

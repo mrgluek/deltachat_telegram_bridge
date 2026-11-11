@@ -352,13 +352,13 @@ Sub-admins **cannot** see or manage resources created by the owner or other sub-
 
 ### Delta Chat sub-admins
 
-A person can also be a sub-admin in **Delta Chat**, identified by their key fingerprint (no e-mail fallback). They can `/bridge <tg_group_id>` their own DC group, `/unbridge` bridges **they created** and see only those in `/stats` (private chat). They get no other admin commands.
+A person can also be a sub-admin in **Delta Chat**, identified by their key fingerprint (no e-mail fallback). They can `/bridge <tg_group_id>` their own DC group, `/unbridge` bridges **they created**, add channels with `/channeladd`, remove only channels **they added** with `/channelremove`, and see only their own bridges and channels in `/stats` and `/channels` (private chat). They get no other admin commands. `/subadmins` lists them as `name …last-8-of-key (latest address)`.
 
 | Command | Description |
 |---------|-------------|
 | `/subadminadd <email>` | Add a DC sub-admin (owner only, private chat). The person must message the bot first so the bot knows their key. |
 | contact card + caption `/subadminadd` | Same, but the key comes from the card, so the person does not have to write first |
-| `/subadminremove <email>` | Remove a DC sub-admin; their existing bridges stay |
+| `/subadminremove <email or key tail>` | Remove a DC sub-admin; their existing bridges stay |
 | `/subadmins` | List DC sub-admins |
 
 ## Channel Bridging (TG Channel → DC Broadcast)

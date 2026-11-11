@@ -58,7 +58,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.36.2"
+VERSION = "2.37.0"
 # Attachments over 64 KB are only downloaded for bridged groups (see dc_events)
 DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("tgbridge")
@@ -465,10 +465,13 @@ def dc_channeladd_command(bot, accid, event):
     msg = event.msg
     payload = event.payload.strip()
     
-    # Admin check
+    # Owner, or a DC sub-admin (their channels are recorded under their key)
+    creator_fp = None
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
-        return
+        creator_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+        if not creator_fp:
+            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator or a sub-admin can manage channels."))
+            return
 
     if not payload:
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /channeladd @username or t.me link"))
@@ -477,7 +480,7 @@ def dc_channeladd_command(bot, accid, event):
     # Use run_coroutine_threadsafe since dc_cli hooks might run in a separate thread
     async def run_add():
         status_id = _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
-        result = await _add_channel_bridge(payload)
+        result = await _add_channel_bridge(payload, creator_dc_fp=creator_fp)
         # Convert HTML response to Markdown for DC
         result_md = to_dc_markdown(result)
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=result_md))
@@ -496,9 +499,12 @@ def dc_channelremove_command(bot, accid, event):
     msg = event.msg
     payload = event.payload.strip()
     
+    sub_fp = None
     if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can manage channels."))
-        return
+        sub_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+        if not sub_fp:
+            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator or a sub-admin can manage channels."))
+            return
 
     if not payload:
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /channelremove N (channel number)"))
@@ -510,7 +516,10 @@ def dc_channelremove_command(bot, accid, event):
         if not ch:
              _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Channel #{channel_id} not found."))
              return
-             
+        if sub_fp and database.get_channel_dc_creator(channel_id) != sub_fp:
+             _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Sub-admins can only remove channels they added."))
+             return
+
         tg_channel_id = _notify_and_remove_channel_bridge(ch)
         if tg_channel_id:
              _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Channel bridge #{channel_id} removed."))
@@ -712,15 +721,16 @@ def unbridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is not bridged."))
 
 
-def _dc_contact_key_fingerprints(bot, accid, email: str) -> list[str]:
-    """Fingerprints of the known key contacts of an address (empty if the person never wrote to the bot)."""
+def _dc_contact_key_fingerprints(bot, accid, email: str):
+    """(fingerprints, display name) of the known key contacts of an address (empty if the person never wrote to the bot)."""
     import bot as _bot_module
     fps = []
+    name = ""
     try:
         candidates = bot.rpc.get_contact_ids(accid, 0, email) or []
     except Exception as e:
         logger.debug(f"Could not list contacts for {email}: {e}")
-        return fps
+        return fps, name
     for cid in candidates:
         try:
             c = bot.rpc.get_contact(accid, cid)
@@ -737,27 +747,28 @@ def _dc_contact_key_fingerprints(bot, accid, email: str) -> list[str]:
 
 
 def _dc_vcard_key_fingerprints(bot, accid, path: str):
-    """Read a contact card: returns (email, key fingerprints, error text or None)."""
+    """Read a contact card: returns (email, key fingerprints, display name, error text or None)."""
     import bot as _bot_module
     try:
         cards = bot.rpc.parse_vcard(path) or []
     except Exception as e:
         logger.info(f"parse_vcard failed: {e}")
-        return None, [], "❌ Could not read that contact card."
+        return None, [], "", "❌ Could not read that contact card."
     if len(cards) != 1:
-        return None, [], "❌ Send a card of exactly one contact."
+        return None, [], "", "❌ Send a card of exactly one contact."
     card = cards[0]
     get_val = card.get if isinstance(card, dict) else (lambda k, d=None, _c=card: getattr(_c, k, d))
     email = (get_val("addr") or "").strip().lower()
+    name = (get_val("display_name") or "").strip()
     if "@" not in email:
-        return None, [], "❌ The contact card has no e-mail address."
+        return None, [], "", "❌ The contact card has no e-mail address."
     if not get_val("key"):
-        return email, [], f"❌ The card of {email} has no key. Ask them to send the bot a message (e.g. /help) first, then use /subadminadd {email}."
+        return email, [], "", f"❌ The card of {email} has no key. Ask them to send the bot a message (e.g. /help) first, then use /subadminadd {email}."
     try:
         ids = bot.rpc.import_vcard(accid, path) or []
     except Exception as e:
         logger.info(f"import_vcard failed: {e}")
-        return email, [], "❌ Could not import that contact card."
+        return email, [], "", "❌ Could not import that contact card."
     fps = []
     for cid in ids:
         try:
@@ -772,8 +783,8 @@ def _dc_vcard_key_fingerprints(bot, accid, path: str):
         except Exception:
             continue
     if not fps:
-        return email, [], f"❌ Could not read the key of {email} from the card. Ask them to send the bot a message (e.g. /help) first."
-    return email, fps, None
+        return email, [], "", f"❌ Could not read the key of {email} from the card. Ask them to send the bot a message (e.g. /help) first."
+    return email, fps, name, None
 
 
 @dc_cli.on(events.NewMessage(command="/subadminadd"))
@@ -790,7 +801,7 @@ def dc_subadminadd_command(bot, accid, event):
         return
     vcard_path = getattr(msg, "file", None)
     if vcard_path and str(vcard_path).lower().endswith(".vcf"):
-        email, fps, err = _dc_vcard_key_fingerprints(bot, accid, str(vcard_path))
+        email, fps, name, err = _dc_vcard_key_fingerprints(bot, accid, str(vcard_path))
         if err:
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=err))
             return
@@ -799,13 +810,13 @@ def dc_subadminadd_command(bot, accid, event):
         if "@" not in email or " " in email:
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminadd user@example.org\n\nOr send the person's contact card with the caption /subadminadd. With an e-mail the person must write to the bot in a private chat first, so that the bot knows their key."))
             return
-        fps = _dc_contact_key_fingerprints(bot, accid, email)
+        fps, name = _dc_contact_key_fingerprints(bot, accid, email)
         if not fps:
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ No known key for {email}. Ask them to send the bot a message (e.g. /help) first, or send their contact card with the caption /subadminadd."))
             return
-    added = [fp for fp in fps if database.add_dc_subadmin(fp, email)]
+    added = [fp for fp in fps if database.add_dc_subadmin(fp, email, name)]
     if added:
-        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} is now a sub-admin ({len(added)} key{'s' if len(added) != 1 else ''}). They can use /bridge and /unbridge for their own groups."))
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} is now a sub-admin ({len(added)} key{'s' if len(added) != 1 else ''}). They can use /bridge, /unbridge and /channeladd for their own groups and channels."))
     else:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ {email} is already a sub-admin."))
 
@@ -824,10 +835,10 @@ def dc_subadminremove_command(bot, accid, event):
         return
     email = (event.payload or "").strip().lower()
     if not email:
-        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminremove user@example.org"))
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminremove user@example.org or the last 8+ characters of the key shown in /subadmins"))
         return
     if database.remove_dc_subadmin(email):
-        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} removed from sub-admins. Their existing bridges stay."))
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} removed from sub-admins. Their existing bridges and channels stay."))
     else:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ {email} is not a sub-admin."))
 
@@ -848,11 +859,11 @@ def dc_subadmins_command(bot, accid, event):
     if not rows:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="👥 No sub-admins. Use /subadminadd user@example.org to add one."))
         return
-    emails = []
-    for email, _fp in rows:
-        if email not in emails:
-            emails.append(email)
-    lines = [f"👥 Sub-admins ({len(emails)})\n"] + [f"• {e}" for e in emails]
+    lines = [f"👥 Sub-admins ({len(rows)})\n"]
+    for email, fp, name in rows:
+        label = name or email
+        addr = f" ({email})" if name else ""
+        lines.append(f"• {label} …{fp[-8:]}{addr}")
     _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
@@ -1252,9 +1263,13 @@ def channels_command_dc(bot, accid, event):
         pass
 
     channels = database.get_all_channels()
+    sub_fp = None if is_admin else (_bot_module._dc_subadmin_fp(bot, accid, msg.from_id) if is_private_chat else None)
     if is_admin and is_private_chat:
         # Admin in private chat sees everything (including private channels)
         display_channels = channels
+    elif sub_fp:
+        # Sub-admin in private chat: public channels plus the ones they added
+        display_channels = [c for c in channels if c.get('tg_channel_username') or database.get_channel_dc_creator(c['id']) == sub_fp]
     else:
         # Groups or non-admins only see public channels (those with a username)
         display_channels = [c for c in channels if c.get('tg_channel_username')]

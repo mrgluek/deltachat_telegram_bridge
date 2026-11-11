@@ -28,9 +28,24 @@ class TestDcSubadmins(unittest.TestCase):
         self.assertTrue(database.add_dc_subadmin(FP1, "Bob@Example.org"))
         self.assertFalse(database.add_dc_subadmin(FP1, "bob@example.org"))
         self.assertFalse(database.add_dc_subadmin("short", "x@example.org"))
-        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1)])
+        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1, "")])
         self.assertEqual(database.remove_dc_subadmin("BOB@example.org"), 1)
         self.assertEqual(database.remove_dc_subadmin("bob@example.org"), 0)
+
+    def test_update_info_and_remove_by_key_suffix(self):
+        database.add_dc_subadmin(FP1, "old@example.org", "Bob")
+        database.update_dc_subadmin_info(FP1, "New@Example.org", "")
+        self.assertEqual(database.get_dc_subadmins(), [("new@example.org", FP1, "Bob")])
+        database.update_dc_subadmin_info(FP1, "", "Robert")
+        self.assertEqual(database.get_dc_subadmins(), [("new@example.org", FP1, "Robert")])
+        self.assertEqual(database.remove_dc_subadmin(FP1[-8:]), 1)
+        self.assertEqual(database.get_dc_subadmins(), [])
+
+    def test_channel_creator(self):
+        rid = database.add_channel_by_id(-1001, 20, "link", username="chan", created_by_dc_fp=FP1)
+        rid2 = database.add_channel_by_id(-1002, 21, "link")
+        self.assertEqual(database.get_channel_dc_creator(rid), FP1)
+        self.assertIsNone(database.get_channel_dc_creator(rid2))
 
     def test_match_by_fingerprint(self):
         database.add_dc_subadmin(FP1, "bob@example.org")
@@ -109,13 +124,50 @@ class TestDcSubadminCommands(unittest.TestCase):
                 patch.object(self.bot, "_dc_send_msg_with_stats")]
 
     def test_subadminadd_from_vcard(self):
-        card = {"addr": "Bob@Example.org", "key": "AAAA"}
+        card = {"addr": "Bob@Example.org", "key": "AAAA", "display_name": "Bobby"}
         contact = {"address": "bob@example.org", "is_key_contact": True}
         patches = self._vcard_setup([card], [7], {7: contact}, FP1)
         with patches[0], patches[1], patches[2], patches[3] as send:
             self.dc.dc_subadminadd_command(self.mock_bot, 1, self.event)
-        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1)])
+        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1, "Bobby")])
         self.assertIn("is now a sub-admin", self._sent(send))
+
+    def test_subadmins_list_shows_name_key_and_address(self):
+        from unittest.mock import patch
+        database.add_dc_subadmin(FP1, "bob@example.org", "Bobby")
+        database.add_dc_subadmin(FP2, "eve@example.org")
+        with patch.object(self.bot, "_is_dc_admin", return_value=True), \
+             patch.object(self.bot, "_is_private_chat", return_value=True), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.dc_subadmins_command(self.mock_bot, 1, self.event)
+        text = self._sent(send)
+        self.assertIn(f"Bobby …{FP1[-8:]} (bob@example.org)", text)
+        self.assertIn(f"eve@example.org …{FP2[-8:]}", text)
+
+    def test_subadmin_channels_add_and_remove_only_own(self):
+        from unittest.mock import patch
+        rid_own = database.add_channel_by_id(-1001, 30, "l", username="own", created_by_dc_fp=FP1)
+        rid_other = database.add_channel_by_id(-1002, 31, "l", username="other", created_by_dc_fp=FP2)
+        self.event.payload = str(rid_other)
+        with patch.object(self.bot, "_is_dc_admin", return_value=False), \
+             patch.object(self.bot, "_dc_subadmin_fp", return_value=FP1), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.dc_channelremove_command(self.mock_bot, 1, self.event)
+            self.assertIn("only remove channels they added", self._sent(send))
+            self.assertIsNotNone(database.get_channel_by_id(rid_other))
+            self.event.payload = str(rid_own)
+            with patch.object(self.dc, "_notify_and_remove_channel_bridge", return_value=-1001):
+                self.dc.dc_channelremove_command(self.mock_bot, 1, self.event)
+            self.assertIn("removed", self._sent(send))
+
+    def test_stranger_cannot_add_channel(self):
+        from unittest.mock import patch
+        self.event.payload = "@chan"
+        with patch.object(self.bot, "_is_dc_admin", return_value=False), \
+             patch.object(self.bot, "_dc_subadmin_fp", return_value=None), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.dc_channeladd_command(self.mock_bot, 1, self.event)
+        self.assertIn("Only the bot administrator", self._sent(send))
 
     def test_vcard_without_key_or_wrong_address_refused(self):
         patches = self._vcard_setup([{"addr": "bob@example.org", "key": None}], [], {}, FP1)
