@@ -437,7 +437,7 @@ class TestTelegramBridge(unittest.TestCase):
         mock_contact.id = 1
         mock_dc_bot.rpc.get_contact.return_value = mock_contact
 
-        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1, manual=True))
         self.assertEqual(stats['orphaned_bridges_removed'], 1)
         
         bridges = database.get_all_bridges()
@@ -498,7 +498,7 @@ class TestTelegramBridge(unittest.TestCase):
         mock_contact.id = 1
         mock_dc_bot.rpc.get_contact.return_value = mock_contact
 
-        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1))
+        stats = asyncio.run(bot.cleanup_stale_bridges(dc_bot=mock_dc_bot, accid=1, manual=True))
         self.assertEqual(stats['orphaned_channels_removed'], 1)
 
         channels = database.get_all_channels()

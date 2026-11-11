@@ -902,7 +902,7 @@ def dc_cleanup_command(bot, accid, event):
     if _bot_module.main_loop and _bot_module.main_loop.is_running():
         async def _do_cleanup():
             try:
-                stats = await _bot_module.cleanup_stale_bridges(dc_bot=bot, accid=accid)
+                stats = await _bot_module.cleanup_stale_bridges(dc_bot=bot, accid=accid, manual=True)
                 total_removed = (
                     stats['orphaned_bridges_removed']
                     + stats['duplicate_bridges_removed']

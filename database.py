@@ -92,9 +92,12 @@ def init_db():
                 )
             ''')
             # Migration: ensure message_map composite primary key includes tg_msg_id
+            cursor.execute("SAVEPOINT migrate_message_map")
             try:
-                pk_cols = [c[1] for c in cursor.execute("PRAGMA table_info(message_map)").fetchall() if c[5] > 0]
+                columns = cursor.execute("PRAGMA table_info(message_map)").fetchall()
+                pk_cols = [c[1] for c in columns if c[5] > 0]
                 if pk_cols and 'tg_msg_id' not in pk_cols:
+                    old_columns = {c[1] for c in columns}
                     cursor.execute("ALTER TABLE message_map RENAME TO message_map_old")
                     cursor.execute('''
                         CREATE TABLE message_map (
@@ -107,13 +110,18 @@ def init_db():
                             PRIMARY KEY (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id)
                         )
                     ''')
-                    cursor.execute('''
-                        INSERT OR IGNORE INTO message_map (dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, created_at)
-                        SELECT dc_msg_id, dc_chat_id, tg_msg_id, tg_chat_id, content_hash, created_at FROM message_map_old
-                    ''')
+                    names = ['dc_msg_id', 'dc_chat_id', 'tg_msg_id', 'tg_chat_id', 'content_hash', 'created_at']
+                    values = [name if name in old_columns else ('0' if name == 'created_at' else 'NULL') for name in names]
+                    cursor.execute(
+                        f"INSERT INTO message_map ({', '.join(names)}) "
+                        f"SELECT {', '.join(values)} FROM message_map_old"
+                    )
                     cursor.execute("DROP TABLE message_map_old")
-            except Exception:
-                pass
+                cursor.execute("RELEASE SAVEPOINT migrate_message_map")
+            except Exception as e:
+                cursor.execute("ROLLBACK TO SAVEPOINT migrate_message_map")
+                cursor.execute("RELEASE SAVEPOINT migrate_message_map")
+                raise RuntimeError("Failed to migrate message_map; original mappings preserved") from e
             # Clean up old mappings (keep last 10000)
             cursor.execute('''
                 DELETE FROM message_map WHERE rowid NOT IN (
@@ -473,8 +481,8 @@ def remove_bridge_by_tg(tg_chat_id: int):
         try:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM bridges WHERE tg_chat_id = ?", (tg_chat_id,))
-            cursor.execute("DELETE FROM message_map WHERE tg_chat_id = ?", (tg_chat_id,))
             deleted = cursor.rowcount > 0
+            cursor.execute("DELETE FROM message_map WHERE tg_chat_id = ?", (tg_chat_id,))
             conn.commit()
             return deleted
         finally:

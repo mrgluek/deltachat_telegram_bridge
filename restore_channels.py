@@ -167,12 +167,8 @@ def main():
                             except: pass
 
                         cursor.execute(
-                            "DELETE FROM bridges WHERE dc_chat_id = ? AND tg_chat_id = ?",
-                            (old_dc_chat_id, tg_chat_id)
-                        )
-                        cursor.execute(
-                            "INSERT INTO bridges (dc_chat_id, tg_chat_id, reactions_count, created_by_tg_id) VALUES (?, ?, ?, ?)",
-                            (dc_chat_id, tg_chat_id, reactions_count, created_by_tg_id)
+                            "UPDATE bridges SET dc_chat_id = ? WHERE dc_chat_id = ? AND tg_chat_id = ?",
+                            (dc_chat_id, old_dc_chat_id, tg_chat_id)
                         )
                         print(f"  Success! New DC Chat ID: {dc_chat_id}")
                     except Exception as br_err:

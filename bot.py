@@ -540,7 +540,10 @@ def start_dc_bot():
         logger.error(f"DC CLI error: {e}")
 
 
-async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, ub_client=None) -> dict:
+_cleanup_absent_chats: dict[int, float] = {}
+
+
+async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, ub_client=None, manual=False) -> dict:
     """
     Scan configured bridges and channels to remove stale, orphaned, or duplicate records.
     Returns a dict with summary stats.
@@ -573,20 +576,50 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
     except Exception:
         self_contact_id = 1
 
-    # Helper to check DC chat details
+    # Cache each result within a pass; repeated pairings are not separate observations.
+    observations = {}
+    confirmed_absent = set()
+    consecutive_unknown = 0
+    pass_time = time.time()
+
     def get_dc_info(dc_cid):
+        nonlocal consecutive_unknown
+        if dc_cid in observations:
+            return observations[dc_cid]
+        state, info, sub_count = 'unknown', None, 0
         try:
             info = dc_bot.rpc.get_basic_chat_info(accid, dc_cid)
-            if not info or not isinstance(info, dict) or not info.get("name"):
-                return None, 0
-            contacts = dc_bot.rpc.get_chat_contacts(accid, dc_cid)
-            if contacts:
-                sub_count = len(contacts) - 1 if self_contact_id in contacts else len(contacts)
+            if isinstance(info, dict) and info.get('deleted') is True:
+                state = 'absent'
+            elif isinstance(info, dict) and info.get('name'):
+                _cleanup_absent_chats.pop(dc_cid, None)
+                contacts = dc_bot.rpc.get_chat_contacts(accid, dc_cid)
+                if not isinstance(contacts, (list, tuple)):
+                    raise ValueError("Invalid chat contacts response")
+                sub_count = len(contacts) - (1 if self_contact_id in contacts else 0)
+                state = 'present'
             else:
-                sub_count = 0
-            return info, max(0, sub_count)
-        except Exception:
-            return None, 0
+                raise ValueError("Invalid chat info response")
+        except Exception as e:
+            # Only an explicit missing-chat response proves absence. Runtime/transport
+            # errors (including failed member lookups) must never remove mappings.
+            text = str(e).lower()
+            if info is None and not isinstance(e, (RuntimeError, TimeoutError, ConnectionError, OSError)) and 'chat' in text and any(
+                marker in text for marker in ('not found', 'does not exist', 'no such', 'deleted')
+            ):
+                state = 'absent'
+            else:
+                logger.warning(f"Cleanup: Unknown DC chat {dc_cid}, skipping: {e}")
+        if state == 'unknown':
+            consecutive_unknown += 1
+        else:
+            consecutive_unknown = 0
+        if state == 'absent':
+            first_seen = _cleanup_absent_chats.setdefault(dc_cid, pass_time)
+            if manual or pass_time - first_seen >= 600:
+                confirmed_absent.add(dc_cid)
+        observations[dc_cid] = (state, info, max(0, sub_count))
+        return observations[dc_cid]
 
     def delete_dc_chat_safe(dc_cid):
         try:
@@ -609,11 +642,16 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
     for tg_cid, bridge_list in tg_to_bridges.items():
         evaluated = []
         for dc_cid, r_count in bridge_list:
-            info, sub_count = get_dc_info(dc_cid)
+            state, info, sub_count = get_dc_info(dc_cid)
+            if consecutive_unknown >= 3:
+                logger.warning("Cleanup: Aborting after three consecutive unknown DC chats.")
+                return stats
+            if state != 'present' and dc_cid not in confirmed_absent:
+                continue
             m_count = database.get_bridge_message_count(dc_cid, tg_cid)
             evaluated.append({
                 'dc_cid': dc_cid,
-                'exists_in_dc': info is not None,
+                'exists_in_dc': state == 'present',
                 'info': info,
                 'title': info.get('name', '') if info else '',
                 'sub_count': sub_count,
@@ -631,6 +669,9 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
                 logger.info(f"Cleanup: Removed orphaned DB bridge DC {b['dc_cid']} ↔ TG {tg_cid} (chat does not exist in DC)")
             else:
                 alive_bridges.append(b)
+
+        if any(observations[cid][0] == 'unknown' for cid, _ in bridge_list):
+            continue
 
         # B. Handle duplicates for the same tg_cid
         remaining_bridges = []
@@ -689,8 +730,11 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
         dc_cid = ch.get('dc_chat_id')
         if not dc_cid:
             continue
-        info, _ = get_dc_info(dc_cid)
-        if info is None:
+        state, info, _ = get_dc_info(dc_cid)
+        if consecutive_unknown >= 3:
+            logger.warning("Cleanup: Aborting after three consecutive unknown DC chats.")
+            return stats
+        if dc_cid in confirmed_absent:
             database.remove_channel(ch_id)
             _invalidate_dc_channel_cache(ch.get('tg_channel_id'))
             _clear_dc_caches(dc_cid)
