@@ -258,6 +258,18 @@ def _is_private_chat(bot, accid, chat_id) -> bool:
     return False
 
 
+def _dc_subadmin_fp(bot, accid, from_id):
+    """The sender's sub-admin key fingerprint if they are a Delta Chat sub-admin, else None.
+
+    Sub-admins are matched by key fingerprint only (no email fallback)."""
+    try:
+        fps = _get_contact_fingerprint(bot, accid, from_id)
+        return database.is_dc_subadmin_fp(fps) if fps else None
+    except Exception as e:
+        logger.error(f"Error during sub-admin verification: {e}")
+        return None
+
+
 def _is_dc_admin(bot, accid, from_id):
     """Checks if a Delta Chat user is the bot administrator."""
     try:

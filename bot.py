@@ -127,6 +127,7 @@ from dc_helpers import (
     _parse_chat_info_is_private,
     _is_private_chat,
     _is_dc_admin,
+    _dc_subadmin_fp,
     _dc_send_msg_with_stats,
     _userbot_leave_chat,
 )

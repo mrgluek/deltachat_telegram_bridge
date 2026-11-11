@@ -197,6 +197,21 @@ def init_db():
                     created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))
                 )
             ''')
+            # Delta Chat sub-admins (identified by key fingerprint)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dc_subadmins (
+                    fingerprint TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    created_at INTEGER DEFAULT (strftime(\'%s\',\'now\'))
+                )
+            ''')
+            # Migration: add created_by_dc_fp to bridges
+            try:
+                col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
+                if 'created_by_dc_fp' not in col_names:
+                    cursor.execute("ALTER TABLE bridges ADD COLUMN created_by_dc_fp TEXT")
+            except Exception:
+                pass
             # Migration: add created_by_tg_id to bridges
             try:
                 col_names = [c[1] for c in cursor.execute("PRAGMA table_info(bridges)").fetchall()]
@@ -414,12 +429,12 @@ def clear_expired_tg_post_cache(max_age_seconds: int = 86400):
         finally:
             conn.close()
 
-def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = None):
+def add_bridge(dc_chat_id: int, tg_chat_id: int, created_by_tg_id: int | None = None, created_by_dc_fp: str | None = None):
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id, reactions_count, created_at) VALUES (?, ?, ?, 0, strftime(\'%s\',\'now\'))", (dc_chat_id, tg_chat_id, created_by_tg_id))
+            cursor.execute("INSERT INTO bridges (dc_chat_id, tg_chat_id, created_by_tg_id, created_by_dc_fp, reactions_count, created_at) VALUES (?, ?, ?, ?, 0, strftime(\'%s\',\'now\'))", (dc_chat_id, tg_chat_id, created_by_tg_id, _norm_fp(created_by_dc_fp) if created_by_dc_fp else None))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -1268,6 +1283,92 @@ def is_owner_or_admin(tg_user_id: int) -> bool:
 def is_owner(tg_user_id: int) -> bool:
     admin_tg_id = get_config("admin_tg_id")
     return bool(admin_tg_id and str(tg_user_id) == str(admin_tg_id))
+
+def _norm_fp(fp: str | None) -> str:
+    return re.sub(r"[^0-9A-F]", "", (fp or "").upper())
+
+def add_dc_subadmin(fingerprint: str, email: str) -> bool:
+    """Add a Delta Chat sub-admin key. Returns False if the fingerprint is invalid or already present."""
+    fp = _norm_fp(fingerprint)
+    if len(fp) != 40 or not email:
+        return False
+    with _lock:
+        conn = _connect()
+        try:
+            conn.cursor().execute("INSERT INTO dc_subadmins (fingerprint, email) VALUES (?, ?)", (fp, email.strip().lower()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+def remove_dc_subadmin(email: str) -> int:
+    """Remove all keys of a sub-admin address. Returns the number of removed keys."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM dc_subadmins WHERE email = ?", ((email or "").strip().lower(),))
+            n = cursor.rowcount
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+
+def get_dc_subadmins() -> list[tuple[str, str]]:
+    """Return (email, fingerprint) pairs of all DC sub-admins."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT email, fingerprint FROM dc_subadmins ORDER BY created_at, email")
+            return [(r[0], r[1]) for r in cursor.fetchall()]
+        finally:
+            conn.close()
+
+def is_dc_subadmin_fp(fingerprints) -> str | None:
+    """Return the matching sub-admin fingerprint from a comma-separated string or iterable, else None."""
+    if isinstance(fingerprints, str):
+        fingerprints = fingerprints.split(",")
+    wanted = {_norm_fp(f) for f in (fingerprints or []) if f}
+    wanted.discard("")
+    if not wanted:
+        return None
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            for fp in wanted:
+                cursor.execute("SELECT 1 FROM dc_subadmins WHERE fingerprint = ?", (fp,))
+                if cursor.fetchone():
+                    return fp
+            return None
+        finally:
+            conn.close()
+
+def get_bridge_dc_creator(dc_chat_id: int) -> str | None:
+    """Fingerprint of the DC sub-admin who created the bridge of this DC chat, or None."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT created_by_dc_fp FROM bridges WHERE dc_chat_id = ?", (dc_chat_id,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+        finally:
+            conn.close()
+
+def get_bridges_by_dc_creator(fingerprint: str) -> list[tuple[int, int]]:
+    """Bridge pairs (dc_chat_id, tg_chat_id) created by a DC sub-admin key."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT dc_chat_id, tg_chat_id FROM bridges WHERE created_by_dc_fp = ?", (_norm_fp(fingerprint),))
+            return cursor.fetchall()
+        finally:
+            conn.close()
 
 def get_bridge_creator(dc_chat_id: int) -> int | None:
     """Get the TG user ID of the bridge creator, or None."""

@@ -1535,6 +1535,9 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"\n**Bridge Management (Owner only):**\n"
             f"/bridge <tg_group_id> — Link DC group to a Telegram group\n"
             f"/unbridge — Remove the bridge from the group\n"
+            f"/subadminadd <email> — Let a person bridge and unbridge their own groups\n"
+            f"/subadminremove <email> — Remove a sub-admin\n"
+            f"/subadmins — List sub-admins\n"
             f"/cleanup — Clean up stale, duplicate & orphaned bridges\n"
             f"/userbotsync — Force Userbot re-sync\n"
             f"/status — Show detailed bot and userbot status\n"
@@ -1544,6 +1547,14 @@ def get_dc_help_text(bot, accid, sender_email, from_id):
             f"/richmode [webxdc|split|both|off] — Configure Telegram rich posts & album relay mode\n"
         )
     
+    if (admin_dc_fingerprint or admin_dc_email) and not is_admin and _bot_module._dc_subadmin_fp(bot, accid, from_id):
+        help_text += (
+            f"\n🛠 **Sub-admin:**\n"
+            f"/bridge <tg_group_id> — Link this DC group to a Telegram group\n"
+            f"/unbridge — Remove a bridge you created\n"
+            f"/stats — In a private chat: statistics of your bridges\n"
+        )
+
     help_text += (
         f"\nTo get started, add me to a Delta Chat group and a Telegram group, then use /bridge to connect them.\n\n"
         f"Run your own bot: https://github.com/mrgluek/deltachat_telegram_bridge"

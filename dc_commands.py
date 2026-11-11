@@ -58,7 +58,7 @@ from userbot import sync_userbot_channels, run_channel_catchup, _channel_workers
 
 logger = logging.getLogger("tg_dc_bridge")
 
-VERSION = "2.35.3"
+VERSION = "2.36.0"
 # Attachments over 64 KB are only downloaded for bridged groups (see dc_events)
 DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("tgbridge")
@@ -630,11 +630,14 @@ def bridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
-    # Admin check: if a global admin is set, only they can manage bridges
+    # Admin check: if a global admin is set, only they and DC sub-admins can manage bridges
+    creator_fp = None
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
         if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /bridge."))
-            return
+            creator_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+            if not creator_fp:
+                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator or a sub-admin can use /bridge."))
+                return
     else:
         # Fallback to group creator check
         try:
@@ -658,7 +661,7 @@ def bridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must provide the Telegram chat ID. Example: /bridge -123456789"))
         return
 
-    if database.add_bridge(chat_id, tg_chat_id):
+    if database.add_bridge(chat_id, tg_chat_id, created_by_dc_fp=creator_fp):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✔️ Bridged with Telegram group {tg_chat_id}."))
     else:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is already bridged."))
@@ -677,11 +680,16 @@ def unbridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must send that command in a Delta Chat group, not here."))
         return
 
-    # Admin check
+    # Admin check: the owner removes any bridge, a DC sub-admin only bridges they created
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
         if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator can use /unbridge."))
-            return
+            sub_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+            if not sub_fp:
+                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator or a sub-admin can use /unbridge."))
+                return
+            if database.get_bridge_dc_creator(chat_id) != sub_fp:
+                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Sub-admins can only remove bridges they created."))
+                return
     else:
         try:
             contacts = bot.rpc.get_chat_contacts(accid, chat_id)
@@ -702,6 +710,103 @@ def unbridge_command(bot, accid, event):
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="✔️ Bridge removed."))
     else:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This chat is not bridged."))
+
+
+def _dc_contact_key_fingerprints(bot, accid, email: str) -> list[str]:
+    """Fingerprints of the known key contacts of an address (empty if the person never wrote to the bot)."""
+    import bot as _bot_module
+    fps = []
+    try:
+        candidates = bot.rpc.get_contact_ids(accid, 0, email) or []
+    except Exception as e:
+        logger.debug(f"Could not list contacts for {email}: {e}")
+        return fps
+    for cid in candidates:
+        try:
+            c = bot.rpc.get_contact(accid, cid)
+            get_val = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+            if (get_val("address") or "").strip().lower() != email or not get_val("is_key_contact", False):
+                continue
+            for fp in (_bot_module._get_contact_fingerprint(bot, accid, cid, c) or "").split(","):
+                fp = database._norm_fp(fp)
+                if fp and fp not in fps:
+                    fps.append(fp)
+        except Exception:
+            continue
+    return fps
+
+
+@dc_cli.on(events.NewMessage(command="/subadminadd"))
+def dc_subadminadd_command(bot, accid, event):
+    """Add a Delta Chat sub-admin by e-mail (owner only, private chat)."""
+    import bot as _bot_module
+    msg = event.msg
+    chat_id = msg.chat_id
+    if not _bot_module._is_private_chat(bot, accid, chat_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This command can only be used in a private chat with the bot."))
+        return
+    if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot owner can manage sub-admins."))
+        return
+    email = (event.payload or "").strip().lower()
+    if "@" not in email or " " in email:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminadd user@example.org\n\nThe person must write to the bot in a private chat first, so that the bot knows their key."))
+        return
+    fps = _dc_contact_key_fingerprints(bot, accid, email)
+    if not fps:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ No known key for {email}. Ask them to send the bot a message (e.g. /help) first, then try again."))
+        return
+    added = [fp for fp in fps if database.add_dc_subadmin(fp, email)]
+    if added:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} is now a sub-admin ({len(added)} key{'s' if len(added) != 1 else ''}). They can use /bridge and /unbridge for their own groups."))
+    else:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ {email} is already a sub-admin."))
+
+
+@dc_cli.on(events.NewMessage(command="/subadminremove"))
+def dc_subadminremove_command(bot, accid, event):
+    """Remove a Delta Chat sub-admin by e-mail (owner only, private chat)."""
+    import bot as _bot_module
+    msg = event.msg
+    chat_id = msg.chat_id
+    if not _bot_module._is_private_chat(bot, accid, chat_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This command can only be used in a private chat with the bot."))
+        return
+    if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot owner can manage sub-admins."))
+        return
+    email = (event.payload or "").strip().lower()
+    if not email:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="Usage: /subadminremove user@example.org"))
+        return
+    if database.remove_dc_subadmin(email):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} removed from sub-admins. Their existing bridges stay."))
+    else:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ {email} is not a sub-admin."))
+
+
+@dc_cli.on(events.NewMessage(command="/subadmins"))
+def dc_subadmins_command(bot, accid, event):
+    """List Delta Chat sub-admins (owner only, private chat)."""
+    import bot as _bot_module
+    msg = event.msg
+    chat_id = msg.chat_id
+    if not _bot_module._is_private_chat(bot, accid, chat_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ This command can only be used in a private chat with the bot."))
+        return
+    if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot owner can view sub-admins."))
+        return
+    rows = database.get_dc_subadmins()
+    if not rows:
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="👥 No sub-admins. Use /subadminadd user@example.org to add one."))
+        return
+    emails = []
+    for email, _fp in rows:
+        if email not in emails:
+            emails.append(email)
+    lines = [f"👥 Sub-admins ({len(emails)})\n"] + [f"• {e}" for e in emails]
+    _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="\n".join(lines)))
 
 
 @dc_cli.on(events.NewMessage(command="/cleanup"))
@@ -1011,12 +1116,18 @@ def stats_command(bot, accid, event):
     is_private = chat_info.get("type") == 1
 
     if is_private:
-        # In private chat: show all bridges (admin only)
+        # In private chat: owner sees all bridges, a DC sub-admin only their own
+        sub_fp = None
         if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
-            return
+            sub_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
+            if not sub_fp:
+                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the bot admin can view all stats."))
+                return
 
         bridges = database.get_all_bridges()
+        if sub_fp:
+            own = {tuple(p) for p in database.get_bridges_by_dc_creator(sub_fp)}
+            bridges = [b for b in bridges if (b[0], b[1]) in own]
         if not bridges:
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="📊 No bridges configured."))
             return
