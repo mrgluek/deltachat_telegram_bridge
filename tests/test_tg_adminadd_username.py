@@ -88,3 +88,27 @@ class TestAdminAdd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReplyOrSend(unittest.TestCase):
+    def _upd(self, reply_exc):
+        upd = MagicMock()
+        upd.effective_chat.id = -100
+        upd.effective_message.is_topic_message = False
+        upd.effective_message.reply_text = AsyncMock(side_effect=reply_exc)
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        return upd, ctx
+
+    def test_falls_back_when_command_message_was_deleted(self):
+        from telegram.error import BadRequest
+        upd, ctx = self._upd(BadRequest("Message to be replied not found"))
+        run(tg_commands._reply_or_send(upd, ctx, "hi", parse_mode="HTML"))
+        ctx.bot.send_message.assert_awaited_once_with(-100, "hi", message_thread_id=None, parse_mode="HTML")
+
+    def test_other_errors_propagate(self):
+        from telegram.error import BadRequest
+        upd, ctx = self._upd(BadRequest("Chat is too big"))
+        with self.assertRaises(BadRequest):
+            run(tg_commands._reply_or_send(upd, ctx, "hi"))
+        ctx.bot.send_message.assert_not_awaited()

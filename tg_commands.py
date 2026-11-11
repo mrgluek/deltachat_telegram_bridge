@@ -23,6 +23,7 @@ import time
 from typing import Optional
 
 import database
+from telegram.error import BadRequest
 from deltachat2 import MsgData
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -213,6 +214,19 @@ async def tg_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await retry_async(update.effective_message.reply_text, f"❌ Error generating status report: {e}", max_retries=3, delay=2.0)
 
 
+async def _reply_or_send(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
+    """reply_text, but if the command message was deleted meanwhile (e.g. by a moderation bot)
+    send the text to the chat instead of failing with "Message to be replied not found"."""
+    msg = update.effective_message
+    try:
+        return await msg.reply_text(text, **kwargs)
+    except BadRequest as e:
+        if "not found" not in str(e).lower():
+            raise
+        thread_id = getattr(msg, "message_thread_id", None) if getattr(msg, "is_topic_message", False) else None
+        return await context.bot.send_message(update.effective_chat.id, text, message_thread_id=thread_id, **kwargs)
+
+
 async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bridge a TG group to a new DC group. Auto-creates the DC group."""
     import bot as _bot_module
@@ -220,40 +234,40 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type == "private":
-        await update.effective_message.reply_text("❌ You must send /bridge in a Telegram group, not here.")
+        await _reply_or_send(update, context, "❌ You must send /bridge in a Telegram group, not here.")
         return
 
     # Permission check: owner, sub-admin, or (in public mode) TG group admin
     admin_tg_id = database.get_config("admin_tg_id")
     if admin_tg_id:
         if not database.is_owner_or_admin(user.id):
-            await update.effective_message.reply_text("❌ Only the bot admin can use /bridge.")
+            await _reply_or_send(update, context, "❌ Only the bot admin can use /bridge.")
             return
     else:
         try:
             member = await chat.get_member(user.id)
             if member.status not in ("administrator", "creator"):
-                await update.effective_message.reply_text("❌ Only group admins can use /bridge.")
+                await _reply_or_send(update, context, "❌ Only group admins can use /bridge.")
                 return
         except Exception as e:
             logger.warning(f"Could not verify group admin permissions for /bridge: {e}")
-            await update.effective_message.reply_text("❌ Could not verify your group admin permissions.")
+            await _reply_or_send(update, context, "❌ Could not verify your group admin permissions.")
             return
 
     # Check if already bridged
     existing = database.get_dc_chats(chat.id)
     if existing:
-        await update.effective_message.reply_text("❌ This group is already bridged.")
+        await _reply_or_send(update, context, "❌ This group is already bridged.")
         return
 
     if not _bot_module.dc_bot_instance or not _bot_module.dc_accid:
-        await update.effective_message.reply_text("❌ Delta Chat bot is not ready yet.")
+        await _reply_or_send(update, context, "❌ Delta Chat bot is not ready yet.")
         return
 
     tg_chat_id = chat.id
     tg_title = chat.title or f"TG Group {tg_chat_id}"
 
-    await update.effective_message.reply_text(f"⏳ Setting up bridge for <b>{html.escape(tg_title)}</b>...", parse_mode='HTML')
+    await _reply_or_send(update, context, f"⏳ Setting up bridge for <b>{html.escape(tg_title)}</b>...", parse_mode='HTML')
 
     try:
         # Create DC group with same name
@@ -286,7 +300,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif invite_link.startswith("OPEN:"):
             invite_link = "https://i.delta.chat/#" + invite_link[5:]
 
-        await update.effective_message.reply_text(
+        await _reply_or_send(update, context, 
             f"✅ Bridged! DC group <b>{html.escape(tg_title)}</b> created.\n\n"
             f"🔗 Join in Delta Chat:\n{html.escape(invite_link)}",
             parse_mode='HTML',
@@ -295,7 +309,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"TG bridge: user {user.id} bridged TG {tg_chat_id} -> DC {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to create TG bridge: {e}")
-        await update.effective_message.reply_text("❌ Failed to create bridge. Please check logs for details.", parse_mode='HTML')
+        await _reply_or_send(update, context, "❌ Failed to create bridge. Please check logs for details.", parse_mode='HTML')
 
 
 async def tg_unbridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.37.1] - 2026-11-11
+
+### Fixed
+- **`/bridge` in Telegram when the command message is deleted**: If something (for example a moderation bot) deleted the `/bridge` message while the bridge was being set up, the bridge was created but the confirmation with the invite link failed with "Message to be replied not found" and the log said "Failed to create TG bridge". The bot now sends its replies to the chat directly when the command message is gone.
+
 ## [2.37.0] - 2026-11-11
 
 ### Added
