@@ -176,12 +176,12 @@ def admin_key_contact_id(bot, accid):
     The core keeps an address-only contact and one contact per key for each address, and
     lookup_contact_id_by_addr / create_contact give the address-only one: current cores cannot
     send to it ("e2e encryption unavailable"), so admin notices were lost. The key contact with
-    the fingerprint saved by /initadmin is preferred, then the most recently seen key contact of
-    the admin address (another device of the admin), then the old lookup (older cores)."""
+    the fingerprint saved by /initadmin is required when configured. Without a fingerprint,
+    use the most recently seen key contact, then the old lookup (older cores)."""
     email = (database.get_config("admin_dc_email") or "").strip().lower()
     if not email:
         return None
-    admin_fp = re.sub(r"[^0-9A-F]", "", (database.get_admin_fingerprint() or "").upper())
+    admin_fp = (database.get_config("admin_dc_fingerprint") or database.get_admin_fingerprint() or "").strip().replace(" ", "").replace(":", "").upper()
     try:
         candidates = bot.rpc.get_contact_ids(accid, 0, email) or []
     except Exception as e:
@@ -199,6 +199,9 @@ def admin_key_contact_id(bot, accid):
             key_contacts.append((get_val("last_seen", 0) or 0, cid))
         except Exception:
             continue
+    if admin_fp:
+        logger.warning("Admin key contact not found for the configured fingerprint; skipping notification")
+        return None
     if key_contacts:
         return max(key_contacts)[1]
     try:
@@ -290,7 +293,7 @@ def _is_dc_admin(bot, accid, from_id):
             pass
             
         # 2. Fingerprint check (Secure)
-        stored_fingerprint = database.get_config("admin_dc_fingerprint")
+        stored_fingerprint = database.get_config("admin_dc_fingerprint") or database.get_admin_fingerprint()
         if stored_fingerprint:
             # Try to get fingerprint through improved extraction
             current_fingerprint = _get_contact_fingerprint(bot, accid, from_id, contact=contact)
@@ -302,11 +305,10 @@ def _is_dc_admin(bot, accid, from_id):
                     return True
                 
             # If fingerprint is set but didn't match, we REJECT even if email matches (security)
-            if current_fingerprint:
-                 logger.warning(f"Admin fingerprint mismatch for {from_id}")
-                 return False
+            logger.warning(f"Admin fingerprint missing or mismatched for {from_id}")
+            return False
 
-        # 3. Email fallback (only used if fingerprint is not configured OR not found for current user)
+        # 3. Email fallback (only used if fingerprint is not configured)
         stored_email = database.get_config("admin_dc_email")
         if stored_email and contact:
             email = contact.address.replace(' ', '').lower()

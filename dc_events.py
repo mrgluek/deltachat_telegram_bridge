@@ -89,10 +89,15 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
 
         if _bot_module.userbot_client and _bot_module.userbot_client.is_connected():
             try:
+                from telethon.tl.types import Channel, User
                 entity = await asyncio.wait_for(_bot_module.userbot_client.get_entity(clean_username), timeout=15.0)
-                msgs = await asyncio.wait_for(_bot_module.userbot_client.get_messages(entity, ids=post_id), timeout=15.0)
-                if msgs:
-                    tg_msg = msgs[0] if isinstance(msgs, list) else msgs
+                if isinstance(entity, Channel) or (
+                        isinstance(entity, User) and entity.bot and database.get_channel_by_tg_id(entity.id) is not None):
+                    msgs = await asyncio.wait_for(_bot_module.userbot_client.get_messages(entity, ids=post_id), timeout=15.0)
+                    if msgs:
+                        tg_msg = msgs[0] if isinstance(msgs, list) else msgs
+                else:
+                    logger.info(f"Userbot refused direct post entity @{clean_username}/{post_id}: {type(entity).__name__}")
             except Exception as ub_err:
                 logger.warning(f"Userbot entity/message fetch failed for @{clean_username}/{post_id}: {ub_err}")
 

@@ -1295,12 +1295,16 @@ def is_owner(tg_user_id: int) -> bool:
     return bool(admin_tg_id and str(tg_user_id) == str(admin_tg_id))
 
 def _norm_fp(fp: str | None) -> str:
-    return re.sub(r"[^0-9A-F]", "", (fp or "").upper())
+    return re.sub(r"[\s:]", "", (fp or "").upper())
+
+def is_valid_dc_fingerprint(fingerprint: str | None) -> bool:
+    """Whether a fingerprint is an OpenPGP v4 or v6 key fingerprint."""
+    return re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", _norm_fp(fingerprint)) is not None
 
 def add_dc_subadmin(fingerprint: str, email: str, name: str = "") -> bool:
     """Add a Delta Chat sub-admin key. Returns False if the fingerprint is invalid or already present."""
     fp = _norm_fp(fingerprint)
-    if len(fp) != 40 or not email:
+    if not is_valid_dc_fingerprint(fp) or not email:
         return False
     with _lock:
         conn = _connect()
@@ -1722,25 +1726,20 @@ def set_admin_fingerprint(fp: str):
 
 def is_authorized_sender(sender_addr: str, fingerprint: str | None = None) -> bool:
     admin_email = get_admin_email()
-    admin_fp = get_admin_fingerprint()
+    admin_fp = get_config("admin_dc_fingerprint") or get_admin_fingerprint()
 
     if not admin_email and not admin_fp:
         return False
 
     sender_addr_clean = (sender_addr or "").strip().lower()
 
-    if admin_email and sender_addr_clean == admin_email:
-        if admin_fp:
-            if fingerprint:
-                fp_clean = fingerprint.strip().replace(" ", "").replace(":", "").upper()
-                return admin_fp in fp_clean
+    if admin_fp:
+        target = admin_fp.strip().replace(" ", "").replace(":", "").upper()
+        if not re.fullmatch(r"[0-9A-F]{32,64}", target):
             return False
-        return True
+        fingerprints = (fingerprint or "").split(",")
+        return target in {fp.strip().replace(" ", "").replace(":", "").upper() for fp in fingerprints}
 
-    if admin_fp and fingerprint:
-        fp_clean = fingerprint.strip().replace(" ", "").replace(":", "").upper()
-        return admin_fp in fp_clean
-
-    return False
+    return bool(admin_email and sender_addr_clean == admin_email)
 
 init_db()

@@ -814,6 +814,9 @@ def dc_subadminadd_command(bot, accid, event):
         if not fps:
             _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ No known key for {email}. Ask them to send the bot a message (e.g. /help) first, or send their contact card with the caption /subadminadd."))
             return
+    if not all(database.is_valid_dc_fingerprint(fp) for fp in fps):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Invalid key for {email}. Expected a 40- or 64-character hexadecimal fingerprint."))
+        return
     added = [fp for fp in fps if database.add_dc_subadmin(fp, email, name)]
     if added:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"✅ {email} is now a sub-admin ({len(added)} key{'s' if len(added) != 1 else ''}). They can use /bridge, /unbridge and /channeladd for their own groups and channels."))
