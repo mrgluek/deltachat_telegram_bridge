@@ -260,7 +260,9 @@ The bot needs to be added to the Telegram group. When you bridge from Telegram, 
 
 - The `bridge.db` (or `data/bridge.db` when using Docker) file contains your **Telegram bot token** in plaintext. Protect it with appropriate file permissions (e.g. `chmod 600 data/bridge.db`).
 
-- Management commands (`/bridge`, `/unbridge`, `/id`) are restricted to group admins or bot owner (see below).
+- Management commands (`/bridge`, `/unbridge`, `/id`) are restricted to group admins or bot owner (see below). The full permission matrix is in [PERMISSIONS.md](PERMISSIONS.md).
+- When an owner key (fingerprint) is configured, the owner is recognised by the key alone; the e-mail address is not compared as a fallback.
+- Direct `t.me` link previews read only channels and supergroups through the userbot, at most 5 per sender per minute.
 - Messages are rate-limited to **30 messages per minute per chat** to prevent flooding.
 - **Global outgoing limit**: The bot enforces a global limit of **60 messages per minute** across all Delta Chat interactions to stay within chatmail server limits.
 - **Deletion Safety Guard**: To prevent accidental data loss, the bot limits automatic deletion sync to **5 messages per 60 seconds**. Bulk deletions are blocked and reported to the admin. Note: technical deletions (like replacing an old message during an edit fallback) are exempt from this limit.
@@ -352,7 +354,7 @@ Sub-admins **cannot** see or manage resources created by the owner or other sub-
 
 ### Delta Chat sub-admins
 
-A person can also be a sub-admin in **Delta Chat**, identified by their key fingerprint (no e-mail fallback). They can `/bridge <tg_group_id>` their own DC group, `/unbridge` bridges **they created**, add channels with `/channeladd`, remove only channels **they added** with `/channelremove`, and see only their own bridges and channels in `/stats` and `/channels` (private chat). They get no other admin commands. `/subadmins` lists them as `name …last-8-of-key (latest address)`.
+A person can also be a sub-admin in **Delta Chat**, identified by their key fingerprint (no e-mail fallback). They can `/bridge <tg_group_id>` their own DC group (not one that already has a bridge: only the owner may add a second DC group to it), `/unbridge` bridges **they created**, add channels with `/channeladd`, remove only channels **they added** with `/channelremove`, and see only their own bridges and channels in `/stats` and `/channels` (private chat). They get no other admin commands. `/subadmins` lists them as `name …last-8-of-key (latest address)`.
 
 | Command | Description |
 |---------|-------------|
@@ -407,6 +409,7 @@ The bot can bridge **Telegram channels** and **groups** to **Delta Chat broadcas
 
 The bot includes unified keyword and phrase filtering for all bridged channels and group chats. When an incoming Telegram post, edit, or group message contains any filtered word or phrase (case-insensitive substring match), it is skipped and not relayed to Delta Chat. An album (several images in one post) is judged by the captions of all its images, so a filtered post is dropped completely.
 
+- Filter commands are **owner-only** in both Telegram and Delta Chat.
 - `/filters` — Show all active filters with their numbered IDs.
 - `/filteradd <word or phrase>` — Add a filter (e.g. `/filteradd #реклама` or `/filteradd erid=`).
 - `/filterdel <number or phrase>` — Remove a filter by its ID number from `/filters` or by exact text (alias `/filterremove`).

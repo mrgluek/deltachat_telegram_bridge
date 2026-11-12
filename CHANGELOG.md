@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.38.0] - 2026-11-12
+
+Security and reliability release: the fixes of two code audits (one by Codex, one independent by Gemini).
+
+### Security
+- **Owner by key only**: when an owner fingerprint is configured, the owner is recognised by that key alone. The e-mail is no longer compared as a fallback, so a sender without a key who writes from the owner's address is not the owner. Admin notices and userbot login codes also no longer go to another key of the same address.
+- **Sub-admin boundaries**: `/unbridge` removes only the pairs a sub-admin created (the owner removes all); private channel invite links are given only in a private chat; Telegram `/status` and the message filters (`/filters`, `/filteradd`, `/filterdel`) are owner-only; `/invite` and `/inviteqr` give a sub-admin only the invites of their own bridges; a sub-admin can no longer bridge a Telegram group that already has a bridge.
+- **`/initadmin`** is closed when the bot already has a Telegram owner.
+- **Link previews** read only channels and supergroups through the userbot, never private dialogs with people. A bridged bot can be previewed only when the owner sends the link, and such answers are not cached. Previews are limited to 5 per sender per minute and 3 at a time.
+- **Downloads**: redirects are followed manually (at most 3) and checked on every hop; images and embeds are read as a stream with a hard size limit; images above 25 megapixels are refused.
+- **WebXDC pages**: only http(s), mailto and tg links are kept, and the code language is escaped.
+- **Docker image** excludes `.env*`, session files, databases and keys. Sub-admin key removal no longer accepts wildcard characters, and sub-admin keys of 40 and 64 hex digits are accepted.
+
+### Fixed
+- **`/subadminadd <email>`** failed since 2.37.0 (the contact lookup returned the wrong value); sending a contact card worked. Fixed.
+- **Cleanup no longer deletes on doubt**: a Delta Chat RPC error is not proof that a chat is gone. Automatic cleanup deletes only after two separate explicit "not found" answers at least 10 minutes apart, and stops when three answers in a row are unknown. The manual `/cleanup` still deletes at once on an explicit answer.
+- **Migration of the old `message_map` table** runs in one transaction and rolls back with a clear error instead of silently losing data.
+- **Edits of userbot posts** within two minutes of the post are no longer dropped as duplicates; live locations are kept per chat (two chats with the same message number no longer overwrite each other) and expire; `/unbridge` in Telegram no longer says "not bridged" for a bridge without messages; restoring bridges keeps their creators; temporary files of rich posts are removed.
+- **A private legacy Telegram group** bridged by ID was listed as public.
+- **Userbot restarts** wait until the old client has really disconnected and its session is closed, back off after failures (30 s up to 5 min) and wait up to 30 s for the session database, which ends the "database is locked" restart storms seen during Telegram outages.
+- **Delta Chat RPC calls no longer run on the event loop**, so a slow send cannot freeze Telegram polling and keepalives. Userbot events of chats that are not bridged no longer allocate queues.
+
 ## [2.37.1] - 2026-11-11
 
 ### Fixed
