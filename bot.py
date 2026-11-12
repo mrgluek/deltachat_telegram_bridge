@@ -1036,7 +1036,8 @@ async def main():
                     if not is_healthy:
                         logger.info("Userbot client is offline or unhealthy. Restarting...")
                         # Run restart in background to not block the main heartbeat
-                        asyncio.create_task(start_userbot())
+                        from userbot import _schedule_userbot_restart
+                        _schedule_userbot_restart()
                 last_userbot_check = now
 
                 # Restarts the reconciliation loop if it died or hung.

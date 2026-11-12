@@ -29,6 +29,8 @@ import re
 import threading
 import time
 from typing import Optional
+from functools import wraps
+from weakref import WeakKeyDictionary
 
 import database
 from deltachat2 import MsgData, SystemMessageType
@@ -38,10 +40,46 @@ from formatting import TelegramRichPost, get_dc_help_text, _truncate, _format_te
 from caching import _get_content_hash
 from media import _extract_telethon_rich_message, _with_rich_post_inputs
 from dc_helpers import async_update_channels_dc, _get_tg_chat_desc
-from security import _is_rate_limited, DC_FALLBACK_PATTERN, _consume_bot_initiated_delete, _is_deletion_rate_limited, DELETE_SYNC_MAX, DELETE_SYNC_WINDOW
+from security import _wait_for_global_dc_rate_limit, _is_rate_limited, DC_FALLBACK_PATTERN, _consume_bot_initiated_delete, _is_deletion_rate_limited, DELETE_SYNC_MAX, DELETE_SYNC_WINDOW
 from relay import async_relay_to_tg, _delete_tg_message
 
 logger = logging.getLogger("tg_dc_bridge")
+
+
+_preview_requests = {}
+_preview_requests_lock = threading.Lock()
+_preview_semaphores = WeakKeyDictionary()
+
+
+def _allow_preview_request(contact_id):
+    now = time.monotonic()
+    with _preview_requests_lock:
+        for sender, times in list(_preview_requests.items()):
+            while times and now - times[0] >= 60:
+                times.popleft()
+            if not times:
+                del _preview_requests[sender]
+        times = _preview_requests.setdefault(contact_id, collections.deque())
+        if len(times) >= 5:
+            return False
+        times.append(now)
+        return True
+
+
+def _limit_preview_work(func):
+    @wraps(func)
+    async def limited(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        semaphore = _preview_semaphores.setdefault(loop, asyncio.Semaphore(3))
+        async with semaphore:
+            return await func(*args, **kwargs)
+    return limited
+
+
+async def _send_preview_reply(bot, accid, chat_id, msg_data):
+    import bot as _bot_module
+    await _wait_for_global_dc_rate_limit()
+    return await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, msg_data)
 
 
 def _react(bot, accid, msg_id, reaction: str):
@@ -54,6 +92,7 @@ def _react(bot, accid, msg_id, reaction: str):
         logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
 
 
+@_limit_preview_work
 @_with_rich_post_inputs
 async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None):
     """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
@@ -74,12 +113,12 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
             text = cached.get("text") or ""
             file_path = cached.get("file_path")
             if post_type in ("webxdc", "photo") and file_path and os.path.exists(file_path):
-                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text, file=file_path))
+                await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=text, file=file_path))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache ({post_type})")
                 _react(bot, accid, dc_msg_id, "☑️")
                 return
             elif post_type == "text":
-                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=text))
+                await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=text))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: served from cache (text)")
                 _react(bot, accid, dc_msg_id, "☑️")
                 return
@@ -135,7 +174,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 if await _bot_module._package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
                     caption = f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{clean_username}/{post_id}" if rich_post.teaser else f"📰 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
                     database.add_cached_tg_post(cache_key, "webxdc", caption, xdc_path)
-                    await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=xdc_path))
+                    await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=xdc_path))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: packaged and delivered as WebXDC")
                     _react(bot, accid, dc_msg_id, "☑️")
                     return
@@ -156,7 +195,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                     caption = f"📷 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}" if text_body else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
                     caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
                     database.add_cached_tg_post(cache_key, "photo", caption, img_dest)
-                    await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=img_dest))
+                    await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=img_dest))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as photo")
                     _react(bot, accid, dc_msg_id, "☑️")
                     return
@@ -167,7 +206,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 caption = f"💬 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}"
                 caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
                 database.add_cached_tg_post(cache_key, "text", caption, None)
-                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
+                await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as text")
                 _react(bot, accid, dc_msg_id, "☑️")
                 return
@@ -190,7 +229,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                             caption = f"📷 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}" if formatted_text else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
                             caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
                             database.add_cached_tg_post(cache_key, "photo", caption, downloaded)
-                            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption, file=downloaded))
+                            await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=downloaded))
                             _react(bot, accid, dc_msg_id, "☑️")
                             return
                     except Exception as dl_err:
@@ -200,7 +239,7 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 caption = f"💬 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}"
                 caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
                 database.add_cached_tg_post(cache_key, "text", caption, None)
-                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, dc_chat_id, MsgData(text=caption))
+                await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption))
                 _react(bot, accid, dc_msg_id, "☑️")
                 return
 
@@ -440,6 +479,10 @@ def handle_dc_message(bot, accid, event):
                 post_username = tg_post_m.group(1)
                 post_id_str = tg_post_m.group(2)
                 if post_username.lower() != "c" and post_id_str.isdigit():
+                    if not _allow_preview_request(msg.from_id):
+                        logger.debug("Direct TG post preview limit exceeded for DC contact %s", msg.from_id)
+                        _react(bot, accid, msg.id, "⛔")
+                        return
                     target_post_id = int(post_id_str)
                     logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
                     # React immediately, synchronously: the async task below may sit queued

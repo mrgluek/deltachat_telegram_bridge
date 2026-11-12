@@ -102,6 +102,8 @@ class TestUserbotQueue(unittest.TestCase):
         self.assertEqual(res.stale, 0)
 
     def test_queue_bookkeeping_tracks_pending(self):
+        database.add_channel_by_id(-1009999, 599, username="queued")
+        userbot._bridged_chats_expires = 0.0
         async def scenario():
             processed = asyncio.Event()
 

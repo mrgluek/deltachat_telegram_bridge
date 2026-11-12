@@ -4,6 +4,7 @@ import tempfile
 import zipfile
 import asyncio
 import unittest
+import httpx
 from unittest.mock import MagicMock, patch, AsyncMock
 try:
     from PIL import Image
@@ -134,8 +135,8 @@ class TestRichPosts(unittest.TestCase):
         mock_resp.status_code = 200
         mock_resp.text = sample_embed_html
 
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+        with patch('bot._is_safe_telegram_url', return_value=True), patch('httpx.AsyncClient.stream') as mock_stream:
+            mock_stream.return_value.__aenter__.return_value = httpx.Response(200, text=mock_resp.text)
             rich_post = asyncio.run(bot._extract_public_tg_post_rich("durov", 1234))
 
         self.assertIsNotNone(rich_post)
@@ -348,8 +349,8 @@ class TestRichPosts(unittest.TestCase):
         mock_resp.status_code = 200
         mock_resp.text = sample_embed_html
 
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+        with patch('bot._is_safe_telegram_url', return_value=True), patch('httpx.AsyncClient.stream') as mock_stream:
+            mock_stream.return_value.__aenter__.return_value = httpx.Response(200, text=mock_resp.text)
             rich_post = asyncio.run(bot._extract_public_tg_post_rich("chtddd", 96722))
 
         self.assertIsNotNone(rich_post)
@@ -471,13 +472,13 @@ class TestRichPosts(unittest.TestCase):
                 except: pass
 
     def test_download_video_with_limit(self):
-        # 1. Reject if Content-Length header is larger than max_bytes
+        # 1. Reject if streamed GET Content-Length is larger than max_bytes
         mock_head = MagicMock()
         mock_head.status_code = 200
         mock_head.headers = {"content-length": "25000000"}  # 25 MB
 
-        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head_call:
-            mock_head_call.return_value = mock_head
+        with patch('bot._is_safe_telegram_url', return_value=True), patch('httpx.AsyncClient.stream') as mock_stream:
+            mock_stream.return_value.__aenter__.return_value = mock_head
             tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
             os.close(tmp_fd)
             try:
@@ -503,9 +504,8 @@ class TestRichPosts(unittest.TestCase):
             async def __aexit__(self, exc_type, exc, tb):
                 pass
 
-        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head_call, \
+        with patch('bot._is_safe_telegram_url', return_value=True), \
              patch('httpx.AsyncClient.stream', return_value=FakeStreamResponse()):
-            mock_head_call.side_effect = Exception("HEAD failed")
             tmp_fd, tmp_file = tempfile.mkstemp(suffix=".mp4")
             os.close(tmp_fd)
             try:
@@ -639,8 +639,8 @@ class TestRichPosts(unittest.TestCase):
         mock_resp.status_code = 200
         mock_resp.text = unsupported_embed_html
 
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+        with patch('bot._is_safe_telegram_url', return_value=True), patch('httpx.AsyncClient.stream') as mock_stream:
+            mock_stream.return_value.__aenter__.return_value = httpx.Response(200, text=mock_resp.text)
             rich_post = asyncio.run(bot._extract_public_tg_post_rich("qwerty_live", 8889))
 
         self.assertIsNotNone(rich_post)

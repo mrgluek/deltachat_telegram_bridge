@@ -101,6 +101,29 @@ def _patch_telethon_reconnect():
         logger.warning(f"Could not patch Telethon MTProtoSender._reconnect: {_patch_err}")
 
 
+def _patch_telethon_sqlite_timeout():
+    try:
+        from telethon.sessions import SQLiteSession
+        original = SQLiteSession._cursor
+        if getattr(original, '_bridge_busy_timeout', False):
+            return
+
+        def cursor_with_timeout(self):
+            opening = getattr(self, '_conn', None) is None
+            cursor = original(self)
+            if opening:
+                try:
+                    self._conn.execute("PRAGMA busy_timeout=30000")
+                except Exception as e:
+                    logger.warning("Could not set Telethon SQLite busy timeout: %s", e)
+            return cursor
+
+        cursor_with_timeout._bridge_busy_timeout = True
+        SQLiteSession._cursor = cursor_with_timeout
+    except Exception as e:
+        logger.warning("Could not patch Telethon SQLite busy timeout: %s", e)
+
+
 def _custom_unraisablehook(unraisable):
     """Suppress benign Telethon GeneratorExit cleanup noise during garbage collection."""
     if unraisable.exc_type is RuntimeError and "coroutine ignored GeneratorExit" in str(unraisable.exc_value):
@@ -118,4 +141,5 @@ def apply():
         return
     _applied = True
     _patch_telethon_reconnect()
+    _patch_telethon_sqlite_timeout()
     sys.unraisablehook = _custom_unraisablehook

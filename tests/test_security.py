@@ -4,14 +4,16 @@ import os
 import socket
 import tempfile
 import unittest
+import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import bot
 
 
 class TestSecurity(unittest.TestCase):
-    def test_safe_telegram_urls(self):
-        # Valid telegram domains
+    @patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('149.154.167.99', 443))])
+    def test_safe_telegram_urls(self, dns):
+        # Valid telegram domains with public DNS.
         self.assertTrue(bot._is_safe_telegram_url("https://t.me/durov/123"))
         self.assertTrue(bot._is_safe_telegram_url("https://telegram.org/img/logo.png"))
         self.assertTrue(bot._is_safe_telegram_url("https://cdn4.telesco.pe/file/avatar.jpg"))
@@ -93,8 +95,8 @@ class TestSecurity(unittest.TestCase):
         mock_resp.content = b'X' * (21 * 1024 * 1024)  # 21 MB (exceeds 20MB limit)
 
         with patch('bot._is_safe_telegram_url', return_value=True), \
-             patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+             patch('httpx.AsyncClient.stream') as mock_stream:
+            mock_stream.return_value.__aenter__.return_value = httpx.Response(200, content=mock_resp.content)
 
             tmp_fd, tmp_file = tempfile.mkstemp(suffix=".jpg")
             os.close(tmp_fd)

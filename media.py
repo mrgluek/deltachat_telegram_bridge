@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import time
 import zipfile
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import wraps
 from typing import Optional
@@ -43,6 +44,47 @@ from formatting import (
 )
 
 logger = logging.getLogger("tg_dc_bridge")
+
+
+@asynccontextmanager
+async def _safe_download_stream(url, headers, timeout, https_only=False):
+    """Validate each redirect before opening a bounded remote download."""
+    import httpx
+    import bot as _bot_module
+    from urllib.parse import urljoin, urlparse
+
+    async with _get_download_semaphore():
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            for hop in range(4):
+                if (https_only and urlparse(url).scheme != "https") or not _bot_module._is_safe_telegram_url(url):
+                    raise ValueError("Unsafe Telegram download URL")
+                async with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        location = response.headers.get("location")
+                        if hop == 3 or not location:
+                            raise ValueError("Too many or invalid Telegram redirects")
+                        url = urljoin(url, location)
+                        continue
+                    yield response
+                    return
+
+
+@asynccontextmanager
+async def _fetch_telegram_bytes(url, headers, timeout, max_bytes, https_only=False):
+    import httpx
+    async with _safe_download_stream(url, headers, timeout, https_only) as response:
+        length = response.headers.get("content-length", "")
+        if response.status_code != 200 or (length.isdigit() and int(length) > max_bytes):
+            yield None
+            return
+        content = bytearray()
+        async for chunk in response.aiter_bytes(chunk_size=65536):
+            if len(content) + len(chunk) > max_bytes:
+                yield None
+                return
+            content.extend(chunk)
+        # Preserve HTTPX's charset handling for embed HTML.
+        yield httpx.Response(200, headers={"content-type": response.headers.get("content-type", "")}, content=bytes(content))
 
 
 # Only disposable native rich-post inputs live here; cached deliverables stay elsewhere.
@@ -368,17 +410,12 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
         return False
 
     try:
-        import httpx
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
         }
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200 and resp.content:
-                if len(resp.content) > 20 * 1024 * 1024:
-                    logger.warning(f"Image {url} exceeds limit (20 MB), skipping download")
-                    return False
+        async with _fetch_telegram_bytes(url, headers, 15.0, 20 * 1024 * 1024) as resp:
+            if resp is not None and resp.content:
                 try:
                     with Image.open(io.BytesIO(resp.content)) as img:
                         if img.mode in ("RGBA", "P"):
@@ -440,49 +477,36 @@ async def _download_video_with_limit(url: str, output_path: str, max_bytes: int)
         return False
 
     try:
-        import httpx
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36',
             'Referer': 'https://t.me/'
         }
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            # 1. Quick HEAD check if Content-Length header is present
-            try:
-                head_resp = await client.head(url, headers=headers)
-                cl = head_resp.headers.get("content-length")
-                if cl and cl.isdigit() and int(cl) > max_bytes:
-                    logger.info(f"Video {url} exceeds limit ({int(cl)} > {max_bytes} bytes), skipping download")
-                    return False
-            except Exception:
-                pass
+        async with _safe_download_stream(url, headers, 60.0) as resp:
+            if resp.status_code != 200:
+                return False
+            cl = resp.headers.get("content-length")
+            if cl and cl.isdigit() and int(cl) > max_bytes:
+                logger.info(f"Video Content-Length ({int(cl)}) exceeds limit {max_bytes}, skipping download")
+                return False
 
-            # 2. Streaming GET with chunk byte counting
-            async with client.stream("GET", url, headers=headers) as resp:
-                if resp.status_code != 200:
-                    return False
-                cl = resp.headers.get("content-length")
-                if cl and cl.isdigit() and int(cl) > max_bytes:
-                    logger.info(f"Video Content-Length ({int(cl)}) exceeds limit {max_bytes}, skipping download")
-                    return False
-
-                downloaded = 0
-                exceeded = False
-                with open(output_path, "wb") as f:
-                    async for chunk in resp.aiter_bytes(chunk_size=65536):
-                        downloaded += len(chunk)
-                        if downloaded > max_bytes:
-                            logger.info(f"Video download exceeded limit {max_bytes} bytes, aborting")
-                            exceeded = True
-                            break
-                        f.write(chunk)
-                if exceeded:
-                    if os.path.exists(output_path):
-                        try:
-                            os.unlink(output_path)
-                        except Exception:
-                            pass
-                    return False
-                return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+            downloaded = 0
+            exceeded = False
+            with open(output_path, "wb") as f:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        logger.info(f"Video download exceeded limit {max_bytes} bytes, aborting")
+                        exceeded = True
+                        break
+                    f.write(chunk)
+            if exceeded:
+                if os.path.exists(output_path):
+                    try:
+                        os.unlink(output_path)
+                    except Exception:
+                        pass
+                return False
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception as e:
         logger.warning(f"Failed to download video {url}: {e}")
         if os.path.exists(output_path):
@@ -506,13 +530,8 @@ async def _download_image_url(url: str) -> Optional[str]:
         logger.warning(f"SSRF guard: Rejected unsafe image URL in _download_image_url: {url}")
         return None
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-            if resp.status_code == 200 and resp.content:
-                if len(resp.content) > 20 * 1024 * 1024:
-                    logger.warning(f"Image {url} exceeds limit (20 MB), skipping download")
-                    return None
+        async with _fetch_telegram_bytes(url, {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, 15.0, 20 * 1024 * 1024) as resp:
+            if resp is not None and resp.content:
                 ext = '.jpg'
                 if '.png' in url.lower():
                     ext = '.png'
@@ -835,13 +854,11 @@ async def _extract_public_tg_post_rich(username: str, post_id: int) -> Optional[
         return None
     url = f"https://t.me/{clean_username}/{post_id}?embed=1"
     try:
-        import httpx
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36'
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code != 200 or not resp.text or len(resp.text) > 2 * 1024 * 1024:
+        async with _fetch_telegram_bytes(url, headers, 10.0, 2 * 1024 * 1024, https_only=True) as resp:
+            if resp is None or not resp.text:
                 return None
             content = resp.text
 

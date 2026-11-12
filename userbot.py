@@ -658,9 +658,38 @@ async def _process_userbot_deletion_internal(event):
                 logger.warning(f"TG→DC: Could not delete DC msg {dc_msg_id}: {e}")
 
 
+_bridged_chat_ids = set()
+_bridged_group_ids = set()
+_bridged_chat_usernames = set()
+_bridged_chats_expires = 0.0
+
+
+def _is_bridged_userbot_chat(chat_id, event):
+    """Cache the small bridge registry, rather than every unknown incoming chat."""
+    global _bridged_chat_ids, _bridged_group_ids, _bridged_chat_usernames, _bridged_chats_expires
+    now = time.monotonic()
+    if now >= _bridged_chats_expires:
+        channels = database.get_all_channels()
+        ids = [row['tg_channel_id'] for row in channels if row.get('tg_channel_id')]
+        _bridged_group_ids = {variant for row in database.get_all_bridges() for variant in database._normalize_tg_id_variants(row[1])}
+        _bridged_chat_ids = {variant for chat in ids for variant in database._normalize_tg_id_variants(chat)}
+        _bridged_chat_usernames = {row['tg_channel_username'].lower() for row in channels if row.get('tg_channel_username')}
+        _bridged_chats_expires = now + 5
+    variants = database._normalize_tg_id_variants(chat_id)
+    if any(variant in _bridged_group_ids for variant in variants):
+        return True
+    if any(variant in _bridged_chat_ids for variant in variants):
+        return bool(_get_cached_dc_channel_chat_id(chat_id))
+    message = getattr(event, 'message', None)
+    username = getattr(getattr(message, 'chat', None), 'username', None)
+    return isinstance(username, str) and username.lower() in _bridged_chat_usernames
+
+
 async def _queue_userbot_event(tg_channel_id: int, event_type: str, event_data: any):
     """Queue a channel event to process it sequentially."""
     global _channel_queues, _channel_workers
+    if not _is_bridged_userbot_chat(tg_channel_id, event_data):
+        return
     if tg_channel_id not in _channel_queues:
         _channel_queues[tg_channel_id] = asyncio.Queue()
     
@@ -731,6 +760,10 @@ async def _process_userbot_event(event, is_edit=False):
     import bot as _bot_module
     chat_id = getattr(event, 'chat_id', None)
     if chat_id:
+        # Telegram login codes are handled without allocating a per-chat worker.
+        if chat_id == 777000:
+            await _process_userbot_event_internal(event, is_edit=is_edit)
+            return
         await _bot_module._queue_userbot_event(chat_id, 'edit' if is_edit else 'new', event)
 
 
@@ -849,6 +882,91 @@ async def _process_userbot_event_internal(event, is_edit=False):
     await _bot_module._relay_userbot_message(dc_chat_id, msg, is_edit=is_edit)
 
 
+_userbot_restart_failures = 0
+_userbot_restart_after = 0.0
+_userbot_restart_task = None
+
+
+def _userbot_restart_delay(failures):
+    return min(30 * 2 ** min(max(failures - 1, 0), 4), 300)
+
+
+def _schedule_userbot_restart():
+    global _userbot_restart_task
+    if (_userbot_restart_task is not None and not _userbot_restart_task.done()) or time.monotonic() < _userbot_restart_after:
+        return
+    _userbot_restart_task = asyncio.create_task(_restart_userbot_with_backoff())
+
+
+async def _restart_userbot_with_backoff():
+    import bot as _bot_module
+    global _userbot_restart_failures, _userbot_restart_after
+    try:
+        started = await _bot_module.start_userbot()
+    except Exception as e:
+        logger.warning("Userbot watchdog restart failed: %s", e)
+        started = False
+    if started:
+        _userbot_restart_failures = 0
+        _userbot_restart_after = 0.0
+    else:
+        _userbot_restart_failures += 1
+        delay = _userbot_restart_delay(_userbot_restart_failures)
+        _userbot_restart_after = time.monotonic() + delay
+        logger.warning("Userbot restart failed; retrying in at least %s seconds", delay)
+
+
+def _disconnect_pending():
+    for task in asyncio.all_tasks():
+        if task is asyncio.current_task() or task.done():
+            continue
+        coro = task.get_coro()
+        name = getattr(coro, '__qualname__', getattr(coro, '__name__', ''))
+        if '_disconnect_coro' in name:
+            return True
+    return False
+
+
+async def _close_userbot_client(client):
+    """Keep ownership of the session until all disconnect writers have stopped."""
+    disconnect_task = None
+    try:
+        disconnect_task = asyncio.ensure_future(client.disconnect())
+        await asyncio.wait_for(asyncio.shield(disconnect_task), timeout=10)
+    except Exception as e:
+        logger.warning("Error disconnecting old Userbot client: %s", e)
+
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            stopped = not client.is_connected() and not _disconnect_pending()
+            stopped = stopped and (disconnect_task is None or disconnect_task.done())
+        except Exception:
+            stopped = False
+        if stopped:
+            if disconnect_task is not None:
+                # Retrieve failures even if the initial disconnect wait timed out.
+                try:
+                    disconnect_task.result()
+                except Exception:
+                    pass
+            try:
+                session = getattr(client, 'session', None)
+                if session is not None:
+                    session.close()
+                return True
+            except Exception as e:
+                logger.warning("Could not close old Userbot session: %s", e)
+                return False
+        if time.monotonic() >= deadline:
+            logger.warning("Old Userbot client is still disconnecting; aborting restart")
+            # Do not cancel Telethon's session-writing disconnect. Consume a late error.
+            if disconnect_task is not None:
+                disconnect_task.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+            return False
+        await asyncio.sleep(0.25)
+
+
 async def start_userbot():
     """Initialize and start the Telethon Userbot client."""
     import bot as _bot_module
@@ -890,25 +1008,11 @@ async def start_userbot():
             await asyncio.gather(*_userbot_tasks, return_exceptions=True)
             _userbot_tasks.clear()
 
-        # 2. Disconnect existing client
+        # 2. Never open the same session while the old client can still write it.
         if _bot_module.userbot_client:
-            try:
-                session = getattr(_bot_module.userbot_client, 'session', None)
-                # Use a timeout to ensure we don't hang during shutdown
-                await asyncio.wait_for(_bot_module.userbot_client.disconnect(), timeout=10)
-                if session and hasattr(session, 'close'):
-                    session.close()
-            except Exception as e:
-                logger.warning(f"Error disconnecting old Userbot client: {e}")
-                # Force close the SQLite session database connection if it exists
-                session = getattr(_bot_module.userbot_client, 'session', None)
-                if session and hasattr(session, 'close'):
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
-            finally:
-                _bot_module.userbot_client = None
+            if not await _close_userbot_client(_bot_module.userbot_client):
+                return False
+            _bot_module.userbot_client = None
 
         # Force garbage collection to clean up any unreferenced client/connection tasks
         import gc
@@ -956,17 +1060,13 @@ async def start_userbot():
                     await asyncio.sleep(10)
                     await sync_userbot_channels()
                 asyncio.create_task(_delayed_sync())
+        return True
     except Exception as e:
         logger.warning(f"Failed to start Userbot client: {e}")
-        # Explicitly close the new client's session to release the lock!
-        if _bot_module.userbot_client:
-            session = getattr(_bot_module.userbot_client, 'session', None)
-            if session and hasattr(session, 'close'):
-                try:
-                    session.close()
-                except Exception:
-                    pass
-        _bot_module.userbot_client = None
+        # Retain the failed client for the next attempt if it cannot stop safely.
+        if _bot_module.userbot_client and await _close_userbot_client(_bot_module.userbot_client):
+            _bot_module.userbot_client = None
+        return False
     finally:
         _is_starting_userbot = False
 

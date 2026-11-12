@@ -983,6 +983,8 @@ def _is_safe_telegram_url(url: str) -> bool:
         # DNS resolution check: block domains resolving to private, loopback, link-local, multicast, or reserved IPs
         try:
             addr_info = socket.getaddrinfo(hostname, None)
+            if not addr_info:
+                return False
             for _, _, _, _, sockaddr in addr_info:
                 ip_str = sockaddr[0]
                 ip = ipaddress.ip_address(ip_str)
@@ -999,8 +1001,7 @@ def _is_safe_telegram_url(url: str) -> bool:
                     ):
                         return False
         except (socket.gaierror, OSError):
-            # In offline or mock unit test environments, unresolvable allowed test hosts are tolerated
-            pass
+            return False
 
         return True
     except Exception:
