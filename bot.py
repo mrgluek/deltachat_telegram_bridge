@@ -572,7 +572,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
 
     # Get bot's self contact ID for DC member count checks
     try:
-        self_contact = dc_bot.rpc.get_contact(accid, 1)
+        self_contact = await asyncio.to_thread(dc_bot.rpc.get_contact, accid, 1)
         self_contact_id = getattr(self_contact, 'id', 1) if hasattr(self_contact, 'id') else (self_contact.get('id', 1) if isinstance(self_contact, dict) else 1)
     except Exception:
         self_contact_id = 1
@@ -583,18 +583,18 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
     consecutive_unknown = 0
     pass_time = time.time()
 
-    def get_dc_info(dc_cid):
+    async def get_dc_info(dc_cid):
         nonlocal consecutive_unknown
         if dc_cid in observations:
             return observations[dc_cid]
         state, info, sub_count = 'unknown', None, 0
         try:
-            info = dc_bot.rpc.get_basic_chat_info(accid, dc_cid)
+            info = await asyncio.to_thread(dc_bot.rpc.get_basic_chat_info, accid, dc_cid)
             if isinstance(info, dict) and info.get('deleted') is True:
                 state = 'absent'
             elif isinstance(info, dict) and info.get('name'):
                 _cleanup_absent_chats.pop(dc_cid, None)
-                contacts = dc_bot.rpc.get_chat_contacts(accid, dc_cid)
+                contacts = await asyncio.to_thread(dc_bot.rpc.get_chat_contacts, accid, dc_cid)
                 if not isinstance(contacts, (list, tuple)):
                     raise ValueError("Invalid chat contacts response")
                 sub_count = len(contacts) - (1 if self_contact_id in contacts else 0)
@@ -622,9 +622,9 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
         observations[dc_cid] = (state, info, max(0, sub_count))
         return observations[dc_cid]
 
-    def delete_dc_chat_safe(dc_cid):
+    async def delete_dc_chat_safe(dc_cid):
         try:
-            dc_bot.rpc.delete_chat(accid, dc_cid)
+            await asyncio.to_thread(dc_bot.rpc.delete_chat, accid, dc_cid)
             stats['dc_chats_deleted'] += 1
             _clear_dc_caches(dc_cid)
             logger.info(f"Cleanup: Deleted DC chat {dc_cid} from Delta Chat core.")
@@ -643,7 +643,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
     for tg_cid, bridge_list in tg_to_bridges.items():
         evaluated = []
         for dc_cid, r_count in bridge_list:
-            state, info, sub_count = get_dc_info(dc_cid)
+            state, info, sub_count = await get_dc_info(dc_cid)
             if consecutive_unknown >= 3:
                 logger.warning("Cleanup: Aborting after three consecutive unknown DC chats.")
                 return stats
@@ -685,7 +685,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
                 # If the duplicate has 0 subscribers, we can safely delete it
                 if dup['sub_count'] == 0:
                     database.remove_bridge_pair(dup['dc_cid'], tg_cid)
-                    delete_dc_chat_safe(dup['dc_cid'])
+                    await delete_dc_chat_safe(dup['dc_cid'])
                     stats['duplicate_bridges_removed'] += 1
                     logger.info(f"Cleanup: Removed duplicate bridge DC {dup['dc_cid']} (0 subs, title='{dup['title']}') for TG {tg_cid}, keeping DC {primary['dc_cid']}")
                 else:
@@ -720,7 +720,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
 
                     if not tg_accessible:
                         database.remove_bridge_pair(b['dc_cid'], tg_cid)
-                        delete_dc_chat_safe(b['dc_cid'])
+                        await delete_dc_chat_safe(b['dc_cid'])
                         stats['dead_bridges_removed'] += 1
                         logger.info(f"Cleanup: Removed dead ghost bridge DC {b['dc_cid']} ↔ TG {tg_cid} (0 subs, 0 msgs, title='{b['title']}', TG chat inaccessible)")
 
@@ -731,7 +731,7 @@ async def cleanup_stale_bridges(dc_bot=None, accid=None, tg_app_instance=None, u
         dc_cid = ch.get('dc_chat_id')
         if not dc_cid:
             continue
-        state, info, _ = get_dc_info(dc_cid)
+        state, info, _ = await get_dc_info(dc_cid)
         if consecutive_unknown >= 3:
             logger.warning("Cleanup: Aborting after three consecutive unknown DC chats.")
             return stats

@@ -312,12 +312,12 @@ async def _relay_album(tg_chat_id, group_id, items) -> bool:
                     msg_data.quoted_message_id = dc_reply_id
                 await _wait_for_global_dc_rate_limit()
                 try:
-                    sent_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                    sent_id = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, _bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
                 except Exception as e:
                     if not (dc_reply_id and "does not exist" in str(e).lower()):
                         raise
                     msg_data.quoted_message_id = None  # the quoted DC message is gone
-                    sent_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                    sent_id = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, _bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
                 track_dc_outgoing(sent_id)
                 if sent_id:
                     # Every item points at the one DC message, so replies and reactions find it.

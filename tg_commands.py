@@ -136,13 +136,13 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dc_cid, tg_cid, r_count = row if len(row) == 3 else (row[0], row[1], 0)
             m_count = database.get_bridge_message_count(dc_cid, tg_cid)
             try:
-                chat_info = _bot_module.dc_bot_instance.rpc.get_basic_chat_info(_bot_module.dc_accid, dc_cid)
+                chat_info = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_basic_chat_info, _bot_module.dc_accid, dc_cid)
                 title = chat_info.get("name", "Unknown Group")
                 # Get member count (minus the bot itself)
-                contacts = _bot_module.dc_bot_instance.rpc.get_chat_contacts(_bot_module.dc_accid, dc_cid)
+                contacts = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_contacts, _bot_module.dc_accid, dc_cid)
                 if contacts:
                     try:
-                        self_id = _bot_module.dc_bot_instance.rpc.get_contact(_bot_module.dc_accid, 1).id
+                        self_id = (await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_contact, _bot_module.dc_accid, 1)).id
                     except Exception:
                         self_id = 1
                     sub_count = len(contacts) - 1 if self_id in contacts else len(contacts)
@@ -182,7 +182,7 @@ async def tg_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             m_count = database.get_bridge_message_count(dc_cid, chat.id)
             r_count = database.get_bridge_reaction_count(dc_cid, chat.id)
             try:
-                title = _bot_module.dc_bot_instance.rpc.get_basic_chat_info(_bot_module.dc_accid, dc_cid).get("name", "this group")
+                title = (await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_basic_chat_info, _bot_module.dc_accid, dc_cid)).get("name", "this group")
             except Exception:
                 title = "this group"
             lines.append(f"• DC <code>{dc_cid}</code> ({html.escape(title)}) — {m_count} 💬 {r_count} 🙂")
@@ -269,7 +269,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Create DC group with same name
-        dc_chat_id = _bot_module.dc_bot_instance.rpc.create_group_chat(_bot_module.dc_accid, tg_title, False)
+        dc_chat_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.create_group_chat, _bot_module.dc_accid, tg_title, False)
 
         # Copy TG group avatar to DC group
         try:
@@ -279,7 +279,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tmp_fd, avatar_path = tempfile.mkstemp(suffix=".jpg")
                 os.close(tmp_fd)
                 await avatar_file.download_to_drive(custom_path=avatar_path)
-                _bot_module.dc_bot_instance.rpc.set_chat_profile_image(_bot_module.dc_accid, dc_chat_id, avatar_path)
+                await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.set_chat_profile_image, _bot_module.dc_accid, dc_chat_id, avatar_path)
                 try:
                     os.unlink(avatar_path)
                 except Exception:
@@ -292,7 +292,7 @@ async def tg_bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         database.add_bridge(dc_chat_id, tg_chat_id, created_by_tg_id=user.id)
 
         # Generate invite link
-        invite_link = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, dc_chat_id)
+        invite_link = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, dc_chat_id)
         if invite_link.startswith("OPEN-CHAT:"):
             invite_link = "https://i.delta.chat/#" + invite_link[10:]
         elif invite_link.startswith("OPEN:"):
@@ -488,7 +488,7 @@ async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if chat.type == "private":
         try:
-            qrdata = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, None)
+            qrdata = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, None)
             if qrdata.startswith("OPEN-CHAT:"):
                 qrdata = "https://i.delta.chat/#" + qrdata[10:]
             elif qrdata.startswith("OPEN:"):
@@ -507,10 +507,10 @@ async def tg_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = []
     for dc_cid in dc_chats:
         try:
-            chat_info = _bot_module.dc_bot_instance.rpc.get_basic_chat_info(_bot_module.dc_accid, dc_cid)
+            chat_info = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_basic_chat_info, _bot_module.dc_accid, dc_cid)
             chat_name = chat_info.get("name") or str(dc_cid)
             
-            qrdata = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, dc_cid)
+            qrdata = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, dc_cid)
             # Make sure it's a clickable i.delta.chat link if using OPEN-CHAT/OPEN protocol
             if qrdata.startswith("OPEN-CHAT:"):
                 qrdata = "https://i.delta.chat/#" + qrdata[10:]
@@ -539,7 +539,7 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if chat.type == "private":
         try:
-            qrdata = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, None)
+            qrdata = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, None)
             qr = qrcode.QRCode(version=1, box_size=10, border=4)
             qr.add_data(qrdata)
             qr.make(fit=True)
@@ -569,10 +569,10 @@ async def tg_inviteqr_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     for dc_cid in dc_chats:
         try:
-            chat_info = _bot_module.dc_bot_instance.rpc.get_basic_chat_info(_bot_module.dc_accid, dc_cid)
+            chat_info = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_basic_chat_info, _bot_module.dc_accid, dc_cid)
             chat_name = chat_info.get("name") or str(dc_cid)
             
-            qrdata = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, dc_cid)
+            qrdata = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, dc_cid)
             qr = qrcode.QRCode(version=1, box_size=10, border=4)
             qr.add_data(qrdata)
             qr.make(fit=True)
@@ -1076,7 +1076,7 @@ async def tg_channelqr_command(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         # Get the original QR data (securejoin format, not the https link)
         if _bot_module.dc_bot_instance and _bot_module.dc_accid:
-            qrdata = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, ch['dc_chat_id'])
+            qrdata = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, ch['dc_chat_id'])
         else:
             qrdata = ch['invite_link']
 

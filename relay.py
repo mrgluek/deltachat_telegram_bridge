@@ -128,7 +128,7 @@ async def _relay_to_tg(tg_chat_id, dc_chat_id, msg_id, file_path, formatted_msg,
             for _ in range(30):
                 await asyncio.sleep(2)
                 try:
-                    updated_msg = _bot_module.dc_bot_instance.rpc.get_message(_bot_module.dc_accid, msg_id)
+                    updated_msg = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_message, _bot_module.dc_accid, msg_id)
                     file_path = getattr(updated_msg, 'file', None) or None
                     file_name = file_name or getattr(updated_msg, 'file_name', None) or None
                     if file_path and os.path.exists(file_path):
@@ -656,7 +656,7 @@ async def _relay_userbot_message(dc_chat_id, msg, is_edit=False, display_author=
                     ch_info = database.get_channel_by_tg_id(tg_channel_id)
                     if ch_info:
                         try:
-                            dc_info = _bot_module.dc_bot_instance.rpc.get_basic_chat_info(_bot_module.dc_accid, ch_info['dc_chat_id'])
+                            dc_info = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_basic_chat_info, _bot_module.dc_accid, ch_info['dc_chat_id'])
                             display_author = dc_info.get("name")
                         except Exception:
                             display_author = None

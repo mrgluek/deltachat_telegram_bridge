@@ -291,7 +291,7 @@ async def _handle_channel_access_revoked(target_id: int | str, reason: str = "Ac
                 "The technical account (Userbot) was banned or removed from this Telegram channel, or the channel was made private.\n\n"
                 "Message forwarding from Telegram has been paused."
             )
-            _bot_module.dc_bot_instance.rpc.send_msg(_bot_module.dc_accid, dc_chat_id, MsgData(text=dc_notice))
+            await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, MsgData(text=dc_notice))
         except Exception as dc_err:
             logger.debug(f"Could not send access revoked alert to DC channel {dc_chat_id}: {dc_err}")
 

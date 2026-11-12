@@ -652,7 +652,7 @@ async def _process_userbot_deletion_internal(event):
                 return
 
             try:
-                _bot_module.dc_bot_instance.rpc.delete_messages(_bot_module.dc_accid, [dc_msg_id])
+                await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.delete_messages, _bot_module.dc_accid, [dc_msg_id])
                 logger.info(f"TG→DC: Deleted DC msg {dc_msg_id} (mirrored TG msg {tg_msg_id} in {chat_id})")
             except Exception as e:
                 logger.warning(f"TG→DC: Could not delete DC msg {dc_msg_id}: {e}")

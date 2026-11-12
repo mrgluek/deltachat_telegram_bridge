@@ -54,20 +54,20 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
     try:
         # Send a starting status message
         target_str = f" channel #{target_channel_id}" if target_channel_id is not None else "s"
-        status_msg_id = _dc_send_msg_with_stats(bot, accid, reply_chat_id, MsgData(text=f"🔄 Updating{target_str} from Telegram..."))
+        status_msg_id = await asyncio.to_thread(_dc_send_msg_with_stats, bot, accid, reply_chat_id, MsgData(text=f"🔄 Updating{target_str} from Telegram..."))
         if not status_msg_id:
             logger.error("Could not send update status message to DC.")
             return
 
         channels = database.get_all_channels()
         if not channels:
-            bot.rpc.send_edit_request(accid, status_msg_id, "❌ No bridged channels found.")
+            await asyncio.to_thread(bot.rpc.send_edit_request, accid, status_msg_id, "❌ No bridged channels found.")
             return
 
         if target_channel_id is not None:
             channels = [ch for ch in channels if ch['id'] == target_channel_id]
             if not channels:
-                bot.rpc.send_edit_request(accid, status_msg_id, f"❌ Channel #{target_channel_id} not found in database.")
+                await asyncio.to_thread(bot.rpc.send_edit_request, accid, status_msg_id, f"❌ Channel #{target_channel_id} not found in database.")
                 return
 
         updated_count = 0
@@ -137,7 +137,7 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                 # Get current Delta Chat chat info to check name and avatar path
                 current_chat = None
                 try:
-                    current_chat = bot.rpc.get_full_chat_by_id(accid, dc_chat_id)
+                    current_chat = await asyncio.to_thread(bot.rpc.get_full_chat_by_id, accid, dc_chat_id)
                 except Exception as e:
                     logger.debug(f"Failed to get chat info for DC chat {dc_chat_id}: {e}")
 
@@ -145,13 +145,13 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                 if new_title:
                     old_title = current_chat.get("name") if current_chat else None
                     if new_title != old_title:
-                        bot.rpc.set_chat_name(accid, dc_chat_id, new_title)
+                        await asyncio.to_thread(bot.rpc.set_chat_name, accid, dc_chat_id, new_title)
                         logger.info(f"Updated DC chat {dc_chat_id} name: {old_title} -> {new_title}")
 
                 if avatar_path and os.path.exists(avatar_path):
                     old_avatar_path = current_chat.get("profile_image") if current_chat else None
                     if not files_are_identical(avatar_path, old_avatar_path):
-                        bot.rpc.set_chat_profile_image(accid, dc_chat_id, avatar_path)
+                        await asyncio.to_thread(bot.rpc.set_chat_profile_image, accid, dc_chat_id, avatar_path)
                         logger.info(f"Updated DC chat {dc_chat_id} profile image")
                     else:
                         logger.debug(f"DC chat {dc_chat_id} profile image is already up-to-date")
@@ -164,7 +164,7 @@ async def async_update_channels_dc(bot, accid, reply_chat_id, target_channel_id=
                 error_count += 1
 
         summary = f"✅ Channel update complete!\nUpdated: {updated_count}\nErrors: {error_count}"
-        bot.rpc.send_edit_request(accid, status_msg_id, summary)
+        await asyncio.to_thread(bot.rpc.send_edit_request, accid, status_msg_id, summary)
 
     except Exception as e:
         logger.error(f"Failed to run channels update: {e}")

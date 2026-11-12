@@ -285,27 +285,27 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, cre
             return f"⚠️ Channel {html.escape(channel_title)} is already bridged to Delta Chat."
 
         # 3. Create DC Broadcast Group
-        dc_chat_id = _bot_module.dc_bot_instance.rpc.create_broadcast(_bot_module.dc_accid, channel_title)
+        dc_chat_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.create_broadcast, _bot_module.dc_accid, channel_title)
         
         # Avatar copying
         try:
             if avatar_file:
                 avatar_path = f"tmp_avatar_{tg_channel_id}.jpg"
                 await avatar_file.download_to_drive(custom_path=avatar_path)
-                _bot_module.dc_bot_instance.rpc.set_chat_profile_image(_bot_module.dc_accid, dc_chat_id, avatar_path)
+                await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.set_chat_profile_image, _bot_module.dc_accid, dc_chat_id, avatar_path)
                 try: os.unlink(avatar_path)
                 except: pass
             elif _bot_module.userbot_client:
                 photo = await asyncio.wait_for(_bot_module.userbot_client.download_profile_photo(tg_channel_id), timeout=30.0)
                 if photo:
-                    _bot_module.dc_bot_instance.rpc.set_chat_profile_image(_bot_module.dc_accid, dc_chat_id, photo)
+                    await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.set_chat_profile_image, _bot_module.dc_accid, dc_chat_id, photo)
                     try: os.unlink(photo)
                     except: pass
         except Exception as e:
             logger.warning(f"Could not copy avatar for {channel_title}: {e}")
 
         # 4. Generate Invite Link
-        invite_link = _bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code(_bot_module.dc_accid, dc_chat_id)
+        invite_link = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_chat_securejoin_qr_code, _bot_module.dc_accid, dc_chat_id)
         if invite_link.startswith("OPEN-CHAT:"):
             invite_link = "https://i.delta.chat/#" + invite_link[10:]
         elif invite_link.startswith("OPEN:"):
@@ -885,7 +885,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
                             msg_data.quoted_message_id = dc_reply_id
                         try:
                             await _wait_for_global_dc_rate_limit()
-                            _bot_module.dc_bot_instance.rpc.send_msg(_bot_module.dc_accid, dc_chat_id, msg_data)
+                            await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
                         except Exception as e:
                             logger.error(f"Failed to send final location edit: {e}")
                 return
@@ -947,14 +947,14 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
             edit_success = False
             if old_dc_msg_id:
                 try:
-                    old_msg = _bot_module.dc_bot_instance.rpc.get_message(_bot_module.dc_accid, old_dc_msg_id)
+                    old_msg = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.get_message, _bot_module.dc_accid, old_dc_msg_id)
                     old_text = old_msg.get('text') if isinstance(old_msg, dict) else getattr(old_msg, 'text', '')
                     is_info = old_msg.get('isInfo') if isinstance(old_msg, dict) else getattr(old_msg, 'isInfo', False)
                     has_html = old_msg.get('hasHtml') if isinstance(old_msg, dict) else getattr(old_msg, 'hasHtml', False)
                     view_type = old_msg.get('viewType') if isinstance(old_msg, dict) else getattr(old_msg, 'viewType', None)
                     
                     if old_text and not is_info and not has_html and view_type != 'Call':
-                        _bot_module.dc_bot_instance.rpc.send_edit_request(_bot_module.dc_accid, old_dc_msg_id, clean_msg)
+                        await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_edit_request, _bot_module.dc_accid, old_dc_msg_id, clean_msg)
                         database.save_message_map(old_dc_msg_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
                         edit_success = True
                         logger.info(f"Edited group msg {old_dc_msg_id} in-place for TG msg {msg.message_id} in chat {dc_chat_id}")
@@ -965,7 +965,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
                 if old_dc_msg_id:
                     try:
                         _register_bot_initiated_delete(old_dc_msg_id)
-                        _bot_module.dc_bot_instance.rpc.delete_messages(_bot_module.dc_accid, [old_dc_msg_id])
+                        await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.delete_messages, _bot_module.dc_accid, [old_dc_msg_id])
                     except Exception as del_e:
                         logger.debug(f"Could not delete old DC msg {old_dc_msg_id} before edit relay: {del_e}")
                         _consume_bot_initiated_delete(old_dc_msg_id)  # clean up mark on failure
@@ -973,7 +973,7 @@ async def handle_tg_edited_message(update: Update, context: ContextTypes.DEFAULT
                 msg_data = MsgData(text=formatted_msg)
                 msg_data.override_sender_name = sender_name
                 await _wait_for_global_dc_rate_limit()
-                dc_sent_id = _bot_module.dc_bot_instance.rpc.send_msg(_bot_module.dc_accid, dc_chat_id, msg_data)
+                dc_sent_id = await asyncio.to_thread(_bot_module.dc_bot_instance.rpc.send_msg, _bot_module.dc_accid, dc_chat_id, msg_data)
                 if dc_sent_id:
                     database.save_message_map(dc_sent_id, dc_chat_id, msg.message_id, tg_chat_id, content_hash=new_hash)
                 logger.info(f"Relayed edited TG msg (new msg) to DC chat {dc_chat_id}")
@@ -1241,7 +1241,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         msg_data.viewtype = dc_viewtype
                 try:
                     await _wait_for_global_dc_rate_limit()
-                    sent_msg_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                    sent_msg_id = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, _bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
                     track_dc_outgoing(sent_msg_id)
                 except Exception as e:
                     # If quoting failed because the message was deleted in DC, retry without the quote
@@ -1264,7 +1264,7 @@ async def handle_tg_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 msg_data.text = _truncate(f"{chat_reply_prefix}{text}" if text else "", _bot_module.DC_MAX_MSG_LEN)
                         
                         await _wait_for_global_dc_rate_limit()
-                        sent_msg_id = _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+                        sent_msg_id = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, _bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
                         track_dc_outgoing(sent_msg_id)
                     else:
                         raise  # Re-raise other exceptions
@@ -1329,7 +1329,7 @@ async def handle_tg_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         msg_data = MsgData(text=text)
-        _bot_module._dc_send_msg_with_stats(_bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, _bot_module.dc_bot_instance, _bot_module.dc_accid, dc_chat_id, msg_data)
         logger.info(f"Relayed TG poll results to DC chat {dc_chat_id}")
     except Exception as e:
         logger.error(f"Failed to relay poll results to DC chat {dc_chat_id}: {e}")

@@ -482,25 +482,25 @@ def dc_channeladd_command(bot, accid, event):
 
     # Use run_coroutine_threadsafe since dc_cli hooks might run in a separate thread
     async def run_add():
-        status_id = _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
+        status_id = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="⏳ Processing channel bridge..."))
         created_channel = {}
         result = await _add_channel_bridge(payload, creator_dc_fp=creator_fp, created_channel=created_channel)
         # Convert HTML response to Markdown for DC
         result_md = to_dc_markdown(result)
-        if created_channel and not created_channel.get("tg_channel_username") and not _bot_module._is_private_chat(bot, accid, msg.chat_id):
+        if created_channel and not created_channel.get("tg_channel_username") and not await asyncio.to_thread(_bot_module._is_private_chat, bot, accid, msg.chat_id):
             try:
-                private_chat_id = bot.rpc.create_chat_by_contact_id(accid, msg.from_id)
-                if not private_chat_id or not _bot_module._is_private_chat(bot, accid, private_chat_id):
+                private_chat_id = await asyncio.to_thread(bot.rpc.create_chat_by_contact_id, accid, msg.from_id)
+                if not private_chat_id or not await asyncio.to_thread(_bot_module._is_private_chat, bot, accid, private_chat_id):
                     raise ValueError("Private chat unavailable")
-                sent = _bot_module._dc_send_msg_with_stats(bot, accid, private_chat_id, MsgData(text=result_md))
+                sent = await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, private_chat_id, MsgData(text=result_md))
                 if not sent:
                     raise ValueError("Private message could not be sent")
                 reply = "✔️ Channel bridged. The invite link was sent privately."
             except Exception:
                 reply = "✔️ Channel bridged, but the invite could not be sent. Ask in a private chat with the bot."
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text=reply))
             return
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=result_md))
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text=result_md))
     
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(run_add(), _bot_module.main_loop)
@@ -566,7 +566,7 @@ def dc_botsend_command(bot, accid, event):
 
     async def run_botsend():
         res = await _send_bot_message(target, cmd_text)
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=to_dc_markdown(res)))
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text=to_dc_markdown(res)))
 
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(run_botsend(), _bot_module.main_loop)
@@ -930,10 +930,10 @@ def dc_cleanup_command(bot, accid, event):
                     f"• Empty DC chats deleted: {stats['dc_chats_deleted']}\n\n"
                     f"Total items cleaned: {total_removed}"
                 )
-                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=res_text))
+                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=res_text))
             except Exception as e:
                 logger.error(f"DC manual cleanup failed: {e}")
-                _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Cleanup failed: {e}"))
+                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=f"❌ Cleanup failed: {e}"))
 
         asyncio.run_coroutine_threadsafe(_do_cleanup(), _bot_module.main_loop)
     else:
@@ -987,9 +987,9 @@ def dc_userbotsync_command(bot, accid, event):
         return
 
     async def run_sync():
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⏳ Starting Userbot synchronization..."))
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="⏳ Starting Userbot synchronization..."))
         await sync_userbot_channels(force=True)
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="✅ Userbot synchronization completed (subscriber counts updated)."))
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="✅ Userbot synchronization completed (subscriber counts updated)."))
     
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(run_sync(), _bot_module.main_loop)
@@ -1024,10 +1024,10 @@ def dc_userbotjoin_command(bot, accid, event):
         import re
 
         if not (_bot_module.userbot_client and _bot_module.userbot_client.is_connected()):
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Userbot is not connected."))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="❌ Userbot is not connected."))
             return
 
-        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"⏳ Attempting to join via Userbot: {link}..."))
+        await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text=f"⏳ Attempting to join via Userbot: {link}..."))
 
         try:
             joined_entity = None
@@ -1045,7 +1045,7 @@ def dc_userbotjoin_command(bot, accid, event):
 
             if invite_hash:
                 if not ImportChatInviteRequest:
-                    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Telethon not properly installed."))
+                    await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="❌ Telethon not properly installed."))
                     return
 
                 try:
@@ -1111,13 +1111,13 @@ def dc_userbotjoin_command(bot, accid, event):
                             matched_channel.get('tg_channel_username', ''),
                             tg_channel_id
                         )
-                    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
+                    await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(
                         text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n"
                              f"Invite link saved for future syncs.\n\n"
                              f"Matched to bridged channel #{matched_channel['id']}."
                     ))
                 else:
-                    _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(
+                    await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(
                         text=f"✅ Userbot joined *{joined_title}* (ID: {tg_channel_id}).\n\n"
                              f"⚠️ This channel is not yet bridged."
                     ))
@@ -1129,11 +1129,11 @@ def dc_userbotjoin_command(bot, accid, event):
                 except Exception:
                     pass
             else:
-                _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="⚠️ Joined but could not determine channel details."))
+                await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text="⚠️ Joined but could not determine channel details."))
 
         except Exception as e:
             logger.error(f"DC userbotjoin failed for {link}: {e}")
-            _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to join: {str(e)[:500]}"))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to join: {str(e)[:500]}"))
 
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(do_join(), _bot_module.main_loop)
@@ -1156,10 +1156,10 @@ def dc_status_command(bot, accid, event):
     async def do_status():
         try:
             report = await generate_status_report(is_html=False, bot_ref=bot, accid=accid)
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=report))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=report))
         except Exception as e:
             logger.error(f"Error generating status report for DC: {e}")
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Error generating status report: {e}"))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=f"❌ Error generating status report: {e}"))
 
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(do_status(), _bot_module.main_loop)
@@ -1187,10 +1187,10 @@ def dc_catchup_command(bot, accid, event):
     async def do_catchup():
         try:
             res_text = await run_channel_catchup(target, is_html=False)
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=res_text))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=res_text))
         except Exception as e:
             logger.error(f"Error during DC /catchup: {e}")
-            _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"❌ Catchup error: {e}"))
+            await asyncio.to_thread(_bot_module._dc_send_msg_with_stats, bot, accid, chat_id, MsgData(text=f"❌ Catchup error: {e}"))
 
     if _bot_module.main_loop:
         asyncio.run_coroutine_threadsafe(do_catchup(), _bot_module.main_loop)
