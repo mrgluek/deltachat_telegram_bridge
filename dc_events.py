@@ -94,7 +94,7 @@ def _react(bot, accid, msg_id, reaction: str):
 
 @_limit_preview_work
 @_with_rich_post_inputs
-async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None):
+async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, username: str, post_id: int, dc_msg_id: Optional[int] = None, owner_requested: bool = False):
     """Fetch and deliver a direct Telegram post to a Delta Chat conversation."""
     import bot as _bot_module
     clean_username = str(username).lstrip('@').strip()
@@ -126,13 +126,15 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
         # 3. Cache miss: Fetch post
         rich_post: Optional[TelegramRichPost] = None
         tg_msg = None
+        cache_allowed = True  # never cache a bot dialog: the cache is shared with every sender
 
         if _bot_module.userbot_client and _bot_module.userbot_client.is_connected():
             try:
                 from telethon.tl.types import Channel, User
                 entity = await asyncio.wait_for(_bot_module.userbot_client.get_entity(clean_username), timeout=15.0)
                 if isinstance(entity, Channel) or (
-                        isinstance(entity, User) and entity.bot and database.get_channel_by_tg_id(entity.id) is not None):
+                        isinstance(entity, User) and entity.bot and owner_requested and database.get_channel_by_tg_id(entity.id) is not None):
+                    cache_allowed = isinstance(entity, Channel)
                     msgs = await asyncio.wait_for(_bot_module.userbot_client.get_messages(entity, ids=post_id), timeout=15.0)
                     if msgs:
                         tg_msg = msgs[0] if isinstance(msgs, list) else msgs
@@ -173,7 +175,8 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 xdc_path = os.path.join(cache_dir, xdc_name)
                 if await _bot_module._package_tg_post_webxdc(rich_post, xdc_path, dc_chat_id=dc_chat_id):
                     caption = f"📰 **{clean_title}**\n\n{rich_post.teaser}\n\n🔗 t.me/{clean_username}/{post_id}" if rich_post.teaser else f"📰 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
-                    database.add_cached_tg_post(cache_key, "webxdc", caption, xdc_path)
+                    if cache_allowed:
+                        database.add_cached_tg_post(cache_key, "webxdc", caption, xdc_path)
                     await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=xdc_path))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: packaged and delivered as WebXDC")
                     _react(bot, accid, dc_msg_id, "☑️")
@@ -194,7 +197,8 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                     text_body = rich_post.text_markdown.strip()
                     caption = f"📷 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}" if text_body else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
                     caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
-                    database.add_cached_tg_post(cache_key, "photo", caption, img_dest)
+                    if cache_allowed:
+                        database.add_cached_tg_post(cache_key, "photo", caption, img_dest)
                     await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=img_dest))
                     logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as photo")
                     _react(bot, accid, dc_msg_id, "☑️")
@@ -205,7 +209,8 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                 text_body = rich_post.text_markdown.strip()
                 caption = f"💬 **{clean_title}**\n\n{text_body}\n\n🔗 t.me/{clean_username}/{post_id}"
                 caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
-                database.add_cached_tg_post(cache_key, "text", caption, None)
+                if cache_allowed:
+                    database.add_cached_tg_post(cache_key, "text", caption, None)
                 await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption))
                 logger.info(f"Direct TG post @{clean_username}/{post_id}: delivered as text")
                 _react(bot, accid, dc_msg_id, "☑️")
@@ -228,7 +233,8 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
                         if downloaded and os.path.exists(downloaded):
                             caption = f"📷 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}" if formatted_text else f"📷 **{clean_title}**\n\n🔗 t.me/{clean_username}/{post_id}"
                             caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
-                            database.add_cached_tg_post(cache_key, "photo", caption, downloaded)
+                            if cache_allowed:
+                                database.add_cached_tg_post(cache_key, "photo", caption, downloaded)
                             await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption, file=downloaded))
                             _react(bot, accid, dc_msg_id, "☑️")
                             return
@@ -238,7 +244,8 @@ async def _async_handle_direct_tg_post(bot, accid: int, dc_chat_id: int, usernam
             if formatted_text.strip():
                 caption = f"💬 **{clean_title}**\n\n{formatted_text}\n\n🔗 t.me/{clean_username}/{post_id}"
                 caption = _truncate(caption, _bot_module.DC_MAX_MSG_LEN)
-                database.add_cached_tg_post(cache_key, "text", caption, None)
+                if cache_allowed:
+                    database.add_cached_tg_post(cache_key, "text", caption, None)
                 await _send_preview_reply(bot, accid, dc_chat_id, MsgData(text=caption))
                 _react(bot, accid, dc_msg_id, "☑️")
                 return
@@ -485,24 +492,25 @@ def handle_dc_message(bot, accid, event):
                         return
                     target_post_id = int(post_id_str)
                     logger.info(f"Detected direct Telegram post link for @{post_username}/{target_post_id} in DC chat {dc_chat_id}")
+                    is_owner_sender = _bot_module._is_dc_admin(bot, accid, msg.from_id)
                     # React immediately, synchronously: the async task below may sit queued
                     # behind other work on the shared userbot event loop for a while before
                     # it gets to run its own "⏳" reaction.
                     _react(bot, accid, msg.id, "⏳")
                     if _bot_module.main_loop and _bot_module.main_loop.is_running():
                         asyncio.run_coroutine_threadsafe(
-                            _bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id),
+                            _bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id, owner_requested=is_owner_sender),
                             _bot_module.main_loop
                         )
                     else:
                         try:
                             loop = asyncio.get_event_loop()
                             if loop.is_running():
-                                asyncio.create_task(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                                asyncio.create_task(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id, owner_requested=is_owner_sender))
                             else:
-                                loop.run_until_complete(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                                loop.run_until_complete(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id, owner_requested=is_owner_sender))
                         except RuntimeError:
-                            asyncio.run(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id))
+                            asyncio.run(_bot_module._async_handle_direct_tg_post(bot, accid, dc_chat_id, post_username, target_post_id, msg.id, owner_requested=is_owner_sender))
 
     # Only relay group messages
     try:

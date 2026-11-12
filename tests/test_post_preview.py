@@ -298,7 +298,7 @@ class TestTelegramPostPreview(unittest.TestCase):
             patch("bot._is_dc_admin", return_value=False),
         ):
             bot.handle_dc_message(mock_bot, 1, mock_event)
-            mock_handler.assert_called_once_with(mock_bot, 1, 10, "durov", 42, 55)
+            mock_handler.assert_called_once_with(mock_bot, 1, 10, "durov", 42, 55, owner_requested=False)
 
     def test_handle_dc_message_skips_bot_card_prefixes(self):
         """handle_dc_message must ignore messages starting with card prefixes like 📰, 📷, 💬, 🌐, 🤖."""

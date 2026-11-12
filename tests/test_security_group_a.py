@@ -175,12 +175,14 @@ class User:
 class TestDirectPostEntities(TempDatabaseTest):
     def test_only_channels_and_bridged_bots_are_read(self):
         import telethon.tl.types as types
-        cases = [(Channel(broadcast=True), False, True),
-                 (Channel(megagroup=True), False, True),
-                 (User(), False, False), (User(), True, False),
-                 (User(bot=True), False, False), (User(bot=True), True, True)]
-        for entity, bridged, allowed in cases:
-            with self.subTest(entity=type(entity).__name__, bridged=bridged, allowed=allowed):
+        # (entity, bridged, requested by the owner, allowed): bridged bots are read for the owner only
+        cases = [(Channel(broadcast=True), False, False, True),
+                 (Channel(megagroup=True), False, False, True),
+                 (User(), False, True, False), (User(), True, True, False),
+                 (User(bot=True), False, True, False), (User(bot=True), True, False, False),
+                 (User(bot=True), True, True, True)]
+        for entity, bridged, owner, allowed in cases:
+            with self.subTest(entity=type(entity).__name__, bridged=bridged, owner=owner, allowed=allowed):
                 client = MagicMock()
                 client.get_entity = AsyncMock(return_value=entity)
                 client.get_messages = AsyncMock(return_value=None)
@@ -189,7 +191,7 @@ class TestDirectPostEntities(TempDatabaseTest):
                      patch.object(database, "get_channel_by_tg_id", return_value={"id": 1} if bridged else None), \
                      patch.object(bot, "_extract_public_tg_post_rich", new_callable=AsyncMock, return_value=None) as public, \
                      patch.object(dc_events.logger, "info") as info:
-                    asyncio.run(dc_events._async_handle_direct_tg_post(MagicMock(), 1, 2, "example", 5))
+                    asyncio.run(dc_events._async_handle_direct_tg_post(MagicMock(), 1, 2, "example", 5, owner_requested=owner))
                 if allowed:
                     client.get_messages.assert_awaited_once_with(entity, ids=5)
                 else:

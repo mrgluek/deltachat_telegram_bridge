@@ -184,6 +184,30 @@ class TestDcSubadminCommands(unittest.TestCase):
         self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1, "Bobby")])
         self.assertIn("is now a sub-admin", self._sent(send))
 
+    def test_subadmin_cannot_bridge_already_bridged_group(self):
+        from unittest.mock import patch
+        database.add_bridge(50, -100, created_by_dc_fp=FP2)
+        with patch.object(self.bot, "_is_dc_admin", return_value=False), \
+             patch.object(self.bot, "_dc_subadmin_fp", return_value=FP1), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.bridge_command(self.mock_bot, 1, self.event)
+        self.assertIn("already bridged", self._sent(send))
+        self.assertEqual(database.get_tg_chats(10), [])
+        with patch.object(self.bot, "_is_dc_admin", return_value=True), \
+             patch.object(self.bot, "_dc_send_msg_with_stats"):
+            self.dc.bridge_command(self.mock_bot, 1, self.event)
+        self.assertEqual(database.get_tg_chats(10), [-100])
+
+    def test_initadmin_refused_when_telegram_owner_exists(self):
+        from unittest.mock import patch
+        database.set_config("admin_dc_email", "")
+        database.set_config("admin_tg_id", "1")
+        with patch.object(self.bot, "_is_private_chat", return_value=True), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.initadmin_command(self.mock_bot, 1, self.event)
+        self.assertIn("already has an owner", self._sent(send))
+        self.assertIsNone(database.get_admin_email())
+
     def test_vcard_without_key_or_wrong_address_refused(self):
         patches = self._vcard_setup([{"addr": "bob@example.org", "key": None}], [], {}, FP1)
         with patches[0], patches[1], patches[2], patches[3] as send:

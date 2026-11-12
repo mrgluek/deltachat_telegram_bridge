@@ -173,6 +173,9 @@ def initadmin_command(bot, accid, event):
     if admin_email or admin_fp:
         _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Admin is already set. Use `set_admin.py` on the server to change."))
         return
+    if database.get_config("admin_tg_id"):
+        _bot_module._dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ The bot already has an owner (set in Telegram). Use `set_admin.py` on the server to set the Delta Chat admin."))
+        return
 
     contact = bot.rpc.get_contact(accid, msg.from_id)
     email = contact.address
@@ -655,8 +658,11 @@ def bridge_command(bot, accid, event):
 
     # Admin check: if a global admin is set, only they and DC sub-admins can manage bridges
     creator_fp = None
+    is_owner_caller = False
     if database.get_config("admin_dc_fingerprint") or database.get_config("admin_dc_email"):
-        if not _bot_module._is_dc_admin(bot, accid, msg.from_id):
+        if _bot_module._is_dc_admin(bot, accid, msg.from_id):
+            is_owner_caller = True
+        else:
             creator_fp = _bot_module._dc_subadmin_fp(bot, accid, msg.from_id)
             if not creator_fp:
                 _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ Only the configured bot administrator or a sub-admin can use /bridge."))
@@ -682,6 +688,11 @@ def bridge_command(bot, accid, event):
         tg_chat_id = int(payload)
     except ValueError:
         _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ You must provide the Telegram chat ID. Example: /bridge -123456789"))
+        return
+
+    # Only the owner may add a second Delta Chat group to a Telegram group that is already bridged
+    if not is_owner_caller and database.get_dc_chats(tg_chat_id):
+        _bot_module._dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text="❌ That Telegram group is already bridged. Ask the bot owner to add another Delta Chat group to it."))
         return
 
     if database.add_bridge(chat_id, tg_chat_id, created_by_dc_fp=creator_fp):
