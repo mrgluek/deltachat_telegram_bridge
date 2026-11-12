@@ -1335,7 +1335,7 @@ def remove_dc_subadmin(ident: str) -> int:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM dc_subadmins WHERE email = ?", (ident,))
             n = cursor.rowcount
-            if n == 0 and "@" not in ident and len(suffix) >= 8:
+            if n == 0 and "@" not in ident and re.fullmatch(r"[0-9A-F]{8,64}", suffix):
                 cursor.execute("DELETE FROM dc_subadmins WHERE fingerprint LIKE ?", ("%" + suffix,))
                 n = cursor.rowcount
             conn.commit()

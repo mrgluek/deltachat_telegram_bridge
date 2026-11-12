@@ -169,6 +169,21 @@ class TestDcSubadminCommands(unittest.TestCase):
             self.dc.dc_channeladd_command(self.mock_bot, 1, self.event)
         self.assertIn("Only the bot administrator", self._sent(send))
 
+    def test_subadminadd_by_email_uses_real_contact_lookup(self):
+        from unittest.mock import patch
+        self.event.payload = "bob@example.org"
+        self.event.msg.file = None
+        contact = {"address": "bob@example.org", "is_key_contact": True, "display_name": "Bobby"}
+        self.mock_bot.rpc.get_contact_ids.return_value = [7]
+        self.mock_bot.rpc.get_contact.side_effect = lambda a, c: contact
+        with patch.object(self.bot, "_is_dc_admin", return_value=True), \
+             patch.object(self.bot, "_is_private_chat", return_value=True), \
+             patch.object(self.bot, "_get_contact_fingerprint", return_value=FP1), \
+             patch.object(self.bot, "_dc_send_msg_with_stats") as send:
+            self.dc.dc_subadminadd_command(self.mock_bot, 1, self.event)
+        self.assertEqual(database.get_dc_subadmins(), [("bob@example.org", FP1, "Bobby")])
+        self.assertIn("is now a sub-admin", self._sent(send))
+
     def test_vcard_without_key_or_wrong_address_refused(self):
         patches = self._vcard_setup([{"addr": "bob@example.org", "key": None}], [], {}, FP1)
         with patches[0], patches[1], patches[2], patches[3] as send:

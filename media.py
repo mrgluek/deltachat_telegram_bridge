@@ -370,6 +370,7 @@ async def _download_image_to_file(url: str, output_path: str, max_dim: int = 128
     if not url:
         return False
     from PIL import Image
+    Image.MAX_IMAGE_PIXELS = 25_000_000  # refuse decompression bombs (default allows ~178 MP)
 
     # 1. Handle local file paths directly
     if os.path.isfile(url):

@@ -1147,7 +1147,8 @@ async def tg_channelremove_command(update: Update, context: ContextTypes.DEFAULT
 
 async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all active message filters."""
-    if not await _check_channel_admin(update):
+    if not database.is_owner(update.effective_user.id):
+        await update.effective_message.reply_text("❌ Only the bot owner can manage message filters.")
         return
 
     filters = database.get_all_filters()
@@ -1168,7 +1169,8 @@ async def tg_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add a message filter."""
-    if not await _check_channel_admin(update):
+    if not database.is_owner(update.effective_user.id):
+        await update.effective_message.reply_text("❌ Only the bot owner can manage message filters.")
         return
 
     if not context.args or len(context.args) < 1:
@@ -1190,7 +1192,8 @@ async def tg_filteradd_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def tg_filterdel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove a message filter."""
-    if not await _check_channel_admin(update):
+    if not database.is_owner(update.effective_user.id):
+        await update.effective_message.reply_text("❌ Only the bot owner can manage message filters.")
         return
 
     if not context.args or len(context.args) < 1:

@@ -760,9 +760,10 @@ def _dc_contact_key_fingerprints(bot, accid, email: str):
                 fp = database._norm_fp(fp)
                 if fp and fp not in fps:
                     fps.append(fp)
+                    name = name or (get_val("display_name") or "")
         except Exception:
             continue
-    return fps
+    return fps, name
 
 
 def _dc_vcard_key_fingerprints(bot, accid, path: str):

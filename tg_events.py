@@ -216,7 +216,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, cre
         # 1. Resolve entity
         channel_title = ""
         tg_channel_id = None
-        resolved_username = username
+        resolved_username = None if is_numeric else username
         avatar_file = None
         bot_api_ok = False
         
@@ -269,7 +269,7 @@ async def _add_channel_bridge(target: str, creator_tg_id: int | None = None, cre
                         channel_title = full_name or getattr(entity, 'title', None) or (f"@{entity.username}" if getattr(entity, 'username', None) else display_name)
                     else:
                         channel_title = getattr(entity, 'title', display_name)
-                    resolved_username = getattr(entity, 'username', username)
+                    resolved_username = getattr(entity, 'username', None) or None
                     bot_api_ok = True
             except Exception as e:
                 if not bot_api_ok:

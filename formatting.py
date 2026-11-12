@@ -1008,6 +1008,12 @@ def _is_safe_telegram_url(url: str) -> bool:
         return False
 
 
+def _is_safe_href(url: str) -> bool:
+    """Only plain web, mail and Telegram links may end up in a generated WebXDC page."""
+    cleaned = re.sub(r"[\x00-\x20]+", "", html.unescape(url or "")).lower()
+    return cleaned.startswith(("http://", "https://", "mailto:", "tg://"))
+
+
 def _clean_html_for_webxdc(raw_html: str) -> str:
     """Clean and normalize HTML for inclusion inside WebXDC application."""
     if not raw_html:
@@ -1027,10 +1033,9 @@ def _clean_html_for_webxdc(raw_html: str) -> str:
         href = m.group(1).strip()
         text = m.group(2)
         # Block dangerous URI schemes
-        clean_scheme = href.lower()
-        if clean_scheme.startswith(("javascript:", "data:", "vbscript:", "file:")):
+        if not _is_safe_href(href):
             return text
-        return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{text}</a>'
+        return f'<a href="{html.escape(html.unescape(href), quote=True)}" target="_blank" rel="noopener noreferrer">{text}</a>'
     cleaned = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', _link_sub, cleaned, flags=re.DOTALL)
     if '<table' in cleaned and 'table-wrap' not in cleaned:
         cleaned = re.sub(r'(<table[^>]*>.*?</table>)', r'<div class="table-wrap">\1</div>', cleaned, flags=re.DOTALL)
@@ -1118,8 +1123,8 @@ def _rich_text_to_html(rt) -> str:
     if name in ('TextUrl', 'TextAutoUrl'):
         url = getattr(rt, 'url', '') or ""
         inner = _rich_text_to_html(getattr(rt, 'text', None))
-        escaped_url = html.escape(url)
-        return f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">{inner}</a>' if url else inner
+        escaped_url = html.escape(url, quote=True)
+        return f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">{inner}</a>' if url and _is_safe_href(url) else inner
     if name == 'TextEmail':
         email = getattr(rt, 'email', '') or ""
         inner = _rich_text_to_html(getattr(rt, 'text', None))
@@ -1230,7 +1235,7 @@ async def _process_page_blocks(
             c_md = _rich_text_to_markdown(getattr(b, 'text', None))
             c_htm = _rich_text_to_html(getattr(b, 'text', None))
             md_parts.append(f"```{lang}\n{c_md}\n```")
-            htm_parts.append(f'<pre><code class="{lang}">{c_htm}</code></pre>')
+            htm_parts.append(f'<pre><code class="{html.escape(lang, quote=True)}">{c_htm}</code></pre>')
 
         elif b_type == 'PageBlockDivider':
             md_parts.append("---")
