@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.38.1] - 2026-11-23
+
+### Fixed
+- **Own key fingerprint is read once per account**: every admin or sub-admin check, and every contact in an admin listing, asked the Delta Chat core for a new invite link just to read our own fingerprint, and each call creates an invite token that the core never removes. Now the fingerprint is cached for the life of the process (a failed lookup is not cached). Load, measured with a fake RPC: 1,000 messages to a private-channel command went from 2,000 invite-link calls to 1; an admin listing over 200 contacts from 200 to 1; the admin-notification contact lookup from 1 call per contact to 1 in total. The change is `dc_fingerprint.py`, shared with the other bots; no behaviour change for users.
+
 ## [2.38.0] - 2026-11-12
 
 Security and reliability release: the fixes of two code audits (one by Codex, one independent by Gemini).

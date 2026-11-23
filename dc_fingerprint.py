@@ -28,6 +28,8 @@ This file is shared verbatim between the Delta Chat bots; keep the copies in syn
 
 import logging
 import re
+import threading
+import weakref
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,33 @@ logger = logging.getLogger(__name__)
 _FP_RE = re.compile(r"[0-9A-F]{40}|[0-9A-F]{64}")
 # Invite link: "https://i.delta.chat/#<FP>&..." (current cores) or "OPENPGP4FPR:<FP>#..." (older)
 _QR_FP_RE = re.compile(r"(?:i\.delta\.chat/#|OPENPGP4FPR:)([0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Fa-f])")
+
+
+# Our own key never changes while the process runs (a transport change keeps the account key), and
+# every get_chat_securejoin_qr_code call can mint a new invite token in the core. So it is asked once
+# per account and process. A failed lookup is not cached. Keyed by the rpc object so that a
+# different connection (or a test double) never sees another one's answer.
+_self_fp_lock = threading.Lock()
+_self_fp_cache = weakref.WeakKeyDictionary()  # rpc -> {accid: fingerprint}
+_self_fp_cache_unweakable = {}  # id(rpc) -> {accid: fingerprint}, for rpc objects that cannot be weakly referenced
+
+
+def forget_self_fingerprint(rpc=None, accid=None):
+    """Drop cached own fingerprints (all, or one account of one rpc)."""
+    with _self_fp_lock:
+        if rpc is None:
+            _self_fp_cache.clear()
+            _self_fp_cache_unweakable.clear()
+            return
+        try:
+            per_rpc = _self_fp_cache.get(rpc)
+        except TypeError:
+            per_rpc = _self_fp_cache_unweakable.get(id(rpc))
+        if per_rpc is not None:
+            if accid is None:
+                per_rpc.clear()
+            else:
+                per_rpc.pop(accid, None)
 
 
 def get_self_addr(rpc, accid: int) -> str:
@@ -58,14 +87,26 @@ def get_self_fingerprint(rpc, accid: int) -> str | None:
     Encryption info cannot be asked for contact 1 (the core refuses special contacts), and the
     "Me" header is translated and loses the address in core 2.66, so the invite link is the one
     place that always carries our fingerprint. The core creates the invite tokens on first use;
-    the link itself is not shown to anyone."""
+    the link itself is not shown to anyone. The answer is cached per account for the process."""
+    with _self_fp_lock:
+        try:
+            per_rpc = _self_fp_cache.setdefault(rpc, {})
+        except TypeError:
+            per_rpc = _self_fp_cache_unweakable.setdefault(id(rpc), {})
+        cached = per_rpc.get(accid)
+    if cached:
+        return cached
     try:
         qr = rpc.get_chat_securejoin_qr_code(accid, None)
     except Exception as e:
         logger.warning(f"Could not read own fingerprint from the invite link: {e}")
         return None
     m = _QR_FP_RE.search(qr) if isinstance(qr, str) else None
-    return m.group(1).upper() if m else None
+    fp = m.group(1).upper() if m else None
+    if fp:
+        with _self_fp_lock:
+            per_rpc[accid] = fp
+    return fp
 
 
 def parse_key_fingerprints(info) -> list[str]:
